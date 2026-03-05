@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum NewsType {
+  macro
+  stock
+}
+
+enum Sentiment {
+  positive
+  neutral
+  negative
+}
+
+enum Importance {
+  high
+  medium
+  low
+}
+
+model Stock {
+  ticker    String      @id
+  name      String
+  market    String
+  sector    String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  newsLinks NewsStock[]
+}
+
+model News {
+  id             String      @id
+  type           NewsType
+  title          String
+  summary        String
+  whyItMatters   String
+  source         String
+  sourceUrl      String
+  publishedAt    DateTime
+  sentiment      Sentiment
+  importance     Importance
+  category       String
+  tags           Json
+  relatedSectors Json
+  relatedTickers Json
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  stocks         NewsStock[]
+}
+
+model NewsStock {
+  newsId      String
+  stockTicker String
+  news        News   @relation(fields: [newsId], references: [id], onDelete: Cascade)
+  stock       Stock  @relation(fields: [stockTicker], references: [ticker], onDelete: Cascade)
+
+  @@id([newsId, stockTicker])
+}
+
+model MarketEvent {
+  id             String     @id
+  title          String
+  eventDate      DateTime
+  country        String
+  description    String
+  impactLevel    Importance
+  relatedTickers Json
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+}
