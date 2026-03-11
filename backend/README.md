@@ -1,45 +1,46 @@
-# Backend (Python)
+# Backend
 
-FastAPI 기반 백엔드입니다. 도메인별 구조로 구성되어 있습니다.
-
-## 구조
-```text
-src/
-  domains/
-    health/
-      router.py
-    news/
-      data/
-      providers/
-      news_types.py
-      provider.py
-      factory.py
-      service.py
-      router.py
-  config/
-    env.py
-  shared/
-    errors.py
-  main.py
-```
-
-## 설치
-```bash
-cd backend
-python3 -m pip install -r requirements.txt
-```
+FastAPI 기반 KRX 백엔드입니다.
 
 ## 실행
 ```bash
+cd backend
 python3 -m uvicorn src.main:app --reload --host 0.0.0.0 --port 4000
 ```
 
-## API
+## 핵심 API
 - `GET /health`
-- `GET /api/news/top`
-- `GET /api/news/search?q=NVDA`
+- `GET /api/app/header?market=krx`
+- `GET /api/news/kr`
+- `GET /api/news/global`
+- `GET /api/news/header-context`
+- `GET /api/news/coverage`
+- `GET /api/global-events/highlight`
+- `GET /api/global-events/upcoming?window=24h`
+- `GET /api/global-events/week`
+- `GET /api/global-events/coverage`
 
-## 확장
-- `domains/news/provider.py` 인터페이스 유지
-- `domains/news/providers`에 외부 API provider 추가
-- `domains/news/factory.py`에서 provider 분기
+KRX 라우트:
+- `GET /api/krx/stocks`
+- `GET /api/krx/stocks/{ticker}`
+- `GET /api/krx/events/upcoming`
+- `GET /api/krx/news`
+- `GET /api/krx/news/top`
+- `GET /api/krx/news/macro`
+- `GET /api/krx/news/stock`
+- `GET /api/krx/news/by-ticker/{ticker}`
+- `GET /api/krx/news/{news_id}`
+- `GET /api/krx/market-signal/summary`
+- `GET /api/krx/market-signal/trends`
+- `GET /api/krx/market-signal/components`
+- `GET /api/krx/derivatives/summary`
+- `GET /api/krx/derivatives/trends`
+- `GET /api/krx/derivatives/investor-flow`
+- `GET /api/krx/derivatives/briefing`
+- `GET /api/krx/derivatives/coverage`
+
+## 테스트
+```bash
+cd backend
+pytest -q
+```

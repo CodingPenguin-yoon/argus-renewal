@@ -1,0 +1,2 @@
+put_call_ratio,implied_volatility,open_interest_total,call_open_interest,put_open_interest,futures_investor_foreign_net_buy,futures_investor_institution_net_buy,futures_investor_individual_net_buy,options_investor_foreign_net_buy,options_investor_institution_net_buy,options_investor_individual_net_buy,futures_volume_total,options_volume_total,note
+1.00,20.0,1000000,500000,500000,0,0,0,0,0,0,0,0,manual template row

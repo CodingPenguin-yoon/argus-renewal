@@ -1,18 +1,38 @@
 # Frontend
 
-Next.js(App Router) 기반 금융 뉴스 웹 앱입니다.
+Next.js(App Router) 기반 KRX 해석 웹 앱입니다.
+데이터는 백엔드 API를 통해 조회합니다.
+
+```text
+src/
+  app/
+    krx/
+  krx/
+    components/
+    lib/
+    types/
+    news/server/
+    market/server/
+    market-signal/server/
+    global-events/server/
+    server/
+```
+
+## 환경 변수
+```bash
+BACKEND_BASE_URL=http://localhost:4000
+```
 
 ## 실행
 ```bash
 pnpm --filter frontend dev
 ```
 
-## DB 초기화/시드
-```bash
-pnpm --filter frontend db:generate
-pnpm --filter frontend db:init
-pnpm --filter frontend db:seed
-```
+## 주요 경로
+- `/krx` 시장 신호
+- `/krx/news` 뉴스
+- `/krx/global-events` 글로벌 이벤트
+- `/krx/watchlist` 관심종목(보조)
 
 ## 검증
 ```bash

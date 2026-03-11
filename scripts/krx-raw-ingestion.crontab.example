@@ -1,0 +1,10 @@
+# Example cron entries for KRX raw source ingestion
+# Install: crontab -e, then paste and adjust paths/env
+
+# Every 15 minutes: incremental scheduled sync (DART + configured news)
+*/15 * * * * cd /Users/yoon/03_projects/05_economy_project/argus_renewal/backend && \
+  /usr/bin/env bash -lc 'set -a; [ -f ../.env ] && source ../.env; set +a; python3 -m src.krx.source_ingestion.cli sync-scheduled >> ../doc/raw-ingestion.log 2>&1'
+
+# Nightly backfill safety window for last 2 days (optional)
+10 2 * * * cd /Users/yoon/03_projects/05_economy_project/argus_renewal/backend && \
+  /usr/bin/env bash -lc 'set -a; [ -f ../.env ] && source ../.env; set +a; python3 -m src.krx.source_ingestion.cli sync-dart --days 2 --backfill >> ../doc/raw-ingestion.log 2>&1'

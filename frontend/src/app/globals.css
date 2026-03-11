@@ -16,11 +16,21 @@ body {
 }
 
 body {
-  background:
-    radial-gradient(circle at top right, rgba(186, 230, 253, 0.4), transparent 40%),
-    linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  background: #e8ecf2;
   color: var(--foreground);
   font-family: "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
+}
+
+.market-shell {
+  min-height: 100vh;
+}
+
+.market-shell-krx {
+  background:
+    radial-gradient(circle at 12% 2%, rgba(17, 24, 39, 0.12), transparent 34%),
+    radial-gradient(circle at 96% 10%, rgba(245, 158, 11, 0.18), transparent 30%),
+    linear-gradient(180deg, #edf1f6 0%, #e6eaf1 40%, #dde3ec 100%);
+  font-family: "SUIT Variable", "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
 }
 
 a {
@@ -30,4 +40,19 @@ a {
 
 :focus-visible {
   outline-offset: 2px;
+}
+
+@keyframes market-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-market-rise {
+  animation: market-rise 360ms ease-out both;
 }

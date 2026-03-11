@@ -1,0 +1,3 @@
+# Refresh upcoming overseas macro events for the KRX global-events tab every 3 hours.
+0 */3 * * 1-5 cd /Users/yoon/03_projects/05_economy_project/argus_renewal/backend && \
+  python3 -m src.krx.source_ingestion.cli sync-global-events >> ./data/global-events-sync.log 2>&1

@@ -1,8 +1,5 @@
-import { HomeDashboard } from "@/components/news/home-dashboard";
-import { getHomeData } from "@/lib/server/data-service";
+import { redirect } from "next/navigation";
 
-export default async function HomePage() {
-  const data = await getHomeData();
-
-  return <HomeDashboard macroNews={data.macroNews} allNews={data.news} events={data.events} />;
+export default function HomePage() {
+  redirect("/krx");
 }

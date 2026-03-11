@@ -3,9 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config.env import get_settings
 from .domains.health.router import create_health_router
-from .domains.news.factory import create_news_provider
-from .domains.news.router import create_news_router
-from .domains.news.service import NewsService
+from .krx.app_header.router import create_app_header_router
+from .krx.app import create_krx_app
+from .krx.global_events.router import create_global_events_router
+from .krx.market_news.router import create_market_news_router
 from .shared.errors import unhandled_exception_handler
 
 settings = get_settings()
@@ -20,8 +21,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-news_provider = create_news_provider(settings.news_provider)
-news_service = NewsService(news_provider)
-
+app.include_router(create_app_header_router())
 app.include_router(create_health_router(settings.news_provider))
-app.include_router(create_news_router(news_service))
+app.include_router(create_market_news_router())
+app.include_router(create_global_events_router())
+app.mount("/api/krx", create_krx_app())
