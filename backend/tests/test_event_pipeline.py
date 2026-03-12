@@ -196,7 +196,8 @@ def test_direct_mapping_from_dart(tmp_path: Path) -> None:
     with get_connection(db_path) as connection:
         edge = connection.execute(
             """
-            SELECT e.impact_tier, e.mapping_rule_source, x.extraction_method
+            SELECT e.impact_tier, e.mapping_rule_source, x.extraction_method,
+                   ev.event_type, ev.sentiment, ev.summary, ev.metadata_json
             FROM event_company_edges e
             JOIN events ev ON ev.id = e.event_id
             JOIN event_extractions x ON x.event_id = ev.id
@@ -209,6 +210,65 @@ def test_direct_mapping_from_dart(tmp_path: Path) -> None:
     assert edge["impact_tier"] == "direct"
     assert edge["mapping_rule_source"] == "DART_FILER_MATCH"
     assert edge["extraction_method"] == "DETERMINISTIC_DART"
+    assert edge["event_type"] == "earnings"
+    assert edge["sentiment"] == "neutral"
+    assert "삼성전자" in edge["summary"]
+
+    metadata = json.loads(edge["metadata_json"])
+    assert metadata["normalized_report_type"] == "삼성전자 사업보고서"
+    assert metadata["event_subtype"] == "periodic_report"
+    assert metadata["impact_horizon"] == "short"
+
+
+def test_dart_direct_classification_uses_report_name_semantics(tmp_path: Path) -> None:
+    service, db_path = _make_service(tmp_path)
+
+    company_id = _insert_company(
+        db_path,
+        canonical_key="manual:testco",
+        canonical_name="테스트회사",
+        primary_stock_code="000001",
+    )
+    _insert_dart_mapping(db_path, corp_code="00999999", corp_name="테스트회사", company_id=company_id)
+
+    raw_document_id = _insert_raw_document(
+        db_path,
+        provider="DART",
+        document_type="DISCLOSURE",
+        provider_document_id="20260309000999",
+        title="[기재정정]현금ㆍ현물배당결정",
+        summary=None,
+        publisher="DART",
+        company_id=company_id,
+        source_url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260309000999",
+        canonical_url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260309000999",
+        provider_metadata={"corp_code": "00999999", "corp_name": "테스트회사"},
+    )
+
+    result = service.normalize_pending_documents(limit=50, include_llm=False)
+
+    assert result.status == "SUCCESS"
+
+    with get_connection(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT event_type, sentiment, summary, risk_flags_json, metadata_json
+            FROM events
+            WHERE primary_document_id = ?
+            """,
+            (raw_document_id,),
+        ).fetchone()
+
+    assert row is not None
+    assert row["event_type"] == "shareholder_return"
+    assert row["sentiment"] == "positive"
+    assert "테스트회사 현금ㆍ현물배당결정" == row["summary"]
+    assert "amended_disclosure" in (json.loads(row["risk_flags_json"]) or [])
+
+    metadata = json.loads(row["metadata_json"])
+    assert metadata["normalized_report_type"] == "현금ㆍ현물배당결정"
+    assert metadata["event_subtype"] == "capital_return"
+    assert metadata["impact_direction"] == "positive"
 
 
 def test_duplicate_news_collapses_to_single_event(tmp_path: Path) -> None:

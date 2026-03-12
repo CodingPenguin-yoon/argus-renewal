@@ -16,6 +16,7 @@ from .event_taxonomy import (
     RELATIONSHIP_KEYWORDS,
     SOURCE_TRUST_SCORES,
     THEME_KEYWORDS,
+    classify_dart_disclosure,
     classify_event_type,
     classify_sentiment,
     event_type_label,
@@ -385,21 +386,28 @@ class EventNormalizationService:
                 )
 
         if extraction_method == "DETERMINISTIC_DART":
-            event_type = classify_event_type(normalized_text)
-            summary = self._make_summary(row=row)
-            sentiment = classify_sentiment(normalized_text)
+            dart_classification = classify_dart_disclosure(str(row.get("report_type") or row.get("title") or ""))
+            event_type = dart_classification.event_type
+            summary = self._make_dart_summary(
+                row=row,
+                normalized_report_name=dart_classification.normalized_report_name,
+            )
+            sentiment = dart_classification.sentiment
             edges = self._build_dart_direct_edges(
                 row=row,
                 mentions=mentions,
                 direct_company_ids=direct_company_ids,
                 trust_score=trust_score,
             )
-            risk_flags: list[str] = []
+            risk_flags = list(dart_classification.risk_flags)
             extraction_confidence = max(0.86, trust_score * 0.92)
             output_payload = {
                 "event_type": event_type,
                 "summary": summary,
                 "sentiment": sentiment,
+                "impact_direction": dart_classification.impact_direction,
+                "impact_horizon": dart_classification.impact_horizon,
+                "event_subtype": dart_classification.event_subtype,
                 "companies": [self._serialize_edge(edge) for edge in edges],
                 "risk_flags": risk_flags,
                 "confidence": extraction_confidence,
@@ -482,6 +490,16 @@ class EventNormalizationService:
                 "provider_document_id": row.get("provider_document_id"),
                 "publisher": row.get("publisher"),
                 "report_type": row.get("report_type"),
+                "normalized_report_type": (
+                    dart_classification.normalized_report_name if extraction_method == "DETERMINISTIC_DART" else None
+                ),
+                "event_subtype": dart_classification.event_subtype if extraction_method == "DETERMINISTIC_DART" else None,
+                "impact_direction": (
+                    dart_classification.impact_direction if extraction_method == "DETERMINISTIC_DART" else None
+                ),
+                "impact_horizon": (
+                    dart_classification.impact_horizon if extraction_method == "DETERMINISTIC_DART" else None
+                ),
                 "snippet": self._source_snippet(row),
                 "raw_document_id": raw_document_id,
             },
@@ -1281,6 +1299,16 @@ class EventNormalizationService:
         if title:
             return title[:280]
         return "normalized_event"
+
+    def _make_dart_summary(self, *, row: dict[str, Any], normalized_report_name: str) -> str:
+        metadata = self._json_load(row.get("provider_metadata_json")) if row.get("provider_metadata_json") else {}
+        company_name = str(metadata.get("corp_name") or row.get("company_name") or "").strip()
+        title = normalized_report_name.strip() or str(row.get("title") or "").strip()
+        if company_name and title and company_name not in title:
+            return f"{company_name} {title}"[:280]
+        if title:
+            return title[:280]
+        return self._make_summary(row=row)
 
     def _compose_confidence(
         self,

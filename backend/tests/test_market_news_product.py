@@ -252,11 +252,11 @@ def test_market_news_product_materializes_event_first_cards(tmp_path: Path) -> N
         provider_metadata={"corp_code": "00126380", "corp_name": "삼성전자"},
     )
 
-    primary_bigkinds_id = _insert_raw_document(
+    primary_curated_id = _insert_raw_document(
         db_path,
-        provider="BIGKINDS",
+        provider="MK_RSS",
         document_type="NEWS_CANDIDATE",
-        provider_document_id="BK-100",
+        provider_document_id="MK-100",
         title="코스피 반도체주 강세, 외국인 순매수 확대",
         summary="반도체 업종과 코스피 수급이 동시에 개선됐다.",
         publisher="한국경제",
@@ -278,14 +278,14 @@ def test_market_news_product_materializes_event_first_cards(tmp_path: Path) -> N
         company_id=samsung_id,
         query_text="반도체 증시",
         is_duplicate=1,
-        duplicate_of_document_id=primary_bigkinds_id,
+        duplicate_of_document_id=primary_curated_id,
     )
 
     _insert_raw_document(
         db_path,
-        provider="BIGKINDS",
+        provider="MK_RSS",
         document_type="NEWS_CANDIDATE",
-        provider_document_id="BK-200",
+        provider_document_id="MK-200",
         title="연준 매파 발언에 달러 강세, 아시아 위험자산 경계감 확대",
         summary="미국 금리 기대가 높아지면서 원화와 외국인 수급 부담이 커졌다.",
         publisher="매일경제",
@@ -321,7 +321,7 @@ def test_market_news_product_materializes_event_first_cards(tmp_path: Path) -> N
         ).fetchall()
 
     assert ("DART", "CANONICAL_EVENT") in {(row["provider"], row["storage_policy"]) for row in source_documents}
-    assert ("BIGKINDS", "PERSISTENT_EVIDENCE") in {(row["provider"], row["storage_policy"]) for row in source_documents}
+    assert ("MK_RSS", "PERSISTENT_EVIDENCE") in {(row["provider"], row["storage_policy"]) for row in source_documents}
     assert ("NAVER_NEWS", "TRANSIENT_DISCOVERY") in {(row["provider"], row["storage_policy"]) for row in source_documents}
     assert any(row["market_scope"] == "kr_market" and row["evidence_count"] >= 2 for row in evidence_rows)
     assert {row["column_key"] for row in card_rows} == {"KR", "GLOBAL"}
@@ -332,9 +332,9 @@ def test_market_news_product_ranking_prefers_confirmed_high_quality_events(tmp_p
 
     primary_id = _insert_raw_document(
         db_path,
-        provider="BIGKINDS",
+        provider="MK_RSS",
         document_type="NEWS_CANDIDATE",
-        provider_document_id="BK-301",
+        provider_document_id="MK-301",
         title="코스피 수급 개선, 외국인 순매수 확대",
         summary="국내 지수와 수급이 동반 개선됐다.",
         publisher="한국경제",
@@ -378,6 +378,95 @@ def test_market_news_product_ranking_prefers_confirmed_high_quality_events(tmp_p
     assert len(cards) >= 2
     assert cards[0]["title"] == "코스피 수급 개선, 외국인 순매수 확대"
     assert cards[0]["ranking_score"] > cards[1]["ranking_score"]
+
+
+def test_market_news_product_canonical_dart_event_prefers_primary_disclosure_evidence(tmp_path: Path) -> None:
+    event_service, db_path = _make_event_service(tmp_path)
+
+    samsung_id = _insert_company(
+        db_path,
+        canonical_key="manual:samsung-dividend",
+        canonical_name="삼성전자",
+        primary_stock_code="005930",
+        market_classification="반도체",
+    )
+    _insert_dart_mapping(db_path, corp_code="00126380", corp_name="삼성전자", company_id=samsung_id)
+
+    _insert_raw_document(
+        db_path,
+        provider="DART",
+        document_type="DISCLOSURE",
+        provider_document_id="20260311000001",
+        title="삼성전자 현금ㆍ현물배당결정",
+        summary="배당 결정 공시",
+        publisher="DART",
+        source_url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260311000001",
+        canonical_url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260311000001",
+        company_id=samsung_id,
+        provider_metadata={"corp_code": "00126380", "corp_name": "삼성전자"},
+    )
+
+    primary_curated_id = _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-501",
+        title="삼성전자 현금ㆍ현물배당결정",
+        summary="매일경제에서 배당 결정 배경을 설명했다.",
+        publisher="매일경제",
+        source_url="https://www.mk.co.kr/news/stock/12000001",
+        canonical_url="https://www.mk.co.kr/news/stock/12000001",
+        company_id=samsung_id,
+        query_text="삼성전자 배당",
+    )
+
+    _insert_raw_document(
+        db_path,
+        provider="NAVER_NEWS",
+        document_type="NEWS_CANDIDATE",
+        title="삼성전자 현금ㆍ현물배당결정",
+        summary="네이버 검색 결과에서도 같은 배당 이슈가 확인됐다.",
+        publisher="매경",
+        source_url="https://search.naver.com/search.naver?query=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90+%EB%B0%B0%EB%8B%B9",
+        canonical_url="https://www.mk.co.kr/news/stock/12000001",
+        company_id=samsung_id,
+        query_text="삼성전자 배당",
+        is_duplicate=1,
+        duplicate_of_document_id=primary_curated_id,
+    )
+
+    result = event_service.normalize_pending_documents(limit=50, include_llm=False)
+    assert result.status == "SUCCESS"
+
+    news_service = _make_news_service(db_path, scores={"group-1": 58.0})
+    news_service.refresh_materialized(force=True)
+
+    cards = news_service.list_cards(region="KR", limit=10)
+    dart_card = next((card for card in cards if card["evidence"] and card["evidence"][0]["provider"] == "DART"), None)
+
+    assert dart_card is not None
+    assert dart_card["market_scope"] == "company"
+    assert [evidence["provider"] for evidence in dart_card["evidence"][:3]] == ["DART", "MK_RSS", "NAVER_NEWS"]
+    assert [evidence["role"] for evidence in dart_card["evidence"][:3]] == ["PRIMARY", "CONFIRMING", "DISCOVERY"]
+
+    with get_connection(db_path) as connection:
+        normalized_event = connection.execute(
+            """
+            SELECT ne.provenance_json
+            FROM news_cards nc
+            JOIN normalized_events ne ON ne.id = nc.normalized_event_id
+            WHERE nc.card_key = ?
+            """,
+            (dart_card["id"],),
+        ).fetchone()
+
+    assert normalized_event is not None
+    provenance = json.loads(normalized_event["provenance_json"])
+    assert provenance["canonical_anchor"] is True
+    assert provenance["persistent_evidence"] is True
+    assert provenance["event_subtype"] == "capital_return"
+    assert provenance["impact_direction"] == "positive"
+    assert set(provenance["publisher_keys"]) == {"DART", "매일경제"}
 
 
 def test_market_news_product_uses_observed_at_when_news_published_at_missing(tmp_path: Path) -> None:
@@ -559,9 +648,9 @@ def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
 
     _insert_raw_document(
         db_path,
-        provider="BIGKINDS",
+        provider="MK_RSS",
         document_type="NEWS_CANDIDATE",
-        provider_document_id="BK-401",
+        provider_document_id="MK-401",
         title="코스피 수급 안정, 프로그램 매수 유입",
         summary="한국 증시 전반에 수급 안정 신호가 나타났다.",
         publisher="한국경제",
@@ -571,9 +660,9 @@ def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
     )
     _insert_raw_document(
         db_path,
-        provider="BIGKINDS",
+        provider="MK_RSS",
         document_type="NEWS_CANDIDATE",
-        provider_document_id="BK-402",
+        provider_document_id="MK-402",
         title="미국 CPI 경계감에 환율 민감도 확대",
         summary="글로벌 이벤트가 원화와 위험선호에 전이될 수 있다.",
         publisher="매일경제",

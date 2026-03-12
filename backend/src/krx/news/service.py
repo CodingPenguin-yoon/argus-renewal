@@ -698,6 +698,22 @@ class NewsProductService:
             raw_document_id = int(row["id"])
             duplicate_of = int(row["duplicate_of_document_id"]) if row["duplicate_of_document_id"] is not None else None
             base_event = event_map.get(duplicate_of or raw_document_id)
+            event_type = (base_event or {}).get("event_type") or classify_event_type(
+                " ".join(filter(None, [row.get("title"), row.get("summary")]))
+            )
+            candidate_source_type = (base_event or {}).get("source_type") or resolve_provider_definition(
+                provider_definitions,
+                provider_key=str(row["provider"]),
+                document_type=str(row.get("document_type") or ""),
+            ).source_type
+            candidate_trust_score = float(
+                (base_event or {}).get("trust_score")
+                or self._trust_score_for(
+                    provider_definitions,
+                    provider=str(row["provider"]),
+                    document_type=str(row.get("document_type") or ""),
+                )
+            )
             scope_payload = self._classify_scope(row=row, base_event=base_event)
 
             if duplicate_of is not None and duplicate_of in cluster_key_by_raw_id:
@@ -725,14 +741,12 @@ class NewsProductService:
                     "market_impact": self._market_impact(scope_payload["market_scope"], base_event),
                     "market_scope": scope_payload["market_scope"],
                     "primary_region": scope_payload["primary_region"],
-                    "trust_score": float(
-                        (base_event or {}).get("trust_score")
-                        or self._trust_score_for(
-                            provider_definitions,
-                            provider=str(row["provider"]),
-                            document_type=str(row.get("document_type") or ""),
-                        )
-                    ),
+                    "event_type": event_type,
+                    "event_subtype": self._event_subtype(base_event),
+                    "impact_direction": self._impact_direction(base_event),
+                    "impact_horizon": self._impact_horizon(base_event),
+                    "source_type": candidate_source_type,
+                    "trust_score": candidate_trust_score,
                     "novelty_score": 0.0,
                     "attention_score": 0.0,
                     "cross_source_score": 0.0,
@@ -748,14 +762,27 @@ class NewsProductService:
                     "keyword_tags": set(scope_payload["keyword_tags"]),
                 }
                 clusters[cluster_key] = cluster
+            else:
+                if self._source_priority_rank(candidate_source_type) < self._source_priority_rank(cluster["source_type"]) or (
+                    self._event_subtype(base_event) not in {"generic", "generic_disclosure"}
+                    and cluster["event_subtype"] in {"generic", "generic_disclosure"}
+                ):
+                    cluster["event_id"] = (base_event or {}).get("event_id") or cluster["event_id"]
+                    cluster["title"] = row["title"] or cluster["title"]
+                    cluster["one_line_summary"] = self._one_line_summary(row=row, base_event=base_event)
+                    cluster["why_it_matters"] = self._why_it_matters(scope_payload["market_scope"], base_event)
+                    cluster["market_impact"] = self._market_impact(scope_payload["market_scope"], base_event)
+                    cluster["event_type"] = event_type
+                    cluster["event_subtype"] = self._event_subtype(base_event)
+                    cluster["impact_direction"] = self._impact_direction(base_event)
+                    cluster["impact_horizon"] = self._impact_horizon(base_event)
+                    cluster["source_type"] = candidate_source_type
+                cluster["trust_score"] = max(cluster["trust_score"], candidate_trust_score)
 
             provider = str(row["provider"])
             cluster["providers"].add(provider)
             cluster["tags"].add(("region", scope_payload["primary_region"]))
             cluster["tags"].add(("scope", scope_payload["market_scope"]))
-            event_type = (base_event or {}).get("event_type") or classify_event_type(
-                " ".join(filter(None, [row.get("title"), row.get("summary")]))
-            )
             cluster["tags"].add(("event_type", event_type))
 
             for company_name in scope_payload["direct_company_names"]:
@@ -829,39 +856,68 @@ class NewsProductService:
             evidence = sorted(
                 cluster["evidence"],
                 key=lambda item: (
+                    _storage_policy_rank(item["storage_policy"]),
                     _provider_priority(
                         resolve_provider_definition(
                             provider_definitions,
                             provider_key=item["provider"],
                         )
                     ),
-                    _storage_policy_rank(item["storage_policy"]),
                     _published_sort_rank(item["published_at"]),
                 ),
             )
             cluster["evidence"] = evidence
             distinct_providers = len(cluster["providers"])
-            cluster["cross_source_score"] = _clamp(0.22 if distinct_providers >= 3 else 0.12 if distinct_providers == 2 else 0.0)
+            distinct_publishers = {
+                publisher_key
+                for publisher_key in (self._publisher_identity(item) for item in evidence)
+                if publisher_key
+            }
+            has_canonical_anchor = any(item["storage_policy"] == "CANONICAL_EVENT" for item in evidence)
+            has_persistent_evidence = any(item["storage_policy"] == "PERSISTENT_EVIDENCE" for item in evidence)
+
+            provider_confirmation = 0.0
+            if distinct_providers >= 2:
+                provider_confirmation += 0.06
+            if distinct_providers >= 3:
+                provider_confirmation += 0.04
+
+            publisher_confirmation = 0.0
+            if len(distinct_publishers) >= 2:
+                publisher_confirmation += 0.04
+            if len(distinct_publishers) >= 3:
+                publisher_confirmation += 0.02
+
+            cluster["cross_source_score"] = _clamp(provider_confirmation + publisher_confirmation)
             published_at = _parse_iso_datetime(cluster["published_at"]) or now
             age_hours = max((now - published_at).total_seconds() / 3600.0, 0.0)
             recency_score = _clamp(1.0 - (age_hours / (self.lookback_days * 24.0)))
             repetition_penalty = min(max(len(evidence) - 1, 0) * 0.05, 0.25)
-            cluster["novelty_score"] = _clamp(
-                recency_score
-                - repetition_penalty
-                + (0.06 if evidence and evidence[0]["storage_policy"] == "CANONICAL_EVENT" else 0.0)
-            )
+            cluster["novelty_score"] = _clamp(recency_score - repetition_penalty)
             cluster["updated_at"] = utcnow_iso()
+            cluster["publisher_count"] = len(distinct_publishers)
+            cluster["has_canonical_anchor"] = has_canonical_anchor
+            cluster["has_persistent_evidence"] = has_persistent_evidence
 
             quality_penalty = 0.14 if "low_quality_headline" in cluster["quality_flags"] else 0.0
             scope_priority = _MARKET_SCOPE_PRIORITY.get(cluster["market_scope"], 0.0)
+            canonical_anchor_bonus = 0.08 if has_canonical_anchor else 0.0
+            persistent_evidence_bonus = 0.04 if has_persistent_evidence else 0.0
+            impact_bonus = self._impact_priority_bonus(
+                impact_direction=cluster["impact_direction"],
+                impact_horizon=cluster["impact_horizon"],
+                event_subtype=cluster["event_subtype"],
+            )
             cluster["ranking_score"] = round(
                 max(
                     0.0,
-                    (cluster["trust_score"] * 0.45)
-                    + (scope_priority * 0.25)
-                    + (cluster["novelty_score"] * 0.15)
+                    (cluster["trust_score"] * 0.40)
+                    + (scope_priority * 0.23)
+                    + (cluster["novelty_score"] * 0.13)
                     + cluster["cross_source_score"]
+                    + canonical_anchor_bonus
+                    + persistent_evidence_bonus
+                    + impact_bonus
                     - quality_penalty,
                 ),
                 4,
@@ -977,6 +1033,20 @@ class NewsProductService:
                     json.dumps(
                         {
                             "providers": sorted(cluster["providers"]),
+                            "publisher_keys": sorted(
+                                {
+                                    publisher_key
+                                for publisher_key in (self._publisher_identity(item) for item in cluster["evidence"])
+                                if publisher_key
+                                }
+                            ),
+                            "event_type": cluster["event_type"],
+                            "event_subtype": cluster["event_subtype"],
+                            "impact_direction": cluster["impact_direction"],
+                            "impact_horizon": cluster["impact_horizon"],
+                            "source_type": cluster["source_type"],
+                            "canonical_anchor": cluster["has_canonical_anchor"],
+                            "persistent_evidence": cluster["has_persistent_evidence"],
                             "quality_flags": sorted(cluster["quality_flags"]),
                             "direct_company_names": sorted(cluster["direct_company_names"]),
                         },
@@ -1060,8 +1130,14 @@ class NewsProductService:
             else:
                 column_key = "GLOBAL"
 
-            if cluster["market_scope"] == "company" and cluster["ranking_score"] < 0.92:
-                continue
+            if cluster["market_scope"] == "company":
+                company_threshold = 0.92
+                if cluster["has_canonical_anchor"]:
+                    company_threshold = 0.82
+                    if cluster["event_subtype"] not in {"generic", "generic_disclosure", "periodic_report"}:
+                        company_threshold = 0.76
+                if cluster["ranking_score"] < company_threshold:
+                    continue
 
             connection.execute(
                 """
@@ -1351,7 +1427,11 @@ class NewsProductService:
         event_type = (base_event or {}).get("event_type") or classify_event_type(
             " ".join(filter(None, [row.get("title"), row.get("summary")]))
         )
-        signature = "|".join(self._headline_tokens(" ".join(filter(None, [row.get("title"), row.get("summary")])) )[:5])
+        title_signature = "|".join(self._headline_tokens(str(row.get("title") or ""))[:5])
+        combined_signature = "|".join(self._headline_tokens(" ".join(filter(None, [row.get("title"), row.get("summary")])))[:5])
+        metadata = (base_event or {}).get("metadata") or {}
+        normalized_report_type = metadata.get("normalized_report_type") if isinstance(metadata, dict) else None
+        signature = title_signature or combined_signature or normalize_title(str(normalized_report_type or "")) or ""
         company_part = "|".join(scope_payload["direct_company_names"]) or str(row.get("company_ref") or "")
         seed = "|".join(
             [
@@ -1401,14 +1481,23 @@ class NewsProductService:
         source_type = definition.source_type or "DISCOVERY_NEWS"
         return SOURCE_TRUST_SCORES[source_type]
 
+    def _source_priority_rank(self, source_type: str | None) -> int:
+        normalized = str(source_type or "").strip().upper()
+        if normalized == "DISCLOSURE":
+            return 0
+        if normalized == "CURATED_NEWS":
+            return 1
+        if normalized == "DISCOVERY_NEWS":
+            return 2
+        return 3
+
     def _why_it_matters(self, market_scope: str, base_event: dict[str, Any] | None) -> str:
         if base_event and base_event.get("summary") and market_scope in {"kr_market", "global_market"}:
             return _WHY_IT_MATTERS_BY_SCOPE[market_scope]
         return _WHY_IT_MATTERS_BY_SCOPE.get(market_scope, _WHY_IT_MATTERS_BY_SCOPE["ignore"])
 
     def _market_impact(self, market_scope: str, base_event: dict[str, Any] | None) -> str:
-        sentiment = str((base_event or {}).get("sentiment") or "neutral")
-        prefix = _MARKET_IMPACT_PREFIX.get(sentiment, _MARKET_IMPACT_PREFIX["neutral"])
+        prefix = _MARKET_IMPACT_PREFIX.get(self._impact_direction(base_event), _MARKET_IMPACT_PREFIX["neutral"])
         if market_scope == "kr_market":
             return f"{prefix}가 국내 지수와 수급에 반영될 가능성이 큽니다."
         if market_scope == "global_market":
@@ -1450,11 +1539,67 @@ class NewsProductService:
         return deduped[:8]
 
     def _evidence_role(self, evidence: dict[str, Any], sort_order: int) -> str:
-        if sort_order == 1 or evidence["storage_policy"] == "CANONICAL_EVENT":
+        if evidence["storage_policy"] == "CANONICAL_EVENT":
+            return "PRIMARY"
+        if sort_order == 1:
             return "PRIMARY"
         if evidence["storage_policy"] == "TRANSIENT_DISCOVERY":
             return "DISCOVERY"
         return "CONFIRMING"
+
+    def _publisher_identity(self, evidence: dict[str, Any]) -> str | None:
+        publisher_key = str(evidence.get("publisher_key") or "").strip()
+        if publisher_key:
+            return publisher_key
+        normalized = normalize_title(str(evidence.get("publisher") or "")) or ""
+        return normalized or None
+
+    def _event_subtype(self, base_event: dict[str, Any] | None) -> str:
+        metadata = (base_event or {}).get("metadata") or {}
+        if isinstance(metadata, dict):
+            candidate = str(metadata.get("event_subtype") or "").strip()
+            if candidate:
+                return candidate
+        return "generic"
+
+    def _impact_direction(self, base_event: dict[str, Any] | None) -> str:
+        metadata = (base_event or {}).get("metadata") or {}
+        if isinstance(metadata, dict):
+            candidate = str(metadata.get("impact_direction") or "").strip().lower()
+            if candidate in _MARKET_IMPACT_PREFIX:
+                return candidate
+        sentiment = str((base_event or {}).get("sentiment") or "").strip().lower()
+        if sentiment in _MARKET_IMPACT_PREFIX:
+            return sentiment
+        return "neutral"
+
+    def _impact_horizon(self, base_event: dict[str, Any] | None) -> str:
+        metadata = (base_event or {}).get("metadata") or {}
+        if isinstance(metadata, dict):
+            candidate = str(metadata.get("impact_horizon") or "").strip().lower()
+            if candidate in {"intraday", "short", "medium"}:
+                return candidate
+        return "short"
+
+    def _impact_priority_bonus(
+        self,
+        *,
+        impact_direction: str,
+        impact_horizon: str,
+        event_subtype: str,
+    ) -> float:
+        bonus = 0.0
+        if impact_direction in {"positive", "negative"}:
+            bonus += 0.03
+        elif impact_direction == "mixed":
+            bonus += 0.02
+        if impact_horizon == "short":
+            bonus += 0.02
+        elif impact_horizon == "medium":
+            bonus += 0.01
+        if event_subtype not in {"generic", "generic_disclosure", "periodic_report"}:
+            bonus += 0.01
+        return _clamp(bonus, 0.0, 0.06)
 
     def _latest_timestamp(self, values: list[str | None]) -> str | None:
         parsed = [value for value in values if value]
