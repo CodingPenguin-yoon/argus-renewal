@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ...config.env import get_settings
+from ..news.factory import create_news_product_service
 from .factory import (
     create_company_report_service,
     create_event_normalization_service,
@@ -16,6 +17,7 @@ from .factory import (
     create_market_briefing_signal_service,
     create_raw_document_ingestion_service,
 )
+from .providers import TrendKeywordGroup
 
 logging.basicConfig(
     level=logging.INFO,
@@ -188,6 +190,45 @@ def _parse_csv_int_values(value: str | None) -> list[int]:
     return parsed
 
 
+def _resolve_window(days: int) -> tuple[datetime, datetime]:
+    window_end = datetime.now(timezone.utc)
+    window_start = window_end - timedelta(days=max(days, 1))
+    return window_start, window_end
+
+
+def _sample_news_record(item) -> dict[str, Any]:
+    return {
+        "provider": item.provider,
+        "provider_document_id": item.provider_document_id,
+        "title": item.title,
+        "publisher": item.publisher,
+        "published_at": item.published_at,
+        "source_url": item.source_url,
+        "canonical_url": item.canonical_url,
+        "summary": item.summary,
+        "query_text": item.query_text,
+    }
+
+
+def _parse_trend_groups(values: list[str]) -> list[TrendKeywordGroup]:
+    groups: list[TrendKeywordGroup] = []
+    for raw_value in values:
+        group_name, separator, raw_keywords = raw_value.partition("=")
+        if not separator:
+            raise SystemExit("Trend group must use the format GROUP=keyword1,keyword2")
+
+        normalized_group_name = group_name.strip()
+        keywords = [item.strip() for item in raw_keywords.split(",") if item.strip()]
+        if not normalized_group_name or not keywords:
+            raise SystemExit("Trend group must include a group name and at least one keyword")
+
+        groups.append(TrendKeywordGroup(group_name=normalized_group_name, keywords=keywords))
+
+    if not groups:
+        raise SystemExit("Provide at least one --group")
+    return groups
+
+
 def _load_json_items(input_path: str) -> list[dict[str, Any]]:
     source = Path(input_path)
     if not source.exists():
@@ -331,6 +372,129 @@ def _sync_news(
             "scope": scope,
         }
     )
+
+
+def _probe_news_provider(
+    *,
+    provider: str,
+    query: str,
+    days: int,
+    sample_limit: int,
+) -> None:
+    settings = get_settings()
+    service = create_raw_document_ingestion_service(settings)
+    window_start, window_end = _resolve_window(days)
+    normalized_provider = provider.strip().upper()
+
+    provider_map = {
+        "BIGKINDS": service.bigkinds_provider,
+        "NAVER_NEWS": service.naver_provider,
+    }
+    selected_provider = provider_map.get(normalized_provider)
+    if selected_provider is None:
+        raise SystemExit(f"Unsupported raw news probe provider: {provider}")
+
+    try:
+        batch = selected_provider.fetch_news(
+            query=query,
+            window_start=window_start,
+            window_end=window_end,
+            cursor=None,
+        )
+        _print_json(
+            {
+                "provider": normalized_provider,
+                "query": query,
+                "status": "SKIPPED_DISABLED" if batch.disabled_reason else "SUCCESS",
+                "disabled_reason": batch.disabled_reason,
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
+                "record_count": len(batch.records),
+                "sample_limit": sample_limit,
+                "next_cursor": batch.next_cursor,
+                "metadata": batch.metadata,
+                "samples": [_sample_news_record(item) for item in batch.records[:sample_limit]],
+            }
+        )
+    except Exception as error:
+        _print_json(
+            {
+                "provider": normalized_provider,
+                "query": query,
+                "status": "FAILED",
+                "error_message": str(error),
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
+                "record_count": 0,
+                "sample_limit": sample_limit,
+                "samples": [],
+            }
+        )
+        raise SystemExit(1) from error
+
+
+def _probe_trend_provider(
+    *,
+    provider: str,
+    groups: list[str],
+    days: int,
+    sample_limit: int,
+) -> None:
+    normalized_provider = provider.strip().upper()
+    if normalized_provider != "NAVER_DATALAB":
+        raise SystemExit(f"Unsupported trend probe provider: {provider}")
+
+    settings = get_settings()
+    service = create_news_product_service(settings)
+    datalab_provider = service.datalab_provider
+    end_date = _default_trade_date_kst()
+    start_date = end_date - timedelta(days=max(days, 1))
+    parsed_groups = _parse_trend_groups(groups)
+
+    try:
+        batch = datalab_provider.fetch_interest_scores(
+            start_date=start_date,
+            end_date=end_date,
+            groups=parsed_groups,
+        )
+        score_items = [
+            {
+                "group_name": score.group_name,
+                "latest_ratio": score.latest_ratio,
+                "average_ratio": score.average_ratio,
+                "latest_period": score.latest_period,
+                "datapoint_count": score.datapoint_count,
+            }
+            for score in batch.scores.values()
+        ]
+        _print_json(
+            {
+                "provider": normalized_provider,
+                "status": "SKIPPED_DISABLED" if batch.disabled_reason else "SUCCESS",
+                "disabled_reason": batch.disabled_reason,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "group_count": len(parsed_groups),
+                "score_count": len(score_items),
+                "sample_limit": sample_limit,
+                "samples": score_items[:sample_limit],
+            }
+        )
+    except Exception as error:
+        _print_json(
+            {
+                "provider": normalized_provider,
+                "status": "FAILED",
+                "error_message": str(error),
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "group_count": len(parsed_groups),
+                "score_count": 0,
+                "sample_limit": sample_limit,
+                "samples": [],
+            }
+        )
+        raise SystemExit(1) from error
 
 
 def _backfill(
@@ -939,6 +1103,29 @@ def build_parser() -> argparse.ArgumentParser:
     sync_news_parser.add_argument("--days", type=int, default=1)
     sync_news_parser.add_argument("--backfill", action="store_true")
 
+    probe_news_parser = subparsers.add_parser(
+        "probe-news-provider",
+        help="Read-only probe for a raw news provider without writing to the DB",
+    )
+    probe_news_parser.add_argument("--provider", required=True, choices=["BIGKINDS", "NAVER_NEWS"])
+    probe_news_parser.add_argument("--query", required=True)
+    probe_news_parser.add_argument("--days", type=int, default=1)
+    probe_news_parser.add_argument("--sample-limit", type=int, default=10)
+
+    probe_trend_parser = subparsers.add_parser(
+        "probe-trend-provider",
+        help="Read-only probe for a trend provider without writing to the DB",
+    )
+    probe_trend_parser.add_argument("--provider", required=True, choices=["NAVER_DATALAB"])
+    probe_trend_parser.add_argument(
+        "--group",
+        action="append",
+        default=[],
+        help="Trend group in the form GROUP=keyword1,keyword2",
+    )
+    probe_trend_parser.add_argument("--days", type=int, default=7)
+    probe_trend_parser.add_argument("--sample-limit", type=int, default=10)
+
     backfill_parser = subparsers.add_parser(
         "backfill",
         help="Backfill raw source documents by date range",
@@ -1235,6 +1422,24 @@ def main() -> None:
             keywords=args.keyword,
             days=args.days,
             backfill=args.backfill,
+        )
+        return
+
+    if args.command == "probe-news-provider":
+        _probe_news_provider(
+            provider=args.provider,
+            query=args.query,
+            days=args.days,
+            sample_limit=args.sample_limit,
+        )
+        return
+
+    if args.command == "probe-trend-provider":
+        _probe_trend_provider(
+            provider=args.provider,
+            groups=args.group,
+            days=args.days,
+            sample_limit=args.sample_limit,
         )
         return
 

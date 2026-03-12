@@ -44,3 +44,11 @@ KRX 라우트:
 cd backend
 pytest -q
 ```
+
+## Provider Probe
+```bash
+cd backend
+python3 -m src.krx.source_ingestion.cli probe-news-provider --provider BIGKINDS --query "반도체" --sample-limit 10
+python3 -m src.krx.source_ingestion.cli probe-news-provider --provider NAVER_NEWS --query "반도체 증시" --sample-limit 10
+python3 -m src.krx.source_ingestion.cli probe-trend-provider --provider NAVER_DATALAB --group "반도체=반도체,삼성전자" --sample-limit 10
+```

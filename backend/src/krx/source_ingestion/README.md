@@ -151,6 +151,9 @@ python3 -m src.krx.source_ingestion.cli sync-disclosures --provider DART --days 
 python3 -m src.krx.source_ingestion.cli sync-news-companies --company-id 1 --days 1
 python3 -m src.krx.source_ingestion.cli sync-news-themes --keyword "반도체" --days 1
 python3 -m src.krx.source_ingestion.cli sync-news --provider BIGKINDS --provider NAVER_NEWS --scope themes --keyword "반도체" --days 1
+python3 -m src.krx.source_ingestion.cli probe-news-provider --provider BIGKINDS --query "반도체" --sample-limit 10
+python3 -m src.krx.source_ingestion.cli probe-news-provider --provider NAVER_NEWS --query "반도체 증시" --sample-limit 10
+python3 -m src.krx.source_ingestion.cli probe-trend-provider --provider NAVER_DATALAB --group "반도체=반도체,삼성전자" --sample-limit 10
 python3 -m src.krx.source_ingestion.cli backfill --start-date 2026-03-01 --end-date 2026-03-09 --provider-scope all --company-id 1 --keyword "금리"
 python3 -m src.krx.source_ingestion.cli sync-scheduled
 python3 -m src.krx.source_ingestion.cli normalize-events --limit 200
@@ -171,6 +174,11 @@ python3 -m src.krx.source_ingestion.cli import-company-financial-snapshots --com
 - provider CSV 설정이 있으면 legacy boolean보다 우선해서 해당 provider만 실행
 - run 중 하나라도 `FAILED`면 프로세스 exit code를 `1`로 종료 (cron/alert 연동용)
 - `SKIPPED_DISABLED`(credential/flag 미설정)는 실패로 간주하지 않음
+
+read-only probe 동작:
+- `probe-news-provider`는 `BIGKINDS`, `NAVER_NEWS`를 직접 호출하고 DB에는 아무것도 쓰지 않는다.
+- `probe-trend-provider`는 `NAVER_DATALAB` 점수 응답만 확인하며 기사 row를 만들지 않는다.
+- 두 명령 모두 기본 샘플 출력은 최대 10건이며, credential 누락 시 `SKIPPED_DISABLED`를 반환한다.
 
 descriptor factory 확장:
 - `RAW_INGESTION_DESCRIPTOR_FACTORY_PATHS`에 callable 경로를 넣으면 factory가 extra descriptor를 로드한다.

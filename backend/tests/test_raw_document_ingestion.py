@@ -21,6 +21,7 @@ from src.krx.source_ingestion.models import ProviderFetchBatch, RawDocumentCandi
 from src.krx.source_ingestion.provider_descriptors import DocumentSyncRequest, NewsProviderDescriptor
 from src.krx.source_ingestion.providers.bigkinds_provider import BigKindsNewsProvider
 from src.krx.source_ingestion.providers.dart_provider import DartDisclosureProvider
+from src.krx.source_ingestion.providers.naver_datalab_provider import TrendKeywordGroup, TrendScore, TrendScoreBatch
 from src.krx.source_ingestion.providers.naver_news_provider import NaverNewsProvider
 from src.krx.source_ingestion.service import RawDocumentIngestionService
 
@@ -1074,12 +1075,180 @@ def test_cli_parser_supports_sync_news_command() -> None:
     assert args.keyword == ["금리"]
 
 
+def test_cli_parser_supports_probe_news_provider_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "probe-news-provider",
+            "--provider",
+            "BIGKINDS",
+            "--query",
+            "반도체",
+            "--sample-limit",
+            "5",
+        ]
+    )
+    assert args.command == "probe-news-provider"
+    assert args.provider == "BIGKINDS"
+    assert args.query == "반도체"
+    assert args.sample_limit == 5
+
+
+def test_cli_parser_supports_probe_trend_provider_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "probe-trend-provider",
+            "--provider",
+            "NAVER_DATALAB",
+            "--group",
+            "반도체=반도체,삼성전자",
+            "--sample-limit",
+            "3",
+        ]
+    )
+    assert args.command == "probe-trend-provider"
+    assert args.provider == "NAVER_DATALAB"
+    assert args.group == ["반도체=반도체,삼성전자"]
+    assert args.sample_limit == 3
+
+
 def test_cli_parser_supports_normalize_events_command() -> None:
     parser = build_parser()
     args = parser.parse_args(["normalize-events", "--limit", "10", "--no-llm"])
     assert args.command == "normalize-events"
     assert args.limit == 10
     assert args.no_llm is True
+
+
+def test_probe_news_provider_returns_limited_samples_without_sync_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    class _FakeNewsProvider:
+        def fetch_news(self, *, query, window_start, window_end, cursor):
+            assert query == "반도체"
+            assert cursor is None
+            assert window_start < window_end
+            return ProviderFetchBatch(
+                records=[
+                    RawDocumentCandidate(
+                        provider="BIGKINDS",
+                        provider_document_id=f"BK-{index}",
+                        document_type="NEWS_CANDIDATE",
+                        title=f"기사 {index}",
+                        summary=f"요약 {index}",
+                        publisher="테스트경제",
+                        source_url=f"https://example.com/{index}",
+                        canonical_url=f"https://example.com/{index}",
+                        published_at=f"2026-03-0{index}T00:00:00Z",
+                        receipt_at=None,
+                        report_type=None,
+                        company_ref=None,
+                        company_id=None,
+                        query_text=query,
+                        dedup_type="NEWS_URL_TITLE",
+                        dedup_key=f"dedup-{index}",
+                    )
+                    for index in range(1, 4)
+                ],
+                next_cursor="2026-03-03T00:00:00Z",
+                metadata={"query": query},
+            )
+
+    fake_service = SimpleNamespace(
+        bigkinds_provider=_FakeNewsProvider(),
+        naver_provider=None,
+    )
+
+    monkeypatch.setattr(ingestion_cli, "get_settings", lambda: SimpleNamespace())
+    monkeypatch.setattr(ingestion_cli, "create_raw_document_ingestion_service", lambda _settings: fake_service)
+    monkeypatch.setattr(ingestion_cli, "_print_json", lambda payload: captured.append(payload))
+
+    ingestion_cli._probe_news_provider(
+        provider="BIGKINDS",
+        query="반도체",
+        days=2,
+        sample_limit=2,
+    )
+
+    assert len(captured) == 1
+    payload = captured[0]
+    assert payload["status"] == "SUCCESS"
+    assert payload["record_count"] == 3
+    assert payload["sample_limit"] == 2
+    assert len(payload["samples"]) == 2
+    assert payload["samples"][0]["title"] == "기사 1"
+
+
+def test_probe_news_provider_surfaces_disabled_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    class _DisabledNewsProvider:
+        def fetch_news(self, *, query, window_start, window_end, cursor):
+            return ProviderFetchBatch(
+                records=[],
+                next_cursor=None,
+                disabled_reason="missing_bigkinds_api_key",
+            )
+
+    fake_service = SimpleNamespace(
+        bigkinds_provider=_DisabledNewsProvider(),
+        naver_provider=None,
+    )
+
+    monkeypatch.setattr(ingestion_cli, "get_settings", lambda: SimpleNamespace())
+    monkeypatch.setattr(ingestion_cli, "create_raw_document_ingestion_service", lambda _settings: fake_service)
+    monkeypatch.setattr(ingestion_cli, "_print_json", lambda payload: captured.append(payload))
+
+    ingestion_cli._probe_news_provider(
+        provider="BIGKINDS",
+        query="반도체",
+        days=1,
+        sample_limit=10,
+    )
+
+    assert captured[0]["status"] == "SKIPPED_DISABLED"
+    assert captured[0]["disabled_reason"] == "missing_bigkinds_api_key"
+
+
+def test_probe_trend_provider_returns_score_samples(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    class _FakeTrendProvider:
+        def fetch_interest_scores(self, *, start_date, end_date, groups):
+            assert start_date <= end_date
+            assert groups == [TrendKeywordGroup(group_name="반도체", keywords=["반도체", "삼성전자"])]
+            return TrendScoreBatch(
+                scores={
+                    "반도체": TrendScore(
+                        group_name="반도체",
+                        latest_ratio=77.0,
+                        average_ratio=61.5,
+                        latest_period=end_date.isoformat(),
+                        datapoint_count=7,
+                    )
+                }
+            )
+
+    fake_service = SimpleNamespace(datalab_provider=_FakeTrendProvider())
+
+    monkeypatch.setattr(ingestion_cli, "get_settings", lambda: SimpleNamespace())
+    monkeypatch.setattr(ingestion_cli, "create_news_product_service", lambda _settings: fake_service)
+    monkeypatch.setattr(ingestion_cli, "_print_json", lambda payload: captured.append(payload))
+
+    ingestion_cli._probe_trend_provider(
+        provider="NAVER_DATALAB",
+        groups=["반도체=반도체,삼성전자"],
+        days=7,
+        sample_limit=10,
+    )
+
+    assert len(captured) == 1
+    payload = captured[0]
+    assert payload["status"] == "SUCCESS"
+    assert payload["score_count"] == 1
+    assert payload["samples"][0]["group_name"] == "반도체"
+    assert "latest_ratio" in payload["samples"][0]
 
 
 def test_sync_scheduled_returns_non_zero_when_any_run_failed(monkeypatch: pytest.MonkeyPatch) -> None:
