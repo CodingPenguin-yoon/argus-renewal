@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ...publisher_registry import normalize_publisher_key
 from ..models import ProviderFetchBatch, RawDocumentCandidate
 from ..normalize import canonicalize_url, news_dedup_key, strip_html, title_hash
 
@@ -307,6 +308,7 @@ class BigKindsNewsProvider:
             query_text=query,
             dedup_type="NEWS_URL_TITLE" if dedup_key else None,
             dedup_key=dedup_key,
+            publisher_key=normalize_publisher_key(publisher),
             provider_metadata={
                 "query": query,
                 "published_raw": published_raw,

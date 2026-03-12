@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from src.krx.company_master.db import get_connection, utcnow_iso
+from src.krx.provider_registry import build_provider_definition, ensure_provider_definition
 from src.krx.source_ingestion.event_service import EventNormalizationService
 from src.krx.source_ingestion.llm import DisabledLLMExtractionProvider
 
@@ -140,6 +141,26 @@ def _insert_raw_document(
         row = connection.execute("SELECT last_insert_rowid() AS id").fetchone()
     assert row is not None
     return int(row["id"])
+
+
+def _register_provider(
+    db_path: str,
+    *,
+    provider_key: str,
+    provider_family: str,
+    trust_score: float,
+    priority: int,
+) -> None:
+    with get_connection(db_path) as connection:
+        ensure_provider_definition(
+            connection,
+            build_provider_definition(
+                provider_key=provider_key,
+                provider_family=provider_family,
+                trust_score=trust_score,
+                priority=priority,
+            ),
+        )
 
 
 def test_direct_mapping_from_dart(tmp_path: Path) -> None:
@@ -303,6 +324,49 @@ def test_fallback_path_without_llm(tmp_path: Path) -> None:
     assert extraction is not None
     assert extraction["extraction_method"] == "FALLBACK_RULE"
     assert extraction["parse_status"] == "SUCCESS"
+
+
+def test_registered_custom_provider_uses_registry_source_type_and_trust_score(tmp_path: Path) -> None:
+    service, db_path = _make_service(tmp_path)
+    _register_provider(
+        db_path,
+        provider_key="CUSTOM_RSS",
+        provider_family="CURATED_NEWS",
+        trust_score=0.91,
+        priority=15,
+    )
+
+    raw_document_id = _insert_raw_document(
+        db_path,
+        provider="CUSTOM_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="RSS-101",
+        title="코스피 반도체 업황 개선",
+        summary="외국인 순매수와 업황 회복 기대가 동시에 커졌다.",
+        publisher="사용자 RSS",
+        company_id=None,
+        source_url="https://rss.example.com/101",
+        canonical_url="https://rss.example.com/101",
+    )
+
+    result = service.normalize_pending_documents(limit=50, include_llm=False)
+    assert result.status == "SUCCESS"
+    assert result.processed_count == 1
+
+    with get_connection(db_path) as connection:
+        event_row = connection.execute(
+            """
+            SELECT source_type, source_provider, trust_score
+            FROM events
+            WHERE primary_document_id = ?
+            """,
+            (raw_document_id,),
+        ).fetchone()
+
+    assert event_row is not None
+    assert event_row["source_type"] == "CURATED_NEWS"
+    assert event_row["source_provider"] == "CUSTOM_RSS"
+    assert abs(float(event_row["trust_score"]) - 0.91) < 1e-6
 
 
 def test_low_confidence_event_inserted_to_review_queue(tmp_path: Path) -> None:

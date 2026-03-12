@@ -215,6 +215,34 @@ def _sync_dart(days: int, backfill: bool) -> None:
     _print_json(_as_result_payload(result))
 
 
+def _list_ingestion_providers() -> None:
+    settings = get_settings()
+    service = create_raw_document_ingestion_service(settings)
+    payload = service.list_supported_ingestion_providers()
+    _print_json(payload)
+
+
+def _backfill_publishers(*, limit: int | None, all_rows: bool) -> None:
+    settings = get_settings()
+    service = create_raw_document_ingestion_service(settings)
+    payload = service.backfill_publisher_registry(
+        limit=limit,
+        only_missing=not all_rows,
+    )
+    _print_json(payload)
+
+
+def _sync_disclosures(*, provider: str, days: int, backfill: bool) -> None:
+    settings = get_settings()
+    service = create_raw_document_ingestion_service(settings)
+    result = service.sync_disclosures_last_days(
+        provider=provider,
+        days=days,
+        backfill=backfill,
+    )
+    _print_json(_as_result_payload(result))
+
+
 def _sync_news_companies(
     *,
     company_ids: list[int],
@@ -261,6 +289,50 @@ def _sync_news_themes(*, keywords: list[str], days: int, backfill: bool) -> None
     )
 
 
+def _sync_news(
+    *,
+    providers: list[str],
+    scope: str,
+    company_ids: list[int],
+    company_names: list[str],
+    keywords: list[str],
+    days: int,
+    backfill: bool,
+) -> None:
+    settings = get_settings()
+    service = create_raw_document_ingestion_service(settings)
+
+    if scope == "companies":
+        if not company_ids and not company_names:
+            raise SystemExit("Provide at least one --company-id or --company-name")
+        results = service.sync_news_candidates_for_companies_last_days(
+            company_ids=company_ids,
+            company_names=company_names,
+            days=days,
+            backfill=backfill,
+            providers=providers,
+        )
+    else:
+        normalized_keywords = [keyword.strip() for keyword in keywords if keyword.strip()]
+        if not normalized_keywords:
+            raise SystemExit("Provide at least one --keyword")
+        results = service.sync_news_candidates_for_themes_last_days(
+            keywords=normalized_keywords,
+            days=days,
+            backfill=backfill,
+            providers=providers,
+        )
+
+    _print_json(
+        {
+            "runs": [_as_result_payload(result) for result in results],
+            "run_count": len(results),
+            "providers": providers,
+            "scope": scope,
+        }
+    )
+
+
 def _backfill(
     *,
     start_date: date,
@@ -299,30 +371,40 @@ def _sync_scheduled() -> None:
     service = create_raw_document_ingestion_service(settings)
 
     days = max(1, settings.raw_ingestion_schedule_days)
-    company_ids = _parse_csv_int_values(settings.raw_ingestion_schedule_company_ids)
-    company_names = _parse_csv_values(settings.raw_ingestion_schedule_company_names)
-    theme_keywords = _parse_csv_values(settings.raw_ingestion_schedule_theme_keywords)
+    disclosure_providers = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_disclosure_providers", None))
+    company_news_providers = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_company_news_providers", None))
+    theme_news_providers = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_theme_news_providers", None))
+    company_ids = _parse_csv_int_values(getattr(settings, "raw_ingestion_schedule_company_ids", None))
+    company_names = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_company_names", None))
+    theme_keywords = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_theme_keywords", None))
 
     results = []
-    if settings.raw_ingestion_schedule_include_dart:
+    if disclosure_providers:
+        for provider in disclosure_providers:
+            results.append(service.sync_disclosures_last_days(provider=provider, days=days, backfill=False))
+    elif getattr(settings, "raw_ingestion_schedule_include_dart", False):
         results.append(service.sync_dart_disclosures_last_days(days=days, backfill=False))
 
-    if settings.raw_ingestion_schedule_include_company_news and (company_ids or company_names):
+    if (getattr(settings, "raw_ingestion_schedule_include_company_news", False) or company_news_providers) and (
+        company_ids or company_names
+    ):
         results.extend(
             service.sync_news_candidates_for_companies_last_days(
                 company_ids=company_ids,
                 company_names=company_names,
                 days=days,
                 backfill=False,
+                providers=company_news_providers or None,
             )
         )
 
-    if settings.raw_ingestion_schedule_include_theme_news and theme_keywords:
+    if (getattr(settings, "raw_ingestion_schedule_include_theme_news", False) or theme_news_providers) and theme_keywords:
         results.extend(
             service.sync_news_candidates_for_themes_last_days(
                 keywords=theme_keywords,
                 days=days,
                 backfill=False,
+                providers=theme_news_providers or None,
             )
         )
 
@@ -335,6 +417,9 @@ def _sync_scheduled() -> None:
             "runs": [_as_result_payload(result) for result in results],
             "run_count": len(results),
             "schedule_days": days,
+            "disclosure_providers": disclosure_providers,
+            "company_news_providers": company_news_providers,
+            "theme_news_providers": theme_news_providers,
             "company_ids": company_ids,
             "company_names": company_names,
             "theme_keywords": theme_keywords,
@@ -801,9 +886,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Argus KRX raw source ingestion jobs")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    subparsers.add_parser(
+        "list-ingestion-providers",
+        help="List supported disclosure/news ingestion providers and capabilities",
+    )
+
+    backfill_publishers_parser = subparsers.add_parser(
+        "backfill-publishers",
+        help="Normalize publisher keys and populate publisher registry from raw documents",
+    )
+    backfill_publishers_parser.add_argument("--limit", type=int, default=None)
+    backfill_publishers_parser.add_argument("--all", action="store_true")
+
     dart_parser = subparsers.add_parser("sync-dart", help="Sync DART disclosures for the last N days")
     dart_parser.add_argument("--days", type=int, default=1)
     dart_parser.add_argument("--backfill", action="store_true")
+
+    disclosures_parser = subparsers.add_parser(
+        "sync-disclosures",
+        help="Sync one disclosure provider for the last N days",
+    )
+    disclosures_parser.add_argument("--provider", required=True)
+    disclosures_parser.add_argument("--days", type=int, default=1)
+    disclosures_parser.add_argument("--backfill", action="store_true")
 
     companies_parser = subparsers.add_parser(
         "sync-news-companies",
@@ -821,6 +926,18 @@ def build_parser() -> argparse.ArgumentParser:
     themes_parser.add_argument("--keyword", action="append", default=[])
     themes_parser.add_argument("--days", type=int, default=1)
     themes_parser.add_argument("--backfill", action="store_true")
+
+    sync_news_parser = subparsers.add_parser(
+        "sync-news",
+        help="Sync selected news providers for companies or themes",
+    )
+    sync_news_parser.add_argument("--provider", action="append", required=True)
+    sync_news_parser.add_argument("--scope", choices=["companies", "themes"], required=True)
+    sync_news_parser.add_argument("--company-id", type=int, action="append", default=[])
+    sync_news_parser.add_argument("--company-name", action="append", default=[])
+    sync_news_parser.add_argument("--keyword", action="append", default=[])
+    sync_news_parser.add_argument("--days", type=int, default=1)
+    sync_news_parser.add_argument("--backfill", action="store_true")
 
     backfill_parser = subparsers.add_parser(
         "backfill",
@@ -1080,8 +1197,20 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    if args.command == "list-ingestion-providers":
+        _list_ingestion_providers()
+        return
+
+    if args.command == "backfill-publishers":
+        _backfill_publishers(limit=args.limit, all_rows=args.all)
+        return
+
     if args.command == "sync-dart":
         _sync_dart(days=args.days, backfill=args.backfill)
+        return
+
+    if args.command == "sync-disclosures":
+        _sync_disclosures(provider=args.provider, days=args.days, backfill=args.backfill)
         return
 
     if args.command == "sync-news-companies":
@@ -1095,6 +1224,18 @@ def main() -> None:
 
     if args.command == "sync-news-themes":
         _sync_news_themes(keywords=args.keyword, days=args.days, backfill=args.backfill)
+        return
+
+    if args.command == "sync-news":
+        _sync_news(
+            providers=args.provider,
+            scope=args.scope,
+            company_ids=args.company_id,
+            company_names=args.company_name,
+            keywords=args.keyword,
+            days=args.days,
+            backfill=args.backfill,
+        )
         return
 
     if args.command == "backfill":

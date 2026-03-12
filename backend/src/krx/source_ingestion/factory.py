@@ -6,6 +6,7 @@ from .company_report_service import CompanyReportService
 from .briefing_signal_service import MarketBriefingSignalService
 from .briefing_service import MarketBriefingInputService
 from .event_service import EventNormalizationService
+from .factory_extensions import load_raw_ingestion_factory_extensions
 from .llm import DisabledLLMExtractionProvider, OpenAICompatibleLLMExtractionProvider
 from .report_llm import (
     DisabledCompanyReportNarrativeProvider,
@@ -24,6 +25,7 @@ from .service import RawDocumentIngestionService
 
 
 def create_raw_document_ingestion_service(settings: Settings) -> RawDocumentIngestionService:
+    extensions = load_raw_ingestion_factory_extensions(settings)
     return RawDocumentIngestionService(
         db_path=settings.db_path,
         dart_provider=DartDisclosureProvider(
@@ -59,6 +61,8 @@ def create_raw_document_ingestion_service(settings: Settings) -> RawDocumentInge
             max_retries=settings.raw_ingestion_max_retries,
             backoff_seconds=settings.raw_ingestion_backoff_seconds,
         ),
+        extra_disclosure_provider_descriptors=extensions.disclosure_provider_descriptors,
+        extra_news_provider_descriptors=extensions.news_provider_descriptors,
     )
 
 

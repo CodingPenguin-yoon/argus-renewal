@@ -22,6 +22,9 @@ class RawDocumentCandidate:
     query_text: str | None
     dedup_type: str | None
     dedup_key: str | None
+    publisher_key: str | None = None
+    observed_at: str | None = None
+    published_at_source: str | None = None
     provider_metadata: dict[str, Any] = field(default_factory=dict)
     raw_payload: dict[str, Any] | None = None
 

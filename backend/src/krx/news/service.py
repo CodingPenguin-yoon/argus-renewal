@@ -9,6 +9,15 @@ import re
 from typing import Any
 
 from ..company_master.db import get_connection, utcnow_iso
+from ..publisher_registry import build_publisher_definition, ensure_publisher_definition
+from ..provider_registry import (
+    PROVIDER_FAMILY_TREND_SIGNAL,
+    RAW_NEWS_PROVIDER_FAMILIES,
+    ProviderDefinition,
+    list_provider_definitions,
+    resolve_provider_definition,
+)
+from ..source_ingestion.document_time import effective_document_time, effective_document_time_sql
 from ..source_ingestion.event_taxonomy import (
     SOURCE_TRUST_SCORES,
     classify_event_type,
@@ -91,12 +100,6 @@ _TITLE_STOPWORDS = {
     "오늘",
     "주가",
 }
-_PROVIDER_PRIORITY = {"DART": 3, "BIGKINDS": 2, "NAVER_NEWS": 1}
-_DOC_KIND = {
-    "DART": ("DISCLOSURE", "CANONICAL_EVENT"),
-    "BIGKINDS": ("CURATED_NEWS", "PERSISTENT_EVIDENCE"),
-    "NAVER_NEWS": ("DISCOVERY_CANDIDATE", "TRANSIENT_DISCOVERY"),
-}
 _WHY_IT_MATTERS_BY_SCOPE = {
     "kr_market": "국내 지수와 수급 해석에 바로 연결될 수 있는 이슈입니다.",
     "global_market": "해외 변수지만 원화, 위험선호, 한국 증시 수급에 연동될 가능성이 큽니다.",
@@ -142,6 +145,25 @@ def _json_load(value: str | None) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return None
+
+
+def _storage_policy_rank(storage_policy: str | None) -> int:
+    if storage_policy == "CANONICAL_EVENT":
+        return 0
+    if storage_policy == "PERSISTENT_EVIDENCE":
+        return 1
+    return 2
+
+
+def _provider_priority(definition: ProviderDefinition) -> int:
+    return int(definition.priority if definition.priority is not None else 100)
+
+
+def _published_sort_rank(value: str | None) -> float:
+    parsed = _parse_iso_datetime(value)
+    if parsed is None:
+        return float("inf")
+    return -parsed.timestamp()
 
 
 class NewsProductService:
@@ -309,17 +331,14 @@ class NewsProductService:
         with get_connection(self.db_path) as connection:
             rows = connection.execute(
                 """
-                SELECT *
-                FROM source_coverage
-                WHERE surface_key = 'news_tab'
-                ORDER BY
-                    CASE provider
-                        WHEN 'DART' THEN 1
-                        WHEN 'BIGKINDS' THEN 2
-                        WHEN 'NAVER_NEWS' THEN 3
-                        WHEN 'NAVER_DATALAB' THEN 4
-                        ELSE 9
-                    END
+                SELECT
+                    sc.*,
+                    COALESCE(pr.priority, 999) AS provider_priority
+                FROM source_coverage sc
+                LEFT JOIN provider_registry pr
+                    ON pr.provider_key = sc.provider
+                WHERE sc.surface_key = 'news_tab'
+                ORDER BY provider_priority ASC, sc.provider ASC
                 """
             ).fetchall()
 
@@ -347,7 +366,7 @@ class NewsProductService:
                 }
             )
 
-        expected_sources = 4
+        expected_sources = len(items)
         coverage_ratio = round(available_count / expected_sources, 2) if expected_sources else 0.0
         state = "empty"
         if coverage_ratio >= 0.99:
@@ -409,17 +428,21 @@ class NewsProductService:
         if latest_source and latest_source > latest_materialized:
             return True
 
-        latest_datalab = connection.execute(
+        latest_trend = connection.execute(
             """
-            SELECT updated_at
-            FROM source_coverage
-            WHERE surface_key = 'news_tab' AND provider = 'NAVER_DATALAB'
-            """
+            SELECT MAX(sc.updated_at) AS updated_at
+            FROM source_coverage sc
+            LEFT JOIN provider_registry pr
+                ON pr.provider_key = sc.provider
+            WHERE sc.surface_key = 'news_tab'
+              AND COALESCE(pr.provider_family, '') = ?
+            """,
+            (PROVIDER_FAMILY_TREND_SIGNAL,),
         ).fetchone()
-        if latest_datalab is None:
+        if latest_trend is None:
             return True
 
-        refreshed_at = _parse_iso_datetime(latest_datalab["updated_at"])
+        refreshed_at = _parse_iso_datetime(latest_trend["updated_at"])
         if refreshed_at is None:
             return True
         return datetime.now(timezone.utc) - refreshed_at > timedelta(seconds=self.refresh_ttl_seconds)
@@ -428,16 +451,23 @@ class NewsProductService:
         now = utcnow_iso()
         cutoff_dt = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
         cutoff_iso = cutoff_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        provider_definitions = list_provider_definitions(connection)
 
         raw_documents = self._load_recent_raw_documents(connection, cutoff_iso)
         event_map = self._load_recent_event_map(connection, cutoff_iso)
         latest_runs = self._load_latest_runs(connection)
 
-        source_document_id_by_raw_id = self._rebuild_source_documents(connection, raw_documents, now)
+        source_document_id_by_raw_id = self._rebuild_source_documents(
+            connection,
+            raw_documents,
+            now,
+            provider_definitions,
+        )
         clusters = self._build_clusters(
             raw_documents=raw_documents,
             event_map=event_map,
             source_document_id_by_raw_id=source_document_id_by_raw_id,
+            provider_definitions=provider_definitions,
         )
         attention_scores, datalab_status = self._resolve_attention_scores(clusters)
         self._replace_materialized_events(connection, clusters, attention_scores, now)
@@ -448,6 +478,7 @@ class NewsProductService:
             clusters=clusters,
             latest_runs=latest_runs,
             datalab_status=datalab_status,
+            provider_definitions=provider_definitions,
         )
 
         logger.info(
@@ -460,8 +491,9 @@ class NewsProductService:
         )
 
     def _load_recent_raw_documents(self, connection, cutoff_iso: str) -> list[dict[str, Any]]:
+        effective_time_sql = effective_document_time_sql(alias="rd")
         rows = connection.execute(
-            """
+            f"""
             SELECT
                 rd.*,
                 c.canonical_name AS company_name,
@@ -469,8 +501,8 @@ class NewsProductService:
                 c.market_classification
             FROM raw_documents rd
             LEFT JOIN companies c ON c.id = rd.company_id
-            WHERE COALESCE(rd.published_at, rd.receipt_at, rd.updated_at, rd.created_at) >= ?
-            ORDER BY rd.is_duplicate ASC, COALESCE(rd.published_at, rd.receipt_at, rd.updated_at, rd.created_at) DESC, rd.id DESC
+            WHERE {effective_time_sql} >= ?
+            ORDER BY rd.is_duplicate ASC, {effective_time_sql} DESC, rd.id DESC
             """,
             (cutoff_iso,),
         ).fetchall()
@@ -564,6 +596,7 @@ class NewsProductService:
         connection,
         raw_documents: list[dict[str, Any]],
         now: str,
+        provider_definitions: dict[str, ProviderDefinition],
     ) -> dict[int, int]:
         connection.execute("DELETE FROM source_coverage")
         connection.execute("DELETE FROM news_cards")
@@ -574,7 +607,18 @@ class NewsProductService:
 
         source_document_id_by_raw_id: dict[int, int] = {}
         for row in raw_documents:
-            document_kind, storage_policy = _DOC_KIND.get(str(row["provider"]), ("CURATED_NEWS", "PERSISTENT_EVIDENCE"))
+            definition = resolve_provider_definition(
+                provider_definitions,
+                provider_key=str(row["provider"]),
+                document_type=str(row.get("document_type") or ""),
+            )
+            publisher_definition = ensure_publisher_definition(
+                connection,
+                publisher_name=row.get("publisher"),
+                publisher_key=row.get("publisher_key"),
+            )
+            publisher_key = publisher_definition.publisher_key if publisher_definition is not None else None
+            row["publisher_key"] = publisher_key
             provenance = {
                 "raw_document_id": int(row["id"]),
                 "duplicate_of_document_id": row["duplicate_of_document_id"],
@@ -593,9 +637,12 @@ class NewsProductService:
                     title,
                     snippet,
                     publisher,
+                    publisher_key,
                     source_url,
                     canonical_url,
                     published_at,
+                    observed_at,
+                    published_at_source,
                     receipt_at,
                     company_id,
                     company_ref,
@@ -604,20 +651,23 @@ class NewsProductService:
                     provenance_json,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(row["id"]),
                     row["provider"],
                     row["provider_document_id"],
-                    document_kind,
-                    storage_policy,
+                    definition.document_kind,
+                    definition.storage_policy,
                     row["title"],
                     row["summary"],
                     row["publisher"],
+                    publisher_key,
                     row["source_url"],
                     row["canonical_url"],
                     row["published_at"],
+                    row.get("observed_at"),
+                    row.get("published_at_source"),
                     row["receipt_at"],
                     row["company_id"],
                     row["company_ref"],
@@ -638,6 +688,7 @@ class NewsProductService:
         raw_documents: list[dict[str, Any]],
         event_map: dict[int, dict[str, Any]],
         source_document_id_by_raw_id: dict[int, int],
+        provider_definitions: dict[str, ProviderDefinition],
     ) -> list[dict[str, Any]]:
         cluster_key_by_raw_id: dict[int, str] = {}
         clusters: dict[str, dict[str, Any]] = {}
@@ -657,12 +708,13 @@ class NewsProductService:
             cluster_key_by_raw_id[raw_document_id] = cluster_key
             cluster = clusters.get(cluster_key)
             if cluster is None:
-                base_published_at = (
-                    row["published_at"]
-                    or row["receipt_at"]
-                    or (base_event or {}).get("occurred_at")
-                    or row["updated_at"]
-                    or row["created_at"]
+                base_published_at = effective_document_time(
+                    document_type=str(row.get("document_type") or ""),
+                    published_at=row.get("published_at"),
+                    observed_at=row.get("observed_at"),
+                    receipt_at=row.get("receipt_at"),
+                    updated_at=(base_event or {}).get("occurred_at") or row.get("updated_at"),
+                    created_at=row.get("created_at"),
                 )
                 cluster = {
                     "cluster_key": cluster_key,
@@ -673,7 +725,14 @@ class NewsProductService:
                     "market_impact": self._market_impact(scope_payload["market_scope"], base_event),
                     "market_scope": scope_payload["market_scope"],
                     "primary_region": scope_payload["primary_region"],
-                    "trust_score": float((base_event or {}).get("trust_score") or self._trust_score_for(row["provider"])),
+                    "trust_score": float(
+                        (base_event or {}).get("trust_score")
+                        or self._trust_score_for(
+                            provider_definitions,
+                            provider=str(row["provider"]),
+                            document_type=str(row.get("document_type") or ""),
+                        )
+                    ),
                     "novelty_score": 0.0,
                     "attention_score": 0.0,
                     "cross_source_score": 0.0,
@@ -711,6 +770,10 @@ class NewsProductService:
                 cluster["quality_flags"].add(flag)
                 cluster["tags"].add(("quality", flag))
 
+            publisher_definition = build_publisher_definition(
+                publisher_name=row.get("publisher"),
+                publisher_key=row.get("publisher_key"),
+            )
             cluster["evidence"].append(
                 {
                     "source_document_id": source_document_id_by_raw_id[raw_document_id],
@@ -718,33 +781,63 @@ class NewsProductService:
                     "title": row["title"],
                     "snippet": row["summary"],
                     "publisher": row["publisher"],
+                    "publisher_key": publisher_definition.publisher_key if publisher_definition is not None else None,
                     "source_url": row["source_url"] or row["canonical_url"],
                     "canonical_url": row["canonical_url"],
-                    "published_at": row["published_at"] or row["receipt_at"] or row["updated_at"],
-                    "storage_policy": _DOC_KIND.get(provider, ("CURATED_NEWS", "PERSISTENT_EVIDENCE"))[1],
+                    "published_at": effective_document_time(
+                        document_type=str(row.get("document_type") or ""),
+                        published_at=row.get("published_at"),
+                        observed_at=row.get("observed_at"),
+                        receipt_at=row.get("receipt_at"),
+                        updated_at=row.get("updated_at"),
+                        created_at=row.get("created_at"),
+                    ),
+                    "observed_at": row.get("observed_at"),
+                    "storage_policy": resolve_provider_definition(
+                        provider_definitions,
+                        provider_key=provider,
+                        document_type=str(row.get("document_type") or ""),
+                    ).storage_policy,
                     "is_duplicate": bool(row["is_duplicate"]),
                 }
             )
 
             current_published = _parse_iso_datetime(cluster["published_at"])
-            candidate_published = _parse_iso_datetime(row["published_at"] or row["receipt_at"] or row["updated_at"])
+            candidate_published = _parse_iso_datetime(
+                effective_document_time(
+                    document_type=str(row.get("document_type") or ""),
+                    published_at=row.get("published_at"),
+                    observed_at=row.get("observed_at"),
+                    receipt_at=row.get("receipt_at"),
+                    updated_at=row.get("updated_at"),
+                    created_at=row.get("created_at"),
+                )
+            )
             if candidate_published and (current_published is None or candidate_published > current_published):
                 cluster["published_at"] = candidate_published.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
-        return self._finalize_clusters(list(clusters.values()))
+        return self._finalize_clusters(list(clusters.values()), provider_definitions)
 
-    def _finalize_clusters(self, clusters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _finalize_clusters(
+        self,
+        clusters: list[dict[str, Any]],
+        provider_definitions: dict[str, ProviderDefinition],
+    ) -> list[dict[str, Any]]:
         now = datetime.now(timezone.utc)
         results: list[dict[str, Any]] = []
         for cluster in clusters:
             evidence = sorted(
                 cluster["evidence"],
                 key=lambda item: (
-                    _PROVIDER_PRIORITY.get(item["provider"], 0),
-                    0 if item["storage_policy"] == "CANONICAL_EVENT" else 1 if item["storage_policy"] == "PERSISTENT_EVIDENCE" else 2,
-                    _parse_iso_datetime(item["published_at"]) or datetime.min.replace(tzinfo=timezone.utc),
+                    _provider_priority(
+                        resolve_provider_definition(
+                            provider_definitions,
+                            provider_key=item["provider"],
+                        )
+                    ),
+                    _storage_policy_rank(item["storage_policy"]),
+                    _published_sort_rank(item["published_at"]),
                 ),
-                reverse=True,
             )
             cluster["evidence"] = evidence
             distinct_providers = len(cluster["providers"])
@@ -753,7 +846,11 @@ class NewsProductService:
             age_hours = max((now - published_at).total_seconds() / 3600.0, 0.0)
             recency_score = _clamp(1.0 - (age_hours / (self.lookback_days * 24.0)))
             repetition_penalty = min(max(len(evidence) - 1, 0) * 0.05, 0.25)
-            cluster["novelty_score"] = _clamp(recency_score - repetition_penalty + (0.06 if evidence and evidence[0]["provider"] == "DART" else 0.0))
+            cluster["novelty_score"] = _clamp(
+                recency_score
+                - repetition_penalty
+                + (0.06 if evidence and evidence[0]["storage_policy"] == "CANONICAL_EVENT" else 0.0)
+            )
             cluster["updated_at"] = utcnow_iso()
 
             quality_penalty = 0.14 if "low_quality_headline" in cluster["quality_flags"] else 0.0
@@ -905,12 +1002,14 @@ class NewsProductService:
                         title,
                         snippet,
                         publisher,
+                        publisher_key,
                         source_url,
                         published_at,
+                        observed_at,
                         sort_order,
                         created_at,
                         updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         normalized_event_id,
@@ -920,8 +1019,10 @@ class NewsProductService:
                         evidence["title"],
                         evidence["snippet"],
                         evidence["publisher"],
+                        evidence.get("publisher_key"),
                         evidence["source_url"],
                         evidence["published_at"],
+                        evidence.get("observed_at"),
                         sort_order,
                         now,
                         now,
@@ -1016,6 +1117,7 @@ class NewsProductService:
         clusters: list[dict[str, Any]],
         latest_runs: dict[str, dict[str, Any]],
         datalab_status: dict[str, Any],
+        provider_definitions: dict[str, ProviderDefinition],
     ) -> None:
         docs_by_provider: dict[str, list[dict[str, Any]]] = defaultdict(list)
         evidence_counts: dict[str, int] = defaultdict(int)
@@ -1031,7 +1133,28 @@ class NewsProductService:
             for evidence in cluster["evidence"]:
                 evidence_counts[str(evidence["provider"])] += 1
 
-        for provider in ("DART", "BIGKINDS", "NAVER_NEWS"):
+        raw_news_provider_keys = {
+            definition.provider_key
+            for definition in provider_definitions.values()
+            if definition.provider_family in RAW_NEWS_PROVIDER_FAMILIES
+        }
+        raw_news_provider_keys.update(docs_by_provider.keys())
+        raw_news_provider_keys.update(latest_runs.keys())
+
+        ordered_raw_news_providers = sorted(
+            raw_news_provider_keys,
+            key=lambda provider: (
+                _provider_priority(
+                    resolve_provider_definition(
+                        provider_definitions,
+                        provider_key=provider,
+                    )
+                ),
+                provider,
+            ),
+        )
+
+        for provider in ordered_raw_news_providers:
             rows = docs_by_provider.get(provider, [])
             latest_run = latest_runs.get(provider, {})
             status = "available" if rows else "missing"
@@ -1047,7 +1170,17 @@ class NewsProductService:
                 note = disabled_reason or latest_run.get("error_message")
 
             last_published_at = self._latest_timestamp(
-                [row["published_at"] or row["receipt_at"] or row["updated_at"] for row in rows]
+                [
+                    effective_document_time(
+                        document_type=str(row.get("document_type") or ""),
+                        published_at=row.get("published_at"),
+                        observed_at=row.get("observed_at"),
+                        receipt_at=row.get("receipt_at"),
+                        updated_at=row.get("updated_at"),
+                        created_at=row.get("created_at"),
+                    )
+                    for row in rows
+                ]
             )
             connection.execute(
                 """
@@ -1082,38 +1215,56 @@ class NewsProductService:
                 ),
             )
 
-        connection.execute(
-            """
-            INSERT INTO source_coverage (
-                surface_key,
+        trend_provider_keys = sorted(
+            {
+                definition.provider_key
+                for definition in provider_definitions.values()
+                if definition.provider_family == PROVIDER_FAMILY_TREND_SIGNAL
+            },
+            key=lambda provider: (
+                _provider_priority(
+                    resolve_provider_definition(
+                        provider_definitions,
+                        provider_key=provider,
+                        provider_family=PROVIDER_FAMILY_TREND_SIGNAL,
+                    )
+                ),
                 provider,
-                status,
-                document_count,
-                event_count,
-                evidence_count,
-                last_published_at,
-                last_synced_at,
-                note,
-                metadata_json,
-                created_at,
-                updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "news_tab",
-                "NAVER_DATALAB",
-                datalab_status["status"],
-                0,
-                0,
-                0,
-                None,
-                now,
-                datalab_status.get("note"),
-                json.dumps(datalab_status, ensure_ascii=False, sort_keys=True),
-                now,
-                now,
             ),
         )
+        for provider in trend_provider_keys:
+            connection.execute(
+                """
+                INSERT INTO source_coverage (
+                    surface_key,
+                    provider,
+                    status,
+                    document_count,
+                    event_count,
+                    evidence_count,
+                    last_published_at,
+                    last_synced_at,
+                    note,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "news_tab",
+                    provider,
+                    datalab_status["status"],
+                    0,
+                    0,
+                    0,
+                    None,
+                    now,
+                    datalab_status.get("note"),
+                    json.dumps(datalab_status, ensure_ascii=False, sort_keys=True),
+                    now,
+                    now,
+                ),
+            )
 
     def _classify_scope(
         self,
@@ -1164,7 +1315,7 @@ class NewsProductService:
             market_scope = "global_market"
         elif has_sector_term or len(direct_company_names) >= 2:
             market_scope = "sector"
-        elif str(row.get("provider") or "") == "DART":
+        elif str(row.get("document_type") or "").upper() == "DISCLOSURE":
             market_scope = "company"
         elif direct_company_names:
             market_scope = "company"
@@ -1187,7 +1338,14 @@ class NewsProductService:
         scope_payload: dict[str, Any],
     ) -> str:
         published_at = _parse_iso_datetime(
-            row.get("published_at") or row.get("receipt_at") or (base_event or {}).get("occurred_at")
+            effective_document_time(
+                document_type=str(row.get("document_type") or ""),
+                published_at=row.get("published_at"),
+                observed_at=row.get("observed_at"),
+                receipt_at=row.get("receipt_at"),
+                updated_at=(base_event or {}).get("occurred_at"),
+                created_at=row.get("created_at"),
+            )
         )
         date_bucket = published_at.date().isoformat() if published_at else "unknown"
         event_type = (base_event or {}).get("event_type") or classify_event_type(
@@ -1226,12 +1384,22 @@ class NewsProductService:
             flags.add("thin_headline")
         return flags
 
-    def _trust_score_for(self, provider: str) -> float:
-        if provider == "DART":
-            return SOURCE_TRUST_SCORES["DISCLOSURE"]
-        if provider == "BIGKINDS":
-            return SOURCE_TRUST_SCORES["CURATED_NEWS"]
-        return SOURCE_TRUST_SCORES["DISCOVERY_NEWS"]
+    def _trust_score_for(
+        self,
+        provider_definitions: dict[str, ProviderDefinition],
+        *,
+        provider: str,
+        document_type: str | None = None,
+    ) -> float:
+        definition = resolve_provider_definition(
+            provider_definitions,
+            provider_key=provider,
+            document_type=document_type,
+        )
+        if definition.trust_score is not None:
+            return float(definition.trust_score)
+        source_type = definition.source_type or "DISCOVERY_NEWS"
+        return SOURCE_TRUST_SCORES[source_type]
 
     def _why_it_matters(self, market_scope: str, base_event: dict[str, Any] | None) -> str:
         if base_event and base_event.get("summary") and market_scope in {"kr_market", "global_market"}:
@@ -1282,7 +1450,7 @@ class NewsProductService:
         return deduped[:8]
 
     def _evidence_role(self, evidence: dict[str, Any], sort_order: int) -> str:
-        if sort_order == 1 or evidence["provider"] == "DART":
+        if sort_order == 1 or evidence["storage_policy"] == "CANONICAL_EVENT":
             return "PRIMARY"
         if evidence["storage_policy"] == "TRANSIENT_DISCOVERY":
             return "DISCOVERY"

@@ -20,6 +20,7 @@ KRX 뉴스/공시 소스 수집 레이어입니다.
 - `raw_document_sources`
 - `raw_document_fetch_runs`
 - `raw_document_dedup_keys`
+- `publisher_registry`
 - `events`
 - `event_company_edges`
 - `event_extractions`
@@ -35,17 +36,32 @@ KRX 뉴스/공시 소스 수집 레이어입니다.
 - Dedup: `PROVIDER_ID` + `rcept_no`
 
 ### BigKinds
-- 정규화 필드: `title`, `publisher`, `published_at`, `source_url/canonical_url`, `summary(snippet)`, `query_text`
+- 정규화 필드: `title`, `publisher`, `publisher_key`, `published_at`, `observed_at`, `published_at_source`, `source_url/canonical_url`, `summary(snippet)`, `query_text`
 - 소스 전용 필드: `provider_metadata_json(query/published_raw/provider_document_id)`, `raw_payload_json(허용 메타데이터 키만 저장)`
 - 본문(Full Text)은 저장하지 않음
 - Dedup: `NEWS_URL_TITLE` (canonical URL + normalized title hash)
 - 응답 변형 대응: `documents/items/news/data/result/return_object` 계층에서 문서 배열 탐색
 
 ### Naver News
-- 정규화 필드: `title`, `source_url(originallink/link)`, `canonical_url`, `publisher(응답값 우선, 없으면 host 기반 매체명 정규화)`, `published_at(pubDate 파싱)`, `summary(description)`, `query_text`
+- 정규화 필드: `title`, `source_url(originallink/link)`, `canonical_url`, `publisher(응답값 우선, 없으면 host 기반 매체명 정규화)`, `publisher_key`, `published_at(pubDate 파싱)`, `observed_at`, `published_at_source`, `summary(description)`, `query_text`
 - 소스 전용 필드: `provider_metadata_json(query/originallink/link/pub_date_raw)`, `raw_payload_json(허용 메타데이터 키만 저장)`
 - canonical truth source가 아닌 discovery/candidate 용도
 - Dedup: `NEWS_URL_TITLE` (canonical URL + normalized title hash)
+
+### Publisher Registry
+- `publisher_registry`는 실제 기사 발행 매체 축을 관리한다.
+- 예시:
+  - `provider = NAVER_NEWS`
+  - `publisher = 매일경제`
+  - `publisher_key = 매일경제`
+- 즉 provider와 publisher는 같은 값이 아닐 수 있다.
+
+### 시간 필드 규칙
+- `published_at`: 원문 provider가 준 발행 시각
+- `observed_at`: Argus가 그 문서를 처음 본 시각
+- `published_at_source`: `PROVIDER`, `RECEIPT_AT`, `OBSERVED_AT`, `UNKNOWN`
+- 뉴스는 `published_at`이 비어도 `observed_at`은 항상 채운다.
+- 뉴스 화면 정렬과 evidence 시간은 `published_at`이 없을 때 `observed_at`을 fallback으로 사용한다.
 
 ## 4) 필수 환경 변수
 
@@ -54,6 +70,7 @@ KRX 뉴스/공시 소스 수집 레이어입니다.
 - `RAW_INGESTION_TIMEOUT_SECONDS`
 - `RAW_INGESTION_MAX_RETRIES`
 - `RAW_INGESTION_BACKOFF_SECONDS`
+- `RAW_INGESTION_DESCRIPTOR_FACTORY_PATHS` (comma separated dotted paths or `module:callable`, extra descriptor factories)
 
 ### DART
 - `DART_API_KEY`
@@ -82,6 +99,9 @@ KRX 뉴스/공시 소스 수집 레이어입니다.
 - `RAW_INGESTION_SCHEDULE_INCLUDE_DART`
 - `RAW_INGESTION_SCHEDULE_INCLUDE_COMPANY_NEWS`
 - `RAW_INGESTION_SCHEDULE_INCLUDE_THEME_NEWS`
+- `RAW_INGESTION_SCHEDULE_DISCLOSURE_PROVIDERS` (comma separated provider keys, legacy `INCLUDE_DART`보다 우선)
+- `RAW_INGESTION_SCHEDULE_COMPANY_NEWS_PROVIDERS` (comma separated provider keys)
+- `RAW_INGESTION_SCHEDULE_THEME_NEWS_PROVIDERS` (comma separated provider keys)
 - `RAW_INGESTION_SCHEDULE_COMPANY_IDS` (comma separated IDs)
 - `RAW_INGESTION_SCHEDULE_COMPANY_NAMES` (comma separated names)
 - `RAW_INGESTION_SCHEDULE_THEME_KEYWORDS` (comma separated keywords)
@@ -124,9 +144,13 @@ KRX 뉴스/공시 소스 수집 레이어입니다.
 
 ```bash
 cd backend
+python3 -m src.krx.source_ingestion.cli list-ingestion-providers
+python3 -m src.krx.source_ingestion.cli backfill-publishers
 python3 -m src.krx.source_ingestion.cli sync-dart --days 1
+python3 -m src.krx.source_ingestion.cli sync-disclosures --provider DART --days 1
 python3 -m src.krx.source_ingestion.cli sync-news-companies --company-id 1 --days 1
 python3 -m src.krx.source_ingestion.cli sync-news-themes --keyword "반도체" --days 1
+python3 -m src.krx.source_ingestion.cli sync-news --provider BIGKINDS --provider NAVER_NEWS --scope themes --keyword "반도체" --days 1
 python3 -m src.krx.source_ingestion.cli backfill --start-date 2026-03-01 --end-date 2026-03-09 --provider-scope all --company-id 1 --keyword "금리"
 python3 -m src.krx.source_ingestion.cli sync-scheduled
 python3 -m src.krx.source_ingestion.cli normalize-events --limit 200
@@ -144,8 +168,18 @@ python3 -m src.krx.source_ingestion.cli import-company-financial-snapshots --com
 
 `sync-scheduled` 동작:
 - `RAW_INGESTION_SCHEDULE_*` 환경변수로 대상/범위를 읽어 incremental sync를 실행
+- provider CSV 설정이 있으면 legacy boolean보다 우선해서 해당 provider만 실행
 - run 중 하나라도 `FAILED`면 프로세스 exit code를 `1`로 종료 (cron/alert 연동용)
 - `SKIPPED_DISABLED`(credential/flag 미설정)는 실패로 간주하지 않음
+
+descriptor factory 확장:
+- `RAW_INGESTION_DESCRIPTOR_FACTORY_PATHS`에 callable 경로를 넣으면 factory가 extra descriptor를 로드한다.
+- callable 시그니처는 `factory(settings) -> RawIngestionFactoryExtension | dict | None`
+- 반환 payload는 `news` / `disclosures` 또는 `news_provider_descriptors` / `disclosure_provider_descriptors` 키를 사용할 수 있다.
+
+publisher backfill:
+- `backfill-publishers`는 기존 raw 문서에서 `publisher_key`가 비어 있는 행을 채우고 `publisher_registry`를 만든다.
+- `--all`을 주면 이미 key가 있는 행도 다시 스캔한다.
 
 ## 6) 권장 스케줄
 - DART disclosures: 10~20분 간격 incremental

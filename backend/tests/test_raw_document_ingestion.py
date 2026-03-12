@@ -11,6 +11,14 @@ import pytest
 from src.krx.company_master.db import get_connection, utcnow_iso
 from src.krx.source_ingestion import cli as ingestion_cli
 from src.krx.source_ingestion.cli import build_parser
+import src.krx.source_ingestion.factory as ingestion_factory_module
+from src.krx.source_ingestion.factory_extensions import (
+    RawIngestionFactoryExtension,
+    coerce_raw_ingestion_factory_extension,
+    load_raw_ingestion_factory_extensions,
+)
+from src.krx.source_ingestion.models import ProviderFetchBatch, RawDocumentCandidate
+from src.krx.source_ingestion.provider_descriptors import DocumentSyncRequest, NewsProviderDescriptor
 from src.krx.source_ingestion.providers.bigkinds_provider import BigKindsNewsProvider
 from src.krx.source_ingestion.providers.dart_provider import DartDisclosureProvider
 from src.krx.source_ingestion.providers.naver_news_provider import NaverNewsProvider
@@ -30,6 +38,35 @@ def _make_service(
         bigkinds_provider=bigkinds_provider,
         naver_provider=naver_provider,
     )
+
+
+def _build_custom_factory_extension(_settings) -> RawIngestionFactoryExtension:
+    custom_descriptor = NewsProviderDescriptor(
+        provider="CUSTOM_FACTORY_RSS",
+        fetch_batch=lambda request, window_start, window_end, cursor: ProviderFetchBatch(
+            records=[],
+            next_cursor=cursor,
+            metadata={
+                "query": request.query_text,
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
+            },
+        ),
+        build_company_requests=lambda _target: [],
+        build_theme_requests=lambda keyword: [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="CUSTOM_FACTORY_RSS",
+                source_kind="THEME",
+                source_key=keyword,
+                source_label=keyword,
+                query_template="rss:{keyword}",
+                query_text=f"rss:{keyword}",
+                company_id=None,
+            )
+        ],
+    )
+    return RawIngestionFactoryExtension(news_provider_descriptors=(custom_descriptor,))
 
 
 def _window() -> tuple[datetime, datetime]:
@@ -629,10 +666,412 @@ def test_happy_path_integration_ingests_dart_and_company_news(tmp_path: Path) ->
     assert run_count >= 2
 
 
+def test_custom_news_provider_descriptor_can_be_injected(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "raw-ingestion.db")
+
+    def _fetch_custom_news(
+        request: DocumentSyncRequest,
+        window_start: datetime,
+        window_end: datetime,
+        cursor: str | None,
+    ) -> ProviderFetchBatch:
+        assert request.provider == "CUSTOM_RSS"
+        assert request.query_text == "rss:금리"
+        assert cursor is None
+        assert window_start < window_end
+        return ProviderFetchBatch(
+            records=[
+                RawDocumentCandidate(
+                    provider="CUSTOM_RSS",
+                    provider_document_id="RSS-001",
+                    document_type="NEWS_CANDIDATE",
+                    title="금리 경계감에 국내 증시 변동성 확대",
+                    summary="커스텀 RSS provider에서 수집한 기사다.",
+                    publisher="Custom RSS",
+                    source_url="https://rss.example.com/articles/1",
+                    canonical_url="https://rss.example.com/articles/1",
+                    published_at="2026-03-08T01:00:00Z",
+                    receipt_at=None,
+                    report_type=None,
+                    company_ref=None,
+                    company_id=None,
+                    query_text=request.query_text,
+                    dedup_type="NEWS_URL_TITLE",
+                    dedup_key="custom-rss:1",
+                    provider_metadata={"query": request.query_text},
+                    raw_payload={"id": "RSS-001", "query": request.query_text},
+                )
+            ],
+            next_cursor="2026-03-08T01:00:00Z",
+            metadata={"query": request.query_text},
+        )
+
+    custom_descriptor = NewsProviderDescriptor(
+        provider="CUSTOM_RSS",
+        fetch_batch=_fetch_custom_news,
+        build_company_requests=lambda _target: [],
+        build_theme_requests=lambda keyword: [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="CUSTOM_RSS",
+                source_kind="THEME",
+                source_key=keyword,
+                source_label=keyword,
+                query_template="rss:{keyword}",
+                query_text=f"rss:{keyword}",
+                company_id=None,
+            )
+        ],
+    )
+
+    service = RawDocumentIngestionService(
+        db_path=db_path,
+        dart_provider=_make_disabled_dart_provider(),
+        bigkinds_provider=_make_disabled_bigkinds_provider(),
+        naver_provider=_make_disabled_naver_provider(),
+        extra_news_provider_descriptors=(custom_descriptor,),
+    )
+
+    start, end = _window()
+    results = service.sync_news_candidates_for_themes_window(
+        keywords=["금리"],
+        window_start=start,
+        window_end=end,
+        backfill=False,
+    )
+
+    custom_result = next(item for item in results if item.provider == "CUSTOM_RSS")
+    assert custom_result.status == "SUCCESS"
+    assert custom_result.inserted_count == 1
+
+    with get_connection(db_path) as connection:
+        document_row = connection.execute(
+            """
+            SELECT provider, query_text, raw_payload_json, publisher_key
+            FROM raw_documents
+            WHERE provider = 'CUSTOM_RSS'
+            """
+        ).fetchone()
+        publisher_row = connection.execute(
+            """
+            SELECT publisher_key, display_name
+            FROM publisher_registry
+            WHERE publisher_key = 'CUSTOM_RSS'
+            """
+        ).fetchone()
+
+    assert document_row is not None
+    assert document_row["query_text"] == "rss:금리"
+    assert document_row["publisher_key"] == "CUSTOM_RSS"
+    assert json.loads(document_row["raw_payload_json"])["id"] == "RSS-001"
+    assert publisher_row is not None
+    assert publisher_row["display_name"] == "Custom RSS"
+
+
+def test_backfill_publisher_registry_updates_missing_keys(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "publisher-registry.db")
+    service = _make_service(
+        db_path=db_path,
+        dart_provider=_make_disabled_dart_provider(),
+        bigkinds_provider=_make_disabled_bigkinds_provider(),
+        naver_provider=_make_disabled_naver_provider(),
+    )
+
+    now = utcnow_iso()
+    with get_connection(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO raw_documents (
+                provider,
+                provider_document_id,
+                document_type,
+                title,
+                summary,
+                publisher,
+                source_url,
+                canonical_url,
+                published_at,
+                receipt_at,
+                report_type,
+                company_id,
+                company_ref,
+                query_text,
+                normalized_title_hash,
+                first_seen_run_id,
+                last_seen_run_id,
+                provider_metadata_json,
+                raw_payload_json,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "CUSTOM_RSS",
+                "doc-001",
+                "NEWS_CANDIDATE",
+                "매경 RSS 테스트 기사",
+                "publisher key backfill 검증",
+                "매경",
+                "https://example.com/rss/doc-001",
+                "https://example.com/rss/doc-001",
+                "2026-03-08T00:00:00Z",
+                None,
+                None,
+                None,
+                None,
+                "rss:테스트",
+                "hash-001",
+                None,
+                None,
+                "{}",
+                "{}",
+                now,
+                now,
+            ),
+        )
+
+    payload = service.backfill_publisher_registry()
+
+    assert payload["processed_count"] == 1
+    assert payload["publisher_count"] == 1
+    assert payload["updated_raw_documents"] == 1
+
+    with get_connection(db_path) as connection:
+        document_row = connection.execute(
+            """
+            SELECT publisher, publisher_key
+            FROM raw_documents
+            WHERE provider = 'CUSTOM_RSS'
+            """
+        ).fetchone()
+        publisher_row = connection.execute(
+            """
+            SELECT publisher_key, display_name
+            FROM publisher_registry
+            WHERE publisher_key = '매일경제'
+            """
+        ).fetchone()
+
+    assert document_row is not None
+    assert document_row["publisher"] == "매경"
+    assert document_row["publisher_key"] == "매일경제"
+    assert publisher_row is not None
+    assert publisher_row["display_name"] == "매일경제"
+
+
+def test_news_without_published_at_uses_observed_at(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "observed-at.db")
+
+    def _fetch_custom_news(
+        request: DocumentSyncRequest,
+        window_start: datetime,
+        window_end: datetime,
+        cursor: str | None,
+    ) -> ProviderFetchBatch:
+        return ProviderFetchBatch(
+            records=[
+                RawDocumentCandidate(
+                    provider="MK_RSS",
+                    provider_document_id="MK-001",
+                    document_type="NEWS_CANDIDATE",
+                    title="매일경제 RSS 기사",
+                    summary="발행시각이 없는 테스트 기사",
+                    publisher="매일경제",
+                    source_url="https://www.mk.co.kr/news/economy/11985698",
+                    canonical_url="https://www.mk.co.kr/news/economy/11985698",
+                    published_at=None,
+                    receipt_at=None,
+                    report_type=None,
+                    company_ref=None,
+                    company_id=None,
+                    query_text=request.query_text,
+                    dedup_type="NEWS_URL_TITLE",
+                    dedup_key="mk-rss:1",
+                    provider_metadata={"query": request.query_text},
+                    raw_payload={"id": "MK-001"},
+                )
+            ],
+            next_cursor=None,
+            metadata={"query": request.query_text},
+        )
+
+    service = RawDocumentIngestionService(
+        db_path=db_path,
+        dart_provider=_make_disabled_dart_provider(),
+        bigkinds_provider=_make_disabled_bigkinds_provider(),
+        naver_provider=_make_disabled_naver_provider(),
+        extra_news_provider_descriptors=(
+            NewsProviderDescriptor(
+                provider="MK_RSS",
+                fetch_batch=_fetch_custom_news,
+                build_company_requests=lambda _target: [],
+                build_theme_requests=lambda keyword: [
+                    DocumentSyncRequest(
+                        job_name="raw_documents_sync_news",
+                        provider="MK_RSS",
+                        source_kind="THEME",
+                        source_key=keyword,
+                        source_label=keyword,
+                        query_template="rss:{keyword}",
+                        query_text=f"rss:{keyword}",
+                        company_id=None,
+                    )
+                ],
+            ),
+        ),
+    )
+
+    start, end = _window()
+    results = service.sync_news_candidates_for_themes_window(
+        keywords=["금리"],
+        window_start=start,
+        window_end=end,
+        backfill=False,
+    )
+
+    result = next(item for item in results if item.provider == "MK_RSS")
+    assert result.status == "SUCCESS"
+    assert result.inserted_count == 1
+
+    with get_connection(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT published_at, observed_at, published_at_source
+            FROM raw_documents
+            WHERE provider = 'MK_RSS'
+            """
+        ).fetchone()
+
+    assert row is not None
+    assert row["published_at"] is None
+    assert row["observed_at"] is not None
+    assert row["published_at_source"] == "OBSERVED_AT"
+
+
+def test_factory_extension_loader_accepts_dict_payload() -> None:
+    extension = coerce_raw_ingestion_factory_extension(
+        {
+            "news": (
+                NewsProviderDescriptor(
+                    provider="CUSTOM_DICT_RSS",
+                    fetch_batch=lambda request, window_start, window_end, cursor: ProviderFetchBatch(
+                        records=[],
+                        next_cursor=cursor,
+                    ),
+                    build_company_requests=lambda _target: [],
+                    build_theme_requests=lambda _keyword: [],
+                ),
+            )
+        }
+    )
+
+    assert [item.provider for item in extension.news_provider_descriptors] == ["CUSTOM_DICT_RSS"]
+
+
+def test_load_raw_ingestion_factory_extensions_merges_configured_factories() -> None:
+    settings = SimpleNamespace(
+        raw_ingestion_descriptor_factory_paths="custom.first,custom.second"
+    )
+    seen_paths: list[str] = []
+
+    from src.krx.source_ingestion import factory_extensions as factory_extensions_module
+
+    def _fake_load_descriptor_factory(path: str):
+        seen_paths.append(path)
+        return _build_custom_factory_extension
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(factory_extensions_module, "load_descriptor_factory", _fake_load_descriptor_factory)
+    try:
+        extension = load_raw_ingestion_factory_extensions(settings)
+    finally:
+        monkeypatch.undo()
+
+    assert seen_paths == ["custom.first", "custom.second"]
+    assert [item.provider for item in extension.news_provider_descriptors] == [
+        "CUSTOM_FACTORY_RSS",
+        "CUSTOM_FACTORY_RSS",
+    ]
+
+
+def test_create_raw_document_ingestion_service_includes_factory_extensions(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = SimpleNamespace(
+        db_path="data/test-raw-ingestion-factory.db",
+        dart_api_key=None,
+        dart_disclosure_list_url="https://opendart.fss.or.kr/api/list.json",
+        dart_disclosure_page_count=100,
+        raw_ingestion_timeout_seconds=20.0,
+        raw_ingestion_max_retries=3,
+        raw_ingestion_backoff_seconds=1.0,
+        bigkinds_news_enabled=False,
+        bigkinds_api_key=None,
+        bigkinds_base_url="https://tools.kinds.or.kr",
+        bigkinds_search_path="/api/news/search",
+        bigkinds_page_size=100,
+        bigkinds_page_limit=5,
+        naver_news_enabled=False,
+        naver_news_client_id=None,
+        naver_news_client_secret=None,
+        naver_news_base_url="https://openapi.naver.com",
+        naver_news_search_path="/v1/search/news.json",
+        naver_news_company_query_template="{company_name}",
+        naver_news_theme_query_template="{keyword}",
+        naver_news_display=50,
+        naver_news_page_limit=5,
+        raw_ingestion_descriptor_factory_paths="ignored.by.monkeypatch",
+    )
+
+    monkeypatch.setattr(
+        ingestion_factory_module,
+        "load_raw_ingestion_factory_extensions",
+        lambda _settings: _build_custom_factory_extension(_settings),
+    )
+
+    service = ingestion_factory_module.create_raw_document_ingestion_service(settings)
+    supported = service.list_supported_ingestion_providers()
+
+    assert any(item["provider"] == "CUSTOM_FACTORY_RSS" for item in supported["news"])
+
+
 def test_cli_parser_supports_sync_scheduled_command() -> None:
     parser = build_parser()
     args = parser.parse_args(["sync-scheduled"])
     assert args.command == "sync-scheduled"
+
+
+def test_cli_parser_supports_backfill_publishers_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["backfill-publishers", "--limit", "25", "--all"])
+    assert args.command == "backfill-publishers"
+    assert args.limit == 25
+    assert args.all is True
+
+
+def test_cli_parser_supports_sync_disclosures_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["sync-disclosures", "--provider", "DART", "--days", "3"])
+    assert args.command == "sync-disclosures"
+    assert args.provider == "DART"
+    assert args.days == 3
+
+
+def test_cli_parser_supports_sync_news_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "sync-news",
+            "--provider",
+            "CUSTOM_RSS",
+            "--scope",
+            "themes",
+            "--keyword",
+            "금리",
+        ]
+    )
+    assert args.command == "sync-news"
+    assert args.provider == ["CUSTOM_RSS"]
+    assert args.scope == "themes"
+    assert args.keyword == ["금리"]
 
 
 def test_cli_parser_supports_normalize_events_command() -> None:
@@ -680,3 +1119,124 @@ def test_sync_scheduled_returns_non_zero_when_any_run_failed(monkeypatch: pytest
         ingestion_cli._sync_scheduled()
 
     assert error.value.code == 1
+
+
+def test_sync_scheduled_uses_configured_provider_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = SimpleNamespace(
+        raw_ingestion_schedule_days=2,
+        raw_ingestion_schedule_disclosure_providers="DART,CUSTOM_DISCLOSURE",
+        raw_ingestion_schedule_company_news_providers="CUSTOM_RSS",
+        raw_ingestion_schedule_theme_news_providers="CUSTOM_RSS,NAVER_NEWS",
+        raw_ingestion_schedule_company_ids="101",
+        raw_ingestion_schedule_company_names=None,
+        raw_ingestion_schedule_theme_keywords="금리",
+        raw_ingestion_schedule_include_dart=False,
+        raw_ingestion_schedule_include_company_news=False,
+        raw_ingestion_schedule_include_theme_news=False,
+    )
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def _result(provider: str, source_kind: str, source_key: str | None):
+        return SimpleNamespace(
+            run_id=1,
+            status="SUCCESS",
+            provider=provider,
+            source_kind=source_kind,
+            source_key=source_key,
+            processed_count=1,
+            inserted_count=1,
+            duplicate_count=0,
+            failed_count=0,
+            cursor_before=None,
+            cursor_after=None,
+            error_message=None,
+        )
+
+    class _FakeService:
+        def sync_disclosures_last_days(self, *, provider: str, days: int, backfill: bool):
+            calls.append(
+                (
+                    "sync_disclosures_last_days",
+                    {"provider": provider, "days": days, "backfill": backfill},
+                )
+            )
+            return _result(provider, "SYSTEM", "DISCLOSURES")
+
+        def sync_news_candidates_for_companies_last_days(
+            self,
+            *,
+            company_ids: list[int],
+            company_names: list[str] | None,
+            days: int,
+            backfill: bool,
+            providers: list[str] | None = None,
+        ):
+            calls.append(
+                (
+                    "sync_news_candidates_for_companies_last_days",
+                    {
+                        "company_ids": company_ids,
+                        "company_names": company_names,
+                        "days": days,
+                        "backfill": backfill,
+                        "providers": providers,
+                    },
+                )
+            )
+            return [_result("CUSTOM_RSS", "COMPANY", "id:101:company")]
+
+        def sync_news_candidates_for_themes_last_days(
+            self,
+            *,
+            keywords: list[str],
+            days: int,
+            backfill: bool,
+            providers: list[str] | None = None,
+        ):
+            calls.append(
+                (
+                    "sync_news_candidates_for_themes_last_days",
+                    {
+                        "keywords": keywords,
+                        "days": days,
+                        "backfill": backfill,
+                        "providers": providers,
+                    },
+                )
+            )
+            return [_result("CUSTOM_RSS", "THEME", "금리")]
+
+    monkeypatch.setattr(ingestion_cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(ingestion_cli, "create_raw_document_ingestion_service", lambda _settings: _FakeService())
+
+    ingestion_cli._sync_scheduled()
+
+    assert calls == [
+        (
+            "sync_disclosures_last_days",
+            {"provider": "DART", "days": 2, "backfill": False},
+        ),
+        (
+            "sync_disclosures_last_days",
+            {"provider": "CUSTOM_DISCLOSURE", "days": 2, "backfill": False},
+        ),
+        (
+            "sync_news_candidates_for_companies_last_days",
+            {
+                "company_ids": [101],
+                "company_names": [],
+                "days": 2,
+                "backfill": False,
+                "providers": ["CUSTOM_RSS"],
+            },
+        ),
+        (
+            "sync_news_candidates_for_themes_last_days",
+            {
+                "keywords": ["금리"],
+                "days": 2,
+                "backfill": False,
+                "providers": ["CUSTOM_RSS", "NAVER_NEWS"],
+            },
+        ),
+    ]

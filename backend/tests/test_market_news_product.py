@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from src.config.env import get_settings
 from src.krx.company_master.db import get_connection, utcnow_iso
 from src.krx.news.service import NewsProductService
+from src.krx.provider_registry import build_provider_definition, ensure_provider_definition
 from src.krx.source_ingestion.event_service import EventNormalizationService
 from src.krx.source_ingestion.llm import DisabledLLMExtractionProvider
 from src.krx.source_ingestion.providers.naver_datalab_provider import (
@@ -16,6 +17,8 @@ from src.krx.source_ingestion.providers.naver_datalab_provider import (
     TrendScoreBatch,
 )
 from src.main import app
+
+_UNSET = object()
 
 
 class StubDatalabProvider:
@@ -133,8 +136,16 @@ def _insert_raw_document(
     provider_metadata: dict[str, object] | None = None,
     is_duplicate: int = 0,
     duplicate_of_document_id: int | None = None,
+    published_at: str | object = _UNSET,
+    observed_at: str | object = _UNSET,
+    receipt_at: str | object = _UNSET,
+    published_at_source: str | object = _UNSET,
 ) -> int:
     now = utcnow_iso()
+    resolved_published_at = now if published_at is _UNSET else published_at
+    resolved_observed_at = now if observed_at is _UNSET else observed_at
+    resolved_receipt_at = now if receipt_at is _UNSET else receipt_at
+    resolved_published_at_source = "PROVIDER" if published_at_source is _UNSET else published_at_source
     with get_connection(db_path) as connection:
         connection.execute(
             """
@@ -148,6 +159,8 @@ def _insert_raw_document(
                 source_url,
                 canonical_url,
                 published_at,
+                observed_at,
+                published_at_source,
                 receipt_at,
                 report_type,
                 company_id,
@@ -160,7 +173,7 @@ def _insert_raw_document(
                 raw_payload_json,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 provider,
@@ -171,8 +184,10 @@ def _insert_raw_document(
                 publisher,
                 source_url,
                 canonical_url,
-                now,
-                now,
+                resolved_published_at,
+                resolved_observed_at,
+                resolved_published_at_source,
+                resolved_receipt_at,
                 title,
                 company_id,
                 company_ref,
@@ -189,6 +204,26 @@ def _insert_raw_document(
         row = connection.execute("SELECT last_insert_rowid() AS id").fetchone()
     assert row is not None
     return int(row["id"])
+
+
+def _register_provider(
+    db_path: str,
+    *,
+    provider_key: str,
+    provider_family: str,
+    trust_score: float,
+    priority: int,
+) -> None:
+    with get_connection(db_path) as connection:
+        ensure_provider_definition(
+            connection,
+            build_provider_definition(
+                provider_key=provider_key,
+                provider_family=provider_family,
+                trust_score=trust_score,
+                priority=priority,
+            ),
+        )
 
 
 def test_market_news_product_materializes_event_first_cards(tmp_path: Path) -> None:
@@ -343,6 +378,166 @@ def test_market_news_product_ranking_prefers_confirmed_high_quality_events(tmp_p
     assert len(cards) >= 2
     assert cards[0]["title"] == "코스피 수급 개선, 외국인 순매수 확대"
     assert cards[0]["ranking_score"] > cards[1]["ranking_score"]
+
+
+def test_market_news_product_uses_observed_at_when_news_published_at_missing(tmp_path: Path) -> None:
+    event_service, db_path = _make_event_service(tmp_path)
+    observed_at = "2026-03-10T09:15:00Z"
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-OBS-001",
+        title="코스피 금리 경계감 확산",
+        summary="발행시각 없이 수집됐지만 국내 증시 해석에는 필요한 기사",
+        publisher="매일경제",
+        source_url="https://www.mk.co.kr/news/economy/11985698",
+        canonical_url="https://www.mk.co.kr/news/economy/11985698",
+        query_text="금리",
+        published_at=None,
+        observed_at=observed_at,
+        receipt_at=None,
+        published_at_source="OBSERVED_AT",
+    )
+
+    result = event_service.normalize_pending_documents(limit=20, include_llm=False)
+    assert result.status == "SUCCESS"
+
+    news_service = _make_news_service(db_path)
+    news_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        source_document = connection.execute(
+            """
+            SELECT provider, published_at, observed_at, published_at_source
+            FROM source_documents
+            WHERE provider = 'MK_RSS'
+            """
+        ).fetchone()
+        evidence = connection.execute(
+            """
+            SELECT provider, published_at, observed_at
+            FROM event_evidence
+            WHERE provider = 'MK_RSS'
+            """
+        ).fetchone()
+        card = connection.execute(
+            """
+            SELECT published_at
+            FROM news_cards
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    assert source_document is not None
+    assert source_document["published_at"] is None
+    assert source_document["observed_at"] == observed_at
+    assert source_document["published_at_source"] == "OBSERVED_AT"
+    assert evidence is not None
+    assert evidence["published_at"] == observed_at
+    assert evidence["observed_at"] == observed_at
+    assert card is not None
+    assert card["published_at"] == observed_at
+
+
+def test_market_news_product_accepts_unregistered_custom_provider(tmp_path: Path) -> None:
+    _, db_path = _make_event_service(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="CUSTOM_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="RSS-201",
+        title="코스피 반도체 업황 개선, 외국인 순매수 확대",
+        summary="사용자 지정 RSS에서도 같은 시장 이슈가 수집됐다.",
+        publisher="사용자 RSS",
+        source_url="https://rss.example.com/201",
+        canonical_url="https://rss.example.com/201",
+        query_text="코스피 증시",
+    )
+
+    news_service = _make_news_service(
+        db_path,
+        scores={"group-1": 52.0},
+    )
+    news_service.refresh_materialized(force=True)
+
+    coverage = news_service.get_coverage()
+    cards = news_service.list_cards(region="KR", limit=10)
+
+    with get_connection(db_path) as connection:
+        source_document = connection.execute(
+            """
+            SELECT provider, document_kind, storage_policy
+            FROM source_documents
+            WHERE provider = 'CUSTOM_RSS'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    assert source_document is not None
+    assert source_document["document_kind"] == "DISCOVERY_CANDIDATE"
+    assert source_document["storage_policy"] == "TRANSIENT_DISCOVERY"
+    assert any(item["provider"] == "CUSTOM_RSS" and item["status"] == "available" for item in coverage["items"])
+    assert cards
+    assert cards[0]["evidence"][0]["provider"] == "CUSTOM_RSS"
+
+
+def test_market_news_product_registered_custom_provider_uses_registry_storage_policy(tmp_path: Path) -> None:
+    _, db_path = _make_event_service(tmp_path)
+    _register_provider(
+        db_path,
+        provider_key="CUSTOM_RSS",
+        provider_family="CURATED_NEWS",
+        trust_score=0.86,
+        priority=15,
+    )
+
+    _insert_raw_document(
+        db_path,
+        provider="CUSTOM_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="RSS-301",
+        title="코스피 반도체 밸류체인 개선",
+        summary="등록된 provider 의미가 뉴스 materialization에도 반영돼야 한다.",
+        publisher="사용자 RSS",
+        source_url="https://rss.example.com/301",
+        canonical_url="https://rss.example.com/301",
+        query_text="코스피 증시",
+    )
+
+    news_service = _make_news_service(
+        db_path,
+        scores={"group-1": 47.0},
+    )
+    news_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        source_document = connection.execute(
+            """
+            SELECT provider, document_kind, storage_policy
+            FROM source_documents
+            WHERE provider = 'CUSTOM_RSS'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        coverage_row = connection.execute(
+            """
+            SELECT provider, status
+            FROM source_coverage
+            WHERE surface_key = 'news_tab' AND provider = 'CUSTOM_RSS'
+            """
+        ).fetchone()
+
+    assert source_document is not None
+    assert source_document["document_kind"] == "CURATED_NEWS"
+    assert source_document["storage_policy"] == "PERSISTENT_EVIDENCE"
+    assert coverage_row is not None
+    assert coverage_row["status"] == "available"
 
 
 def test_market_news_product_empty_and_partial_coverage_states(tmp_path: Path) -> None:

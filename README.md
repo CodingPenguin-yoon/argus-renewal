@@ -40,7 +40,14 @@ pnpm build
 ```
 
 ## 문서
+- 문서 인덱스: `doc/README.md`
+- 현재 구조: `doc/PROJECT_STRUCTURE.md`
+- 현재 시스템 맵: `doc/architecture/current-system-map.md`
+- 도메인 기준 데이터 모델: `doc/architecture/domain-oriented-data-model.md`
+- provider 유연화 설계: `doc/architecture/provider-flexibility-design.md`
+- 리스크 우선순위: `doc/analysis/risk-priority.md`
 - 실행/설치: `RUN_GUIDE.md`
 - 프론트 상세: `frontend/README.md`
 - 백엔드 상세: `backend/README.md`
 - KRX MVP IA: `doc/krx_mvp_ia_runbook.md`
+- Codex 멀티 에이전트 프롬프트: `doc/codex_multi_agent_prompts.md`

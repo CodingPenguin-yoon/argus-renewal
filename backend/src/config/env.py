@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     raw_ingestion_timeout_seconds: float = 20.0
     raw_ingestion_max_retries: int = 3
     raw_ingestion_backoff_seconds: float = 1.0
+    raw_ingestion_descriptor_factory_paths: Optional[str] = None
 
     bigkinds_news_enabled: bool = False
     bigkinds_base_url: str = "https://tools.kinds.or.kr"
@@ -99,6 +100,9 @@ class Settings(BaseSettings):
     raw_ingestion_schedule_include_dart: bool = True
     raw_ingestion_schedule_include_company_news: bool = True
     raw_ingestion_schedule_include_theme_news: bool = True
+    raw_ingestion_schedule_disclosure_providers: Optional[str] = None
+    raw_ingestion_schedule_company_news_providers: Optional[str] = None
+    raw_ingestion_schedule_theme_news_providers: Optional[str] = None
     raw_ingestion_schedule_company_ids: Optional[str] = None
     raw_ingestion_schedule_company_names: Optional[str] = None
     raw_ingestion_schedule_theme_keywords: Optional[str] = None

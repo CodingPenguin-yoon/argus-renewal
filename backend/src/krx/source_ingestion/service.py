@@ -7,8 +7,16 @@ import logging
 from typing import Any
 
 from ..company_master.db import get_connection, utcnow_iso
+from ..publisher_registry import ensure_publisher_definition
+from ..provider_registry import build_provider_definition, ensure_provider_definition, normalize_provider_key
+from .document_time import determine_published_at_source
 from .models import RawDocumentCandidate
 from .normalize import canonicalize_url, dart_dedup_key, news_dedup_key, title_hash
+from .provider_descriptors import (
+    DisclosureProviderDescriptor,
+    DocumentSyncRequest,
+    NewsProviderDescriptor,
+)
 from .providers import BigKindsNewsProvider, DartDisclosureProvider, NaverNewsProvider
 
 logger = logging.getLogger(__name__)
@@ -38,16 +46,233 @@ class RawDocumentIngestionService:
         dart_provider: DartDisclosureProvider,
         bigkinds_provider: BigKindsNewsProvider,
         naver_provider: NaverNewsProvider,
+        extra_disclosure_provider_descriptors: tuple[DisclosureProviderDescriptor, ...] = (),
+        extra_news_provider_descriptors: tuple[NewsProviderDescriptor, ...] = (),
     ) -> None:
         self.db_path = db_path
         self.dart_provider = dart_provider
         self.bigkinds_provider = bigkinds_provider
         self.naver_provider = naver_provider
+        self.disclosure_provider_descriptors = self._build_disclosure_provider_descriptors(
+            extra_disclosure_provider_descriptors
+        )
+        self.news_provider_descriptors = self._build_news_provider_descriptors(
+            extra_news_provider_descriptors
+        )
+
+    def _ensure_provider_registered(
+        self,
+        connection,
+        *,
+        provider: str,
+        document_type: str | None = None,
+    ) -> None:
+        ensure_provider_definition(
+            connection,
+            build_provider_definition(
+                provider_key=provider,
+                document_type=document_type,
+            ),
+        )
+
+    def _ensure_publisher_registered(
+        self,
+        connection,
+        *,
+        publisher: str | None,
+        publisher_key: str | None = None,
+    ) -> str | None:
+        definition = ensure_publisher_definition(
+            connection,
+            publisher_name=publisher,
+            publisher_key=publisher_key,
+        )
+        if definition is None:
+            return None
+        return definition.publisher_key
+
+    def _build_disclosure_provider_descriptors(
+        self,
+        extra_descriptors: tuple[DisclosureProviderDescriptor, ...],
+    ) -> dict[str, DisclosureProviderDescriptor]:
+        defaults = (
+            DisclosureProviderDescriptor(
+                provider="DART",
+                request=DocumentSyncRequest(
+                    job_name="raw_documents_sync_dart",
+                    provider="DART",
+                    source_kind="SYSTEM",
+                    source_key="DISCLOSURES",
+                    source_label="DART disclosures",
+                    query_template=None,
+                    query_text=None,
+                ),
+                fetch_batch=self._fetch_dart_batch,
+                resolve_candidate=self._resolve_dart_company_reference,
+            ),
+        )
+        return {
+            descriptor.provider: descriptor
+            for descriptor in (*defaults, *extra_descriptors)
+        }
+
+    def _build_news_provider_descriptors(
+        self,
+        extra_descriptors: tuple[NewsProviderDescriptor, ...],
+    ) -> dict[str, NewsProviderDescriptor]:
+        defaults = (
+            NewsProviderDescriptor(
+                provider="BIGKINDS",
+                fetch_batch=self._fetch_bigkinds_batch,
+                build_company_requests=self._build_bigkinds_company_requests,
+                build_theme_requests=self._build_bigkinds_theme_requests,
+            ),
+            NewsProviderDescriptor(
+                provider="NAVER_NEWS",
+                fetch_batch=self._fetch_naver_news_batch,
+                build_company_requests=self._build_naver_company_requests,
+                build_theme_requests=self._build_naver_theme_requests,
+            ),
+        )
+        return {
+            descriptor.provider: descriptor
+            for descriptor in (*defaults, *extra_descriptors)
+        }
+
+    def _fetch_dart_batch(
+        self,
+        request: DocumentSyncRequest,
+        window_start: datetime,
+        window_end: datetime,
+        cursor: str | None,
+    ):
+        return self.dart_provider.fetch_disclosures(
+            window_start=window_start,
+            window_end=window_end,
+            cursor=cursor,
+        )
+
+    def _fetch_bigkinds_batch(
+        self,
+        request: DocumentSyncRequest,
+        window_start: datetime,
+        window_end: datetime,
+        cursor: str | None,
+    ):
+        if request.query_text is None:
+            raise ValueError("BIGKINDS request must include query_text")
+        return self.bigkinds_provider.fetch_news(
+            query=request.query_text,
+            window_start=window_start,
+            window_end=window_end,
+            cursor=cursor,
+        )
+
+    def _fetch_naver_news_batch(
+        self,
+        request: DocumentSyncRequest,
+        window_start: datetime,
+        window_end: datetime,
+        cursor: str | None,
+    ):
+        if request.query_text is None:
+            raise ValueError("NAVER_NEWS request must include query_text")
+        return self.naver_provider.fetch_news(
+            query=request.query_text,
+            window_start=window_start,
+            window_end=window_end,
+            cursor=cursor,
+        )
+
+    def _build_bigkinds_company_requests(self, target: dict[str, Any]) -> list[DocumentSyncRequest]:
+        return [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="BIGKINDS",
+                source_kind="COMPANY",
+                source_key=f"{target['source_key']}:company",
+                source_label=target["name"],
+                query_template="{company_name}",
+                query_text=target["name"],
+                company_id=target["company_id"],
+            )
+        ]
+
+    def _build_bigkinds_theme_requests(self, keyword: str) -> list[DocumentSyncRequest]:
+        return [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="BIGKINDS",
+                source_kind="THEME",
+                source_key=keyword,
+                source_label=keyword,
+                query_template="{keyword}",
+                query_text=keyword,
+                company_id=None,
+            )
+        ]
+
+    def _build_naver_company_requests(self, target: dict[str, Any]) -> list[DocumentSyncRequest]:
+        requests = [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="NAVER_NEWS",
+                source_kind="COMPANY",
+                source_key=f"{target['source_key']}:company",
+                source_label=target["name"],
+                query_template=self.naver_provider.company_query_template,
+                query_text=self.naver_provider.build_company_query(company_name=target["name"]),
+                company_id=target["company_id"],
+            )
+        ]
+        sector_keyword = target.get("sector_keyword")
+        if sector_keyword:
+            requests.append(
+                DocumentSyncRequest(
+                    job_name="raw_documents_sync_news",
+                    provider="NAVER_NEWS",
+                    source_kind="COMPANY",
+                    source_key=f"{target['source_key']}:sector:{sector_keyword}",
+                    source_label=f"{target['name']}:{sector_keyword}",
+                    query_template=self.naver_provider.theme_query_template,
+                    query_text=self.naver_provider.build_theme_query(keyword=sector_keyword),
+                    company_id=target["company_id"],
+                )
+            )
+        return requests
+
+    def _build_naver_theme_requests(self, keyword: str) -> list[DocumentSyncRequest]:
+        return [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="NAVER_NEWS",
+                source_kind="THEME",
+                source_key=keyword,
+                source_label=keyword,
+                query_template=self.naver_provider.theme_query_template,
+                query_text=self.naver_provider.build_theme_query(keyword=keyword),
+                company_id=None,
+            )
+        ]
 
     def sync_dart_disclosures_last_days(self, *, days: int, backfill: bool = False) -> IngestionRunResult:
+        return self.sync_disclosures_last_days(
+            provider="DART",
+            days=days,
+            backfill=backfill,
+        )
+
+    def sync_disclosures_last_days(
+        self,
+        *,
+        provider: str,
+        days: int,
+        backfill: bool = False,
+    ) -> IngestionRunResult:
         now = datetime.now(timezone.utc)
         window_start = now - timedelta(days=max(days, 1))
-        return self.sync_dart_disclosures_window(
+        return self.sync_disclosures_window(
+            provider=provider,
             window_start=window_start,
             window_end=now,
             backfill=backfill,
@@ -60,157 +285,32 @@ class RawDocumentIngestionService:
         window_end: datetime,
         backfill: bool,
     ) -> IngestionRunResult:
-        mode = "BACKFILL" if backfill else "INCREMENTAL"
+        return self.sync_disclosures_window(
+            provider="DART",
+            window_start=window_start,
+            window_end=window_end,
+            backfill=backfill,
+        )
 
-        with get_connection(self.db_path) as connection:
-            source = self._ensure_source(
-                connection,
-                provider="DART",
-                source_kind="SYSTEM",
-                source_key="DISCLOSURES",
-                source_label="DART disclosures",
-                query_template=None,
-            )
-
-            cursor_before = None if backfill else source.get("last_cursor")
-            run_id = self._start_fetch_run(
-                connection,
-                job_name="raw_documents_sync_dart",
-                provider="DART",
-                mode=mode,
-                source_kind="SYSTEM",
-                source_key="DISCLOSURES",
-                query_text=None,
-                window_start=window_start,
-                window_end=window_end,
-                cursor_before=cursor_before,
-                metadata={"source_id": source["id"]},
-            )
-
-            processed_count = 0
-            inserted_count = 0
-            duplicate_count = 0
-            failed_count = 0
-            cursor_after = cursor_before
-
-            try:
-                batch = self.dart_provider.fetch_disclosures(
-                    window_start=window_start,
-                    window_end=window_end,
-                    cursor=cursor_before,
-                )
-
-                if batch.disabled_reason:
-                    self._finish_fetch_run(
-                        connection,
-                        run_id=run_id,
-                        status="SKIPPED_DISABLED",
-                        processed_count=0,
-                        inserted_count=0,
-                        duplicate_count=0,
-                        failed_count=0,
-                        cursor_after=cursor_before,
-                        metadata={"disabled_reason": batch.disabled_reason},
-                        error_message=None,
-                    )
-                    return IngestionRunResult(
-                        run_id=run_id,
-                        status="SKIPPED_DISABLED",
-                        provider="DART",
-                        source_kind="SYSTEM",
-                        source_key="DISCLOSURES",
-                        processed_count=0,
-                        inserted_count=0,
-                        duplicate_count=0,
-                        failed_count=0,
-                        cursor_before=cursor_before,
-                        cursor_after=cursor_before,
-                    )
-
-                for record in batch.records:
-                    processed_count += 1
-                    try:
-                        resolved = self._resolve_dart_company_reference(connection, record)
-                        inserted, is_duplicate = self._upsert_raw_document(
-                            connection,
-                            candidate=resolved,
-                            run_id=run_id,
-                        )
-                        inserted_count += int(inserted)
-                        duplicate_count += int(is_duplicate)
-                    except Exception as error:  # noqa: BLE001
-                        failed_count += 1
-                        logger.exception(
-                            "dart_ingestion_record_failed",
-                            extra={
-                                "run_id": run_id,
-                                "provider_document_id": record.provider_document_id,
-                                "error": str(error),
-                            },
-                        )
-
-                cursor_after = batch.next_cursor or cursor_before
-                self._finish_fetch_run(
-                    connection,
-                    run_id=run_id,
-                    status="SUCCESS",
-                    processed_count=processed_count,
-                    inserted_count=inserted_count,
-                    duplicate_count=duplicate_count,
-                    failed_count=failed_count,
-                    cursor_after=cursor_after,
-                    metadata=batch.metadata,
-                    error_message=None,
-                )
-
-                if not backfill and cursor_after is not None:
-                    self._update_source_success_cursor(
-                        connection,
-                        source_id=source["id"],
-                        cursor=cursor_after,
-                        run_id=run_id,
-                    )
-
-                return IngestionRunResult(
-                    run_id=run_id,
-                    status="SUCCESS",
-                    provider="DART",
-                    source_kind="SYSTEM",
-                    source_key="DISCLOSURES",
-                    processed_count=processed_count,
-                    inserted_count=inserted_count,
-                    duplicate_count=duplicate_count,
-                    failed_count=failed_count,
-                    cursor_before=cursor_before,
-                    cursor_after=cursor_after,
-                )
-            except Exception as error:  # noqa: BLE001
-                self._finish_fetch_run(
-                    connection,
-                    run_id=run_id,
-                    status="FAILED",
-                    processed_count=processed_count,
-                    inserted_count=inserted_count,
-                    duplicate_count=duplicate_count,
-                    failed_count=failed_count,
-                    cursor_after=cursor_after,
-                    metadata=None,
-                    error_message=str(error),
-                )
-                return IngestionRunResult(
-                    run_id=run_id,
-                    status="FAILED",
-                    provider="DART",
-                    source_kind="SYSTEM",
-                    source_key="DISCLOSURES",
-                    processed_count=processed_count,
-                    inserted_count=inserted_count,
-                    duplicate_count=duplicate_count,
-                    failed_count=failed_count,
-                    cursor_before=cursor_before,
-                    cursor_after=cursor_after,
-                    error_message=str(error),
-                )
+    def sync_disclosures_window(
+        self,
+        *,
+        provider: str,
+        window_start: datetime,
+        window_end: datetime,
+        backfill: bool,
+    ) -> IngestionRunResult:
+        descriptor = self.disclosure_provider_descriptors.get(normalize_provider_key(provider))
+        if descriptor is None:
+            raise ValueError(f"Unsupported disclosure provider: {provider}")
+        return self._run_document_sync(
+            request=descriptor.request,
+            window_start=window_start,
+            window_end=window_end,
+            backfill=backfill,
+            fetch_batch=descriptor.fetch_batch,
+            resolve_candidate=descriptor.resolve_candidate,
+        )
 
     def sync_news_candidates_for_companies_last_days(
         self,
@@ -219,6 +319,7 @@ class RawDocumentIngestionService:
         company_names: list[str] | None,
         days: int,
         backfill: bool = False,
+        providers: list[str] | None = None,
     ) -> list[IngestionRunResult]:
         now = datetime.now(timezone.utc)
         window_start = now - timedelta(days=max(days, 1))
@@ -228,6 +329,7 @@ class RawDocumentIngestionService:
             window_start=window_start,
             window_end=now,
             backfill=backfill,
+            providers=providers,
         )
 
     def sync_news_candidates_for_companies_window(
@@ -238,63 +340,25 @@ class RawDocumentIngestionService:
         window_start: datetime,
         window_end: datetime,
         backfill: bool,
+        providers: list[str] | None = None,
     ) -> list[IngestionRunResult]:
         targets = self._load_company_targets(company_ids=company_ids, company_names=company_names or [])
         results: list[IngestionRunResult] = []
+        selected_descriptors = self._select_news_provider_descriptors(providers)
 
         for target in targets:
-            company_id = target["company_id"]
-            company_name = target["name"]
-            source_suffix = target["source_key"]
-
-            results.append(
-                self._sync_news_query(
-                    provider="BIGKINDS",
-                    source_kind="COMPANY",
-                    source_key=f"{source_suffix}:company",
-                    source_label=company_name,
-                    query_template="{company_name}",
-                    query_text=company_name,
-                    window_start=window_start,
-                    window_end=window_end,
-                    backfill=backfill,
-                    company_id=company_id,
-                )
-            )
-
-            company_query = self.naver_provider.build_company_query(company_name=company_name)
-            results.append(
-                self._sync_news_query(
-                    provider="NAVER_NEWS",
-                    source_kind="COMPANY",
-                    source_key=f"{source_suffix}:company",
-                    source_label=company_name,
-                    query_template=self.naver_provider.company_query_template,
-                    query_text=company_query,
-                    window_start=window_start,
-                    window_end=window_end,
-                    backfill=backfill,
-                    company_id=company_id,
-                )
-            )
-
-            sector_keyword = target.get("sector_keyword")
-            if sector_keyword:
-                sector_query = self.naver_provider.build_theme_query(keyword=sector_keyword)
-                results.append(
-                    self._sync_news_query(
-                        provider="NAVER_NEWS",
-                        source_kind="COMPANY",
-                        source_key=f"{source_suffix}:sector:{sector_keyword}",
-                        source_label=f"{company_name}:{sector_keyword}",
-                        query_template=self.naver_provider.theme_query_template,
-                        query_text=sector_query,
-                        window_start=window_start,
-                        window_end=window_end,
-                        backfill=backfill,
-                        company_id=company_id,
+            for descriptor in selected_descriptors:
+                requests = descriptor.build_company_requests(target)
+                for request in requests:
+                    results.append(
+                        self._run_document_sync(
+                            request=request,
+                            window_start=window_start,
+                            window_end=window_end,
+                            backfill=backfill,
+                            fetch_batch=descriptor.fetch_batch,
+                        )
                     )
-                )
 
         return results
 
@@ -304,6 +368,7 @@ class RawDocumentIngestionService:
         keywords: list[str],
         days: int,
         backfill: bool = False,
+        providers: list[str] | None = None,
     ) -> list[IngestionRunResult]:
         now = datetime.now(timezone.utc)
         window_start = now - timedelta(days=max(days, 1))
@@ -312,6 +377,7 @@ class RawDocumentIngestionService:
             window_start=window_start,
             window_end=now,
             backfill=backfill,
+            providers=providers,
         )
 
     def sync_news_candidates_for_themes_window(
@@ -321,41 +387,25 @@ class RawDocumentIngestionService:
         window_start: datetime,
         window_end: datetime,
         backfill: bool,
+        providers: list[str] | None = None,
     ) -> list[IngestionRunResult]:
         normalized_keywords = [keyword.strip() for keyword in keywords if keyword.strip()]
         results: list[IngestionRunResult] = []
+        selected_descriptors = self._select_news_provider_descriptors(providers)
 
         for keyword in normalized_keywords:
-            results.append(
-                self._sync_news_query(
-                    provider="BIGKINDS",
-                    source_kind="THEME",
-                    source_key=keyword,
-                    source_label=keyword,
-                    query_template="{keyword}",
-                    query_text=keyword,
-                    window_start=window_start,
-                    window_end=window_end,
-                    backfill=backfill,
-                    company_id=None,
-                )
-            )
-
-            theme_query = self.naver_provider.build_theme_query(keyword=keyword)
-            results.append(
-                self._sync_news_query(
-                    provider="NAVER_NEWS",
-                    source_kind="THEME",
-                    source_key=keyword,
-                    source_label=keyword,
-                    query_template=self.naver_provider.theme_query_template,
-                    query_text=theme_query,
-                    window_start=window_start,
-                    window_end=window_end,
-                    backfill=backfill,
-                    company_id=None,
-                )
-            )
+            for descriptor in selected_descriptors:
+                requests = descriptor.build_theme_requests(keyword)
+                for request in requests:
+                    results.append(
+                        self._run_document_sync(
+                            request=request,
+                            window_start=window_start,
+                            window_end=window_end,
+                            backfill=backfill,
+                            fetch_batch=descriptor.fetch_batch,
+                        )
+                    )
 
         return results
 
@@ -413,6 +463,13 @@ class RawDocumentIngestionService:
         provider: str | None,
         include_duplicates: bool,
     ) -> list[dict[str, Any]]:
+        effective_time_sql = """
+        CASE
+            WHEN rd.document_type = 'NEWS_CANDIDATE'
+                THEN COALESCE(rd.published_at, rd.observed_at, rd.receipt_at, rd.updated_at, rd.created_at)
+            ELSE COALESCE(rd.published_at, rd.receipt_at, rd.observed_at, rd.updated_at, rd.created_at)
+        END
+        """.strip()
         with get_connection(self.db_path) as connection:
             filters = []
             params: list[Any] = []
@@ -434,7 +491,7 @@ class RawDocumentIngestionService:
                 FROM raw_documents rd
                 LEFT JOIN companies c ON c.id = rd.company_id
                 {where_clause}
-                ORDER BY rd.created_at DESC, rd.id DESC
+                ORDER BY {effective_time_sql} DESC, rd.id DESC
                 LIMIT ?
                 """,
                 params,
@@ -480,46 +537,183 @@ class RawDocumentIngestionService:
             results.append(payload)
         return results
 
-    def _sync_news_query(
+    def list_supported_ingestion_providers(self) -> dict[str, list[dict[str, Any]]]:
+        return {
+            "disclosures": [
+                {
+                    "provider": descriptor.provider,
+                    "supports_system_sync": True,
+                }
+                for descriptor in self._sorted_disclosure_provider_descriptors()
+            ],
+            "news": [
+                {
+                    "provider": descriptor.provider,
+                    "supports_company_sync": True,
+                    "supports_theme_sync": True,
+                }
+                for descriptor in self._sorted_news_provider_descriptors()
+            ],
+        }
+
+    def backfill_publisher_registry(
         self,
         *,
-        provider: str,
-        source_kind: str,
-        source_key: str,
-        source_label: str,
-        query_template: str,
-        query_text: str,
+        limit: int | None = None,
+        only_missing: bool = True,
+    ) -> dict[str, int]:
+        filters = [
+            "publisher IS NOT NULL",
+            "TRIM(publisher) <> ''",
+        ]
+        params: list[Any] = []
+        if only_missing:
+            filters.append("(publisher_key IS NULL OR TRIM(publisher_key) = '')")
+
+        limit_clause = ""
+        if limit is not None and limit > 0:
+            limit_clause = "LIMIT ?"
+            params.append(int(limit))
+
+        with get_connection(self.db_path) as connection:
+            rows = connection.execute(
+                f"""
+                SELECT id, publisher, publisher_key
+                FROM raw_documents
+                WHERE {' AND '.join(filters)}
+                ORDER BY id ASC
+                {limit_clause}
+                """,
+                params,
+            ).fetchall()
+
+            updated_raw_documents = 0
+            seen_publishers: set[str] = set()
+            for row in rows:
+                publisher_key = self._ensure_publisher_registered(
+                    connection,
+                    publisher=row["publisher"],
+                    publisher_key=row["publisher_key"],
+                )
+                if publisher_key is None:
+                    continue
+
+                seen_publishers.add(publisher_key)
+                if row["publisher_key"] == publisher_key:
+                    continue
+
+                connection.execute(
+                    """
+                    UPDATE raw_documents
+                    SET publisher_key = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (publisher_key, utcnow_iso(), int(row["id"])),
+                )
+                updated_raw_documents += 1
+
+            updated_events = connection.execute(
+                """
+                UPDATE events
+                SET publisher_key = (
+                    SELECT rd.publisher_key
+                    FROM raw_documents rd
+                    WHERE rd.id = events.primary_document_id
+                )
+                WHERE (
+                    publisher_key IS NULL OR TRIM(publisher_key) = ''
+                )
+                  AND primary_document_id IN (
+                    SELECT id
+                    FROM raw_documents
+                    WHERE publisher_key IS NOT NULL
+                )
+                """
+            ).rowcount
+            updated_source_documents = connection.execute(
+                """
+                UPDATE source_documents
+                SET publisher_key = (
+                    SELECT rd.publisher_key
+                    FROM raw_documents rd
+                    WHERE rd.id = source_documents.raw_document_id
+                )
+                WHERE (
+                    publisher_key IS NULL OR TRIM(publisher_key) = ''
+                )
+                  AND raw_document_id IN (
+                    SELECT id
+                    FROM raw_documents
+                    WHERE publisher_key IS NOT NULL
+                )
+                """
+            ).rowcount
+            updated_event_evidence = connection.execute(
+                """
+                UPDATE event_evidence
+                SET publisher_key = (
+                    SELECT sd.publisher_key
+                    FROM source_documents sd
+                    WHERE sd.id = event_evidence.source_document_id
+                )
+                WHERE (
+                    publisher_key IS NULL OR TRIM(publisher_key) = ''
+                )
+                  AND source_document_id IN (
+                    SELECT id
+                    FROM source_documents
+                    WHERE publisher_key IS NOT NULL
+                )
+                """
+            ).rowcount
+
+        return {
+            "processed_count": len(rows),
+            "publisher_count": len(seen_publishers),
+            "updated_raw_documents": updated_raw_documents,
+            "updated_events": updated_events,
+            "updated_source_documents": updated_source_documents,
+            "updated_event_evidence": updated_event_evidence,
+        }
+
+    def _run_document_sync(
+        self,
+        *,
+        request: DocumentSyncRequest,
         window_start: datetime,
         window_end: datetime,
         backfill: bool,
-        company_id: int | None,
+        fetch_batch,
+        resolve_candidate=None,
     ) -> IngestionRunResult:
         mode = "BACKFILL" if backfill else "INCREMENTAL"
-        provider_client = self._select_news_provider(provider)
 
         with get_connection(self.db_path) as connection:
             source = self._ensure_source(
                 connection,
-                provider=provider,
-                source_kind=source_kind,
-                source_key=source_key,
-                source_label=source_label,
-                query_template=query_template,
+                provider=request.provider,
+                source_kind=request.source_kind,
+                source_key=request.source_key,
+                source_label=request.source_label,
+                query_template=request.query_template,
             )
 
             cursor_before = None if backfill else source.get("last_cursor")
             run_id = self._start_fetch_run(
                 connection,
-                job_name="raw_documents_sync_news",
-                provider=provider,
+                job_name=request.job_name,
+                provider=request.provider,
                 mode=mode,
-                source_kind=source_kind,
-                source_key=source_key,
-                query_text=query_text,
+                source_kind=request.source_kind,
+                source_key=request.source_key,
+                query_text=request.query_text,
                 window_start=window_start,
                 window_end=window_end,
                 cursor_before=cursor_before,
-                metadata={"source_id": source["id"], "source_label": source_label},
+                metadata={
+                    "source_id": source["id"],
+                    "source_label": request.source_label,
+                },
             )
 
             processed_count = 0
@@ -529,12 +723,7 @@ class RawDocumentIngestionService:
             cursor_after = cursor_before
 
             try:
-                batch = provider_client.fetch_news(
-                    query=query_text,
-                    window_start=window_start,
-                    window_end=window_end,
-                    cursor=cursor_before,
-                )
+                batch = fetch_batch(request, window_start, window_end, cursor_before)
 
                 if batch.disabled_reason:
                     self._finish_fetch_run(
@@ -546,15 +735,18 @@ class RawDocumentIngestionService:
                         duplicate_count=0,
                         failed_count=0,
                         cursor_after=cursor_before,
-                        metadata={"disabled_reason": batch.disabled_reason, "query": query_text},
+                        metadata={
+                            "disabled_reason": batch.disabled_reason,
+                            "query": request.query_text,
+                        },
                         error_message=None,
                     )
                     return IngestionRunResult(
                         run_id=run_id,
                         status="SKIPPED_DISABLED",
-                        provider=provider,
-                        source_kind=source_kind,
-                        source_key=source_key,
+                        provider=request.provider,
+                        source_kind=request.source_kind,
+                        source_key=request.source_key,
                         processed_count=0,
                         inserted_count=0,
                         duplicate_count=0,
@@ -567,8 +759,10 @@ class RawDocumentIngestionService:
                     processed_count += 1
                     try:
                         resolved_record = record
-                        if company_id is not None and record.company_id is None:
-                            resolved_record = replace(record, company_id=company_id)
+                        if resolve_candidate is not None:
+                            resolved_record = resolve_candidate(connection, resolved_record)
+                        if request.company_id is not None and resolved_record.company_id is None:
+                            resolved_record = replace(resolved_record, company_id=request.company_id)
 
                         inserted, is_duplicate = self._upsert_raw_document(
                             connection,
@@ -580,11 +774,12 @@ class RawDocumentIngestionService:
                     except Exception as error:  # noqa: BLE001
                         failed_count += 1
                         logger.exception(
-                            "news_ingestion_record_failed",
+                            "raw_ingestion_record_failed",
                             extra={
                                 "run_id": run_id,
-                                "provider": provider,
-                                "source_key": source_key,
+                                "provider": request.provider,
+                                "source_key": request.source_key,
+                                "provider_document_id": record.provider_document_id,
                                 "error": str(error),
                             },
                         )
@@ -614,9 +809,9 @@ class RawDocumentIngestionService:
                 return IngestionRunResult(
                     run_id=run_id,
                     status="SUCCESS",
-                    provider=provider,
-                    source_kind=source_kind,
-                    source_key=source_key,
+                    provider=request.provider,
+                    source_kind=request.source_kind,
+                    source_key=request.source_key,
                     processed_count=processed_count,
                     inserted_count=inserted_count,
                     duplicate_count=duplicate_count,
@@ -640,9 +835,9 @@ class RawDocumentIngestionService:
                 return IngestionRunResult(
                     run_id=run_id,
                     status="FAILED",
-                    provider=provider,
-                    source_kind=source_kind,
-                    source_key=source_key,
+                    provider=request.provider,
+                    source_kind=request.source_kind,
+                    source_key=request.source_key,
                     processed_count=processed_count,
                     inserted_count=inserted_count,
                     duplicate_count=duplicate_count,
@@ -651,6 +846,39 @@ class RawDocumentIngestionService:
                     cursor_after=cursor_after,
                     error_message=str(error),
                 )
+
+    def _sorted_disclosure_provider_descriptors(self) -> list[DisclosureProviderDescriptor]:
+        return sorted(
+            self.disclosure_provider_descriptors.values(),
+            key=lambda descriptor: descriptor.provider,
+        )
+
+    def _sorted_news_provider_descriptors(self) -> list[NewsProviderDescriptor]:
+        return sorted(
+            self.news_provider_descriptors.values(),
+            key=lambda descriptor: descriptor.provider,
+        )
+
+    def _select_news_provider_descriptors(
+        self,
+        providers: list[str] | None,
+    ) -> list[NewsProviderDescriptor]:
+        if not providers:
+            return self._sorted_news_provider_descriptors()
+
+        selected: list[NewsProviderDescriptor] = []
+        missing: list[str] = []
+        for provider in providers:
+            normalized = normalize_provider_key(provider)
+            descriptor = self.news_provider_descriptors.get(normalized)
+            if descriptor is None:
+                missing.append(provider)
+                continue
+            selected.append(descriptor)
+
+        if missing:
+            raise ValueError(f"Unsupported news providers: {', '.join(sorted(set(missing)))}")
+        return selected
 
     def _resolve_dart_company_reference(
         self,
@@ -685,9 +913,19 @@ class RawDocumentIngestionService:
         candidate: RawDocumentCandidate,
         run_id: int,
     ) -> tuple[bool, bool]:
+        self._ensure_provider_registered(
+            connection,
+            provider=candidate.provider,
+            document_type=candidate.document_type,
+        )
         now = utcnow_iso()
         normalized_title_hash = title_hash(candidate.title)
         canonical_url = canonicalize_url(candidate.canonical_url or candidate.source_url)
+        publisher_key = self._ensure_publisher_registered(
+            connection,
+            publisher=candidate.publisher,
+            publisher_key=candidate.publisher_key,
+        )
 
         metadata_json = json.dumps(candidate.provider_metadata, ensure_ascii=False, sort_keys=True)
         payload_json = (
@@ -718,6 +956,26 @@ class RawDocumentIngestionService:
                 (candidate.provider, canonical_url, normalized_title_hash),
             ).fetchone()
 
+        resolved_observed_at = (
+            (str(existing["observed_at"]).strip() if existing is not None and existing["observed_at"] is not None else None)
+            or candidate.observed_at
+            or now
+        )
+        resolved_published_at = (
+            candidate.published_at
+            or (str(existing["published_at"]).strip() if existing is not None and existing["published_at"] is not None else None)
+        )
+        resolved_receipt_at = (
+            candidate.receipt_at
+            or (str(existing["receipt_at"]).strip() if existing is not None and existing["receipt_at"] is not None else None)
+        )
+        resolved_published_at_source = candidate.published_at_source or determine_published_at_source(
+            document_type=candidate.document_type,
+            published_at=resolved_published_at,
+            receipt_at=resolved_receipt_at,
+            observed_at=resolved_observed_at,
+        )
+
         if existing is None:
             connection.execute(
                 """
@@ -728,9 +986,12 @@ class RawDocumentIngestionService:
                     title,
                     summary,
                     publisher,
+                    publisher_key,
                     source_url,
                     canonical_url,
                     published_at,
+                    observed_at,
+                    published_at_source,
                     receipt_at,
                     report_type,
                     company_id,
@@ -744,7 +1005,7 @@ class RawDocumentIngestionService:
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     candidate.provider,
@@ -753,10 +1014,13 @@ class RawDocumentIngestionService:
                     candidate.title,
                     candidate.summary,
                     candidate.publisher,
+                    publisher_key,
                     candidate.source_url,
                     canonical_url,
-                    candidate.published_at,
-                    candidate.receipt_at,
+                    resolved_published_at,
+                    resolved_observed_at,
+                    resolved_published_at_source,
+                    resolved_receipt_at,
                     candidate.report_type,
                     candidate.company_id,
                     candidate.company_ref,
@@ -783,9 +1047,12 @@ class RawDocumentIngestionService:
                     title = ?,
                     summary = ?,
                     publisher = ?,
+                    publisher_key = ?,
                     source_url = ?,
                     canonical_url = ?,
                     published_at = ?,
+                    observed_at = ?,
+                    published_at_source = ?,
                     receipt_at = ?,
                     report_type = ?,
                     company_id = ?,
@@ -802,10 +1069,13 @@ class RawDocumentIngestionService:
                     candidate.title,
                     candidate.summary,
                     candidate.publisher,
+                    publisher_key,
                     candidate.source_url,
                     canonical_url,
-                    candidate.published_at,
-                    candidate.receipt_at,
+                    resolved_published_at,
+                    resolved_observed_at,
+                    resolved_published_at_source,
+                    resolved_receipt_at,
                     candidate.report_type,
                     company_id,
                     candidate.company_ref,
@@ -1036,13 +1306,6 @@ class RawDocumentIngestionService:
             """,
             (cursor, run_id, now, now, source_id),
         )
-
-    def _select_news_provider(self, provider: str):
-        if provider == "BIGKINDS":
-            return self.bigkinds_provider
-        if provider == "NAVER_NEWS":
-            return self.naver_provider
-        raise ValueError(f"Unsupported news provider: {provider}")
 
     def _load_company_targets(
         self,

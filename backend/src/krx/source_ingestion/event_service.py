@@ -8,6 +8,9 @@ import logging
 from typing import Any
 
 from ..company_master.db import get_connection, utcnow_iso
+from ..publisher_registry import ensure_publisher_definition
+from ..provider_registry import list_provider_definitions, resolve_provider_definition
+from .document_time import effective_document_time
 from .event_taxonomy import (
     EVENT_TAXONOMY,
     RELATIONSHIP_KEYWORDS,
@@ -330,7 +333,11 @@ class EventNormalizationService:
         if not isinstance(metadata, dict):
             metadata = {}
 
-        source_type, trust_score = self._resolve_source_type(provider=str(row["provider"]), document_type=row.get("document_type"))
+        source_type, trust_score = self._resolve_source_type(
+            connection,
+            provider=str(row["provider"]),
+            document_type=row.get("document_type"),
+        )
         normalized_text = self._document_text(row)
         mentions = self._extract_company_mentions(row=row, aliases=aliases)
         direct_company_ids = self._resolve_direct_company_ids(connection, row=row, metadata=metadata)
@@ -843,6 +850,19 @@ class EventNormalizationService:
         if existing is not None and existing["status"] in {"APPROVED", "REJECTED"}:
             status = str(existing["status"])
 
+        publisher_definition = ensure_publisher_definition(
+            connection,
+            publisher_name=row.get("publisher"),
+            publisher_key=row.get("publisher_key"),
+        )
+        publisher_key = publisher_definition.publisher_key if publisher_definition is not None else None
+        occurred_at = effective_document_time(
+            document_type=str(row.get("document_type") or ""),
+            published_at=row.get("published_at"),
+            observed_at=row.get("observed_at"),
+            receipt_at=row.get("receipt_at"),
+            fallback=now,
+        )
         payload = (
             dedup_key,
             primary_document_id,
@@ -853,9 +873,10 @@ class EventNormalizationService:
             source_type,
             str(row.get("provider") or "NAVER_NEWS"),
             row.get("publisher"),
+            publisher_key,
             row.get("source_url"),
             row.get("canonical_url"),
-            row.get("published_at") or row.get("receipt_at") or now,
+            occurred_at,
             trust_score,
             confidence,
             json.dumps(risk_flags, ensure_ascii=False, sort_keys=True),
@@ -878,6 +899,7 @@ class EventNormalizationService:
                     source_type,
                     source_provider,
                     publisher,
+                    publisher_key,
                     source_url,
                     canonical_url,
                     occurred_at,
@@ -888,7 +910,7 @@ class EventNormalizationService:
                     metadata_json,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 payload,
             )
@@ -908,6 +930,7 @@ class EventNormalizationService:
                 source_type = ?,
                 source_provider = ?,
                 publisher = ?,
+                publisher_key = ?,
                 source_url = ?,
                 canonical_url = ?,
                 occurred_at = ?,
@@ -928,9 +951,10 @@ class EventNormalizationService:
                 source_type,
                 str(row.get("provider") or "NAVER_NEWS"),
                 row.get("publisher"),
+                publisher_key,
                 row.get("source_url"),
                 row.get("canonical_url"),
-                row.get("published_at") or row.get("receipt_at") or now,
+                occurred_at,
                 trust_score,
                 confidence,
                 json.dumps(risk_flags, ensure_ascii=False, sort_keys=True),
@@ -1231,15 +1255,23 @@ class EventNormalizationService:
 
         return list(grouped.values())
 
-    def _resolve_source_type(self, *, provider: str, document_type: Any) -> tuple[str, float]:
-        if provider == "DART" or str(document_type or "").upper() == "DISCLOSURE":
-            source_type = "DISCLOSURE"
-        elif provider == "BIGKINDS":
-            source_type = "CURATED_NEWS"
-        else:
-            source_type = "DISCOVERY_NEWS"
-
-        return source_type, SOURCE_TRUST_SCORES[source_type]
+    def _resolve_source_type(self, connection, *, provider: str, document_type: Any) -> tuple[str, float]:
+        definitions = list_provider_definitions(connection)
+        definition = resolve_provider_definition(
+            definitions,
+            provider_key=provider,
+            document_type=str(document_type or ""),
+        )
+        source_type = definition.source_type
+        if source_type is None:
+            if str(document_type or "").upper() == "DISCLOSURE":
+                source_type = "DISCLOSURE"
+            else:
+                source_type = "DISCOVERY_NEWS"
+        trust_score = definition.trust_score
+        if trust_score is None:
+            trust_score = SOURCE_TRUST_SCORES[source_type]
+        return source_type, float(trust_score)
 
     def _make_summary(self, *, row: dict[str, Any]) -> str:
         title = str(row.get("title") or "").strip()

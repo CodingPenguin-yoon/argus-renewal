@@ -210,6 +210,7 @@ class DartDisclosureProvider:
             query_text=None,
             dedup_type="PROVIDER_ID" if dedup_key else None,
             dedup_key=dedup_key,
+            publisher_key="DART",
             provider_metadata={
                 "corp_code": corp_code,
                 "corp_name": corp_name,
