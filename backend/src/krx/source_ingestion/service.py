@@ -17,7 +17,7 @@ from .provider_descriptors import (
     DocumentSyncRequest,
     NewsProviderDescriptor,
 )
-from .providers import BigKindsNewsProvider, DartDisclosureProvider, NaverNewsProvider
+from .providers import BigKindsNewsProvider, DartDisclosureProvider, MkRssNewsProvider, NaverNewsProvider
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +44,15 @@ class RawDocumentIngestionService:
         *,
         db_path: str,
         dart_provider: DartDisclosureProvider,
-        bigkinds_provider: BigKindsNewsProvider,
+        mk_rss_provider: MkRssNewsProvider | None = None,
         naver_provider: NaverNewsProvider,
+        bigkinds_provider: BigKindsNewsProvider | None = None,
         extra_disclosure_provider_descriptors: tuple[DisclosureProviderDescriptor, ...] = (),
         extra_news_provider_descriptors: tuple[NewsProviderDescriptor, ...] = (),
     ) -> None:
         self.db_path = db_path
         self.dart_provider = dart_provider
+        self.mk_rss_provider = mk_rss_provider or MkRssNewsProvider(enabled=False, feed_urls=())
         self.bigkinds_provider = bigkinds_provider
         self.naver_provider = naver_provider
         self.disclosure_provider_descriptors = self._build_disclosure_provider_descriptors(
@@ -122,10 +124,10 @@ class RawDocumentIngestionService:
     ) -> dict[str, NewsProviderDescriptor]:
         defaults = (
             NewsProviderDescriptor(
-                provider="BIGKINDS",
-                fetch_batch=self._fetch_bigkinds_batch,
-                build_company_requests=self._build_bigkinds_company_requests,
-                build_theme_requests=self._build_bigkinds_theme_requests,
+                provider="MK_RSS",
+                fetch_batch=self._fetch_mk_rss_batch,
+                build_company_requests=self._build_mk_rss_company_requests,
+                build_theme_requests=self._build_mk_rss_theme_requests,
             ),
             NewsProviderDescriptor(
                 provider="NAVER_NEWS",
@@ -168,6 +170,22 @@ class RawDocumentIngestionService:
             cursor=cursor,
         )
 
+    def _fetch_mk_rss_batch(
+        self,
+        request: DocumentSyncRequest,
+        window_start: datetime,
+        window_end: datetime,
+        cursor: str | None,
+    ):
+        if request.query_text is None:
+            raise ValueError("MK_RSS request must include query_text")
+        return self.mk_rss_provider.fetch_news(
+            query=request.query_text,
+            window_start=window_start,
+            window_end=window_end,
+            cursor=cursor,
+        )
+
     def _fetch_naver_news_batch(
         self,
         request: DocumentSyncRequest,
@@ -203,6 +221,49 @@ class RawDocumentIngestionService:
             DocumentSyncRequest(
                 job_name="raw_documents_sync_news",
                 provider="BIGKINDS",
+                source_kind="THEME",
+                source_key=keyword,
+                source_label=keyword,
+                query_template="{keyword}",
+                query_text=keyword,
+                company_id=None,
+            )
+        ]
+
+    def _build_mk_rss_company_requests(self, target: dict[str, Any]) -> list[DocumentSyncRequest]:
+        requests = [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="MK_RSS",
+                source_kind="COMPANY",
+                source_key=f"{target['source_key']}:company",
+                source_label=target["name"],
+                query_template="{company_name}",
+                query_text=target["name"],
+                company_id=target["company_id"],
+            )
+        ]
+        sector_keyword = target.get("sector_keyword")
+        if sector_keyword:
+            requests.append(
+                DocumentSyncRequest(
+                    job_name="raw_documents_sync_news",
+                    provider="MK_RSS",
+                    source_kind="COMPANY",
+                    source_key=f"{target['source_key']}:sector:{sector_keyword}",
+                    source_label=f"{target['name']}:{sector_keyword}",
+                    query_template="{keyword}",
+                    query_text=sector_keyword,
+                    company_id=target["company_id"],
+                )
+            )
+        return requests
+
+    def _build_mk_rss_theme_requests(self, keyword: str) -> list[DocumentSyncRequest]:
+        return [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="MK_RSS",
                 source_kind="THEME",
                 source_key=keyword,
                 source_label=keyword,

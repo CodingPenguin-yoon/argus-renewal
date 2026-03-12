@@ -7,7 +7,7 @@
 
 ## Provider 우선순위
 - `DART`: 공식 이벤트 소스. 공시는 first-class event로 직접 승격합니다.
-- `BigKinds`: 한국 뉴스의 기본 curated source. 기사 메타데이터와 snippet을 persistent evidence로 보관합니다.
+- `MK_RSS`: 주요 경제지 RSS source. 기사 메타데이터와 snippet을 persistent evidence로 보관합니다.
 - `Naver News Search`: discovery 전용. 탐색 입력으로만 사용하고 canonical content로 취급하지 않습니다.
 - `Naver Datalab`: 관심도/트렌드 점수만 공급합니다. 기사 source로 저장하지 않습니다.
 
@@ -15,8 +15,11 @@
 
 ### 기존 ingestion/provider
 - `DART_API_KEY`
-- `BIGKINDS_NEWS_ENABLED`
-- `BIGKINDS_API_KEY`
+- `DART_MATERIAL_ONLY`
+- `DART_MATERIAL_INCLUDE_PATTERNS`
+- `DART_MATERIAL_EXCLUDE_PATTERNS`
+- `MK_RSS_ENABLED`
+- `MK_RSS_FEED_URLS`
 - `NAVER_NEWS_ENABLED`
 - `NAVER_NEWS_CLIENT_ID`
 - `NAVER_NEWS_CLIENT_SECRET`
@@ -39,7 +42,7 @@
 ## Source Persistence Policy
 - `source_documents`
   - `DART` -> `CANONICAL_EVENT`
-  - `BIGKINDS` -> `PERSISTENT_EVIDENCE`
+  - `MK_RSS` -> `PERSISTENT_EVIDENCE`
   - `NAVER_NEWS` -> `TRANSIENT_DISCOVERY`
 - `normalized_events`
   - raw/event pipeline 결과를 이슈 클러스터 단위로 재구성한 read model
@@ -54,7 +57,7 @@
 
 ## Ranking Logic
 - 기본 점수
-  - source trust (`DART` > `BIGKINDS` > `NAVER_NEWS`)
+  - source trust (`DART` > `MK_RSS` > `NAVER_NEWS`)
   - market scope priority (`kr_market`, `global_market` 우선)
   - novelty (최근성 기반)
 - 보너스

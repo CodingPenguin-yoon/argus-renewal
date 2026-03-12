@@ -210,7 +210,7 @@ export type AppHeader = {
 
 export type MarketNewsEvidenceRole = "PRIMARY" | "CONFIRMING" | "DISCOVERY";
 
-export type MarketNewsEvidenceProvider = "DART" | "BIGKINDS" | "NAVER_NEWS";
+export type MarketNewsEvidenceProvider = "DART" | "BIGKINDS" | "NAVER_NEWS" | "MK_RSS";
 
 export type MarketNewsEvidence = {
   role: MarketNewsEvidenceRole;
@@ -245,7 +245,7 @@ export type MarketNewsCard = {
 };
 
 export type MarketNewsCoverageItem = {
-  provider: "DART" | "BIGKINDS" | "NAVER_NEWS" | "NAVER_DATALAB";
+  provider: "DART" | "BIGKINDS" | "NAVER_NEWS" | "MK_RSS" | "NAVER_DATALAB";
   status: "available" | "partial" | "missing";
   documentCount: number;
   eventCount: number;

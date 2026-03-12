@@ -1,4 +1,4 @@
-import { GlobalEventsDashboard } from "@/krx/components/events/global-events-dashboard";
+import { GlobalEventsDashboard } from "@/krx/global-events/components/global-events-dashboard";
 import { normalizeGlobalEventsTab } from "@/krx/global-events/lib/tabs";
 import { getGlobalEventsTabData } from "@/krx/server/data-service";
 

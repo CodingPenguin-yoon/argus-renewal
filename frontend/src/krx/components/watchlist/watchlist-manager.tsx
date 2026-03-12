@@ -2,12 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { NewsCard } from "@/krx/components/news/news-card";
 import { DisclaimerBanner } from "@/krx/components/layout/disclaimer-banner";
 import { EmptyState } from "@/krx/components/ui/empty-state";
 import { FilterBar } from "@/krx/components/ui/filter-bar";
 import { SectionHeader } from "@/krx/components/ui/section-header";
 import { getWatchlist, saveWatchlist, toggleWatchlist } from "@/krx/lib/watchlist-storage";
+import { NewsCard } from "@/krx/news/components/news-card";
 import { MarketCode, News, Sentiment, Stock } from "@/krx/types/domain";
 
 type WatchlistManagerProps = {

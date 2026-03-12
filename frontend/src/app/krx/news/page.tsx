@@ -1,4 +1,4 @@
-import { NewsTabDashboard } from "@/krx/components/news/news-tab-dashboard";
+import { NewsTabDashboard } from "@/krx/news/components/news-tab-dashboard";
 import { normalizeNewsTab } from "@/krx/news/lib/tabs";
 import { getNewsTabData } from "@/krx/server/data-service";
 

@@ -13,15 +13,21 @@ from .report_llm import (
     OpenAICompatibleCompanyReportProvider,
 )
 from .providers import (
-    BigKindsNewsProvider,
     DartDisclosureProvider,
     KisDomesticDerivativesService,
     KisMarketBreadthService,
     KisNightFuturesService,
     KrxDerivativesReferenceService,
+    MkRssNewsProvider,
     NaverNewsProvider,
 )
 from .service import RawDocumentIngestionService
+
+
+def _parse_csv_values(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def create_raw_document_ingestion_service(settings: Settings) -> RawDocumentIngestionService:
@@ -31,21 +37,26 @@ def create_raw_document_ingestion_service(settings: Settings) -> RawDocumentInge
         dart_provider=DartDisclosureProvider(
             api_key=settings.dart_api_key,
             list_url=settings.dart_disclosure_list_url,
+            material_only=getattr(settings, "dart_material_only", True),
+            include_patterns=_parse_csv_values(getattr(settings, "dart_material_include_patterns", None)) or None,
+            exclude_patterns=_parse_csv_values(getattr(settings, "dart_material_exclude_patterns", None)) or None,
             page_count=settings.dart_disclosure_page_count,
             timeout_seconds=settings.raw_ingestion_timeout_seconds,
             max_retries=settings.raw_ingestion_max_retries,
             backoff_seconds=settings.raw_ingestion_backoff_seconds,
         ),
-        bigkinds_provider=BigKindsNewsProvider(
-            enabled=settings.bigkinds_news_enabled,
-            api_key=settings.bigkinds_api_key,
-            base_url=settings.bigkinds_base_url,
-            search_path=settings.bigkinds_search_path,
+        mk_rss_provider=MkRssNewsProvider(
+            enabled=getattr(settings, "mk_rss_enabled", False),
+            feed_urls=_parse_csv_values(
+                getattr(
+                    settings,
+                    "mk_rss_feed_urls",
+                    "https://www.mk.co.kr/rss/30100041/,https://www.mk.co.kr/rss/50200011/",
+                ),
+            ),
             timeout_seconds=settings.raw_ingestion_timeout_seconds,
             max_retries=settings.raw_ingestion_max_retries,
             backoff_seconds=settings.raw_ingestion_backoff_seconds,
-            page_size=settings.bigkinds_page_size,
-            page_limit=settings.bigkinds_page_limit,
         ),
         naver_provider=NaverNewsProvider(
             enabled=settings.naver_news_enabled,

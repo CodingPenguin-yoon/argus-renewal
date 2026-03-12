@@ -32,7 +32,7 @@ type ApiNews = {
 
 type ApiMarketNewsEvidence = {
   role: "PRIMARY" | "CONFIRMING" | "DISCOVERY";
-  provider: "DART" | "BIGKINDS" | "NAVER_NEWS";
+  provider: "DART" | "BIGKINDS" | "NAVER_NEWS" | "MK_RSS";
   title: string | null;
   snippet: string | null;
   publisher: string | null;
@@ -63,7 +63,7 @@ type ApiMarketNewsCard = {
 };
 
 type ApiMarketNewsCoverageItem = {
-  provider: "DART" | "BIGKINDS" | "NAVER_NEWS" | "NAVER_DATALAB";
+  provider: "DART" | "BIGKINDS" | "NAVER_NEWS" | "MK_RSS" | "NAVER_DATALAB";
   status: "available" | "partial" | "missing";
   document_count: number;
   event_count: number;

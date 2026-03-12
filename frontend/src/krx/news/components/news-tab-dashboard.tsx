@@ -1,9 +1,9 @@
 import Link from "next/link";
 
-import { MarketNewsCardView } from "@/krx/components/news/market-news-card";
 import { EmptyState } from "@/krx/components/ui/empty-state";
 import { SectionHeader } from "@/krx/components/ui/section-header";
 import { newsTabHref, NEWS_TAB_OPTIONS, NewsTabKey } from "@/krx/news/lib/tabs";
+import { MarketNewsCardView } from "@/krx/news/components/market-news-card";
 import { formatKoreanDate } from "@/krx/lib/utils";
 import { MarketNewsCard, MarketNewsCoverage, MarketNewsHeaderContext } from "@/krx/types/domain";
 

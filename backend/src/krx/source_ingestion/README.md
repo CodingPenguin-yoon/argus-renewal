@@ -10,8 +10,8 @@ KRX 뉴스/공시 소스 수집 레이어입니다.
 회사 리포트(대형주 유니버스) runbook은 `COMPANY_REPORT_RUNBOOK.md`를 참고하세요.
 
 ## 1) 목적
-- DART 공시 메타데이터 수집
-- BigKinds 뉴스 메타데이터 수집
+- DART 핵심 공시 메타데이터 수집
+- MK RSS 뉴스 메타데이터 수집
 - Naver 뉴스 discovery/candidate 메타데이터 수집
 - 중복키/중복관계 감사 추적
 
@@ -34,13 +34,16 @@ KRX 뉴스/공시 소스 수집 레이어입니다.
 - 정규화 필드: `provider`, `provider_document_id(rcept_no)`, `document_type`, `title(report_nm)`, `source_url`, `receipt_at`, `published_at`, `company_id(매핑 가능 시)`, `company_ref`
 - 소스 전용 필드: `provider_metadata_json(corp_code/corp_name/corp_cls/flr_nm/rcept_dt/rm)`, `raw_payload_json`
 - Dedup: `PROVIDER_ID` + `rcept_no`
+- 기본값은 `material_only=true`
+- 기본 include 예시: `사업/반기/분기보고서`, `매출액또는손익구조 변동`, `최대주주변경`, `증자/사채/감자`, `단일판매ㆍ공급계약`, `소송/회생/영업정지`
+- 기본 exclude 예시: `주주총회소집공고`, `주주총회소집결의`, `의결권대리행사권유참고서류`, `감사보고서제출`, `효력발생안내`
 
-### BigKinds
-- 정규화 필드: `title`, `publisher`, `publisher_key`, `published_at`, `observed_at`, `published_at_source`, `source_url/canonical_url`, `summary(snippet)`, `query_text`
-- 소스 전용 필드: `provider_metadata_json(query/published_raw/provider_document_id)`, `raw_payload_json(허용 메타데이터 키만 저장)`
-- 본문(Full Text)은 저장하지 않음
+### MK RSS
+- 정규화 필드: `title`, `publisher`, `publisher_key`, `published_at`, `observed_at`, `published_at_source`, `source_url/canonical_url`, `summary(description)`, `query_text`
+- 소스 전용 필드: `provider_metadata_json(feed_url/feed_title/category/pub_date_raw/image_url)`, `raw_payload_json(no/title/link/category/author/pubDate/description)`
+- 기본 피드: 매일경제 경제/증권 RSS
+- query는 RSS 내 `title/description/category` 로컬 필터에 사용
 - Dedup: `NEWS_URL_TITLE` (canonical URL + normalized title hash)
-- 응답 변형 대응: `documents/items/news/data/result/return_object` 계층에서 문서 배열 탐색
 
 ### Naver News
 - 정규화 필드: `title`, `source_url(originallink/link)`, `canonical_url`, `publisher(응답값 우선, 없으면 host 기반 매체명 정규화)`, `publisher_key`, `published_at(pubDate 파싱)`, `observed_at`, `published_at_source`, `summary(description)`, `query_text`
@@ -71,19 +74,16 @@ KRX 뉴스/공시 소스 수집 레이어입니다.
 - `RAW_INGESTION_MAX_RETRIES`
 - `RAW_INGESTION_BACKOFF_SECONDS`
 - `RAW_INGESTION_DESCRIPTOR_FACTORY_PATHS` (comma separated dotted paths or `module:callable`, extra descriptor factories)
+- `MK_RSS_ENABLED`
+- `MK_RSS_FEED_URLS` (comma separated RSS feed URLs)
 
 ### DART
 - `DART_API_KEY`
 - `DART_DISCLOSURE_LIST_URL`
 - `DART_DISCLOSURE_PAGE_COUNT`
-
-### BigKinds
-- `BIGKINDS_NEWS_ENABLED`
-- `BIGKINDS_API_KEY` (enabled일 때 필수)
-- `BIGKINDS_BASE_URL`
-- `BIGKINDS_SEARCH_PATH`
-- `BIGKINDS_PAGE_SIZE`
-- `BIGKINDS_PAGE_LIMIT`
+- `DART_MATERIAL_ONLY`
+- `DART_MATERIAL_INCLUDE_PATTERNS` (comma separated, 비어 있으면 기본 allowlist 사용)
+- `DART_MATERIAL_EXCLUDE_PATTERNS` (comma separated, 비어 있으면 기본 denylist 사용)
 
 ### Naver News
 - `NAVER_NEWS_ENABLED`
@@ -150,8 +150,8 @@ python3 -m src.krx.source_ingestion.cli sync-dart --days 1
 python3 -m src.krx.source_ingestion.cli sync-disclosures --provider DART --days 1
 python3 -m src.krx.source_ingestion.cli sync-news-companies --company-id 1 --days 1
 python3 -m src.krx.source_ingestion.cli sync-news-themes --keyword "반도체" --days 1
-python3 -m src.krx.source_ingestion.cli sync-news --provider BIGKINDS --provider NAVER_NEWS --scope themes --keyword "반도체" --days 1
-python3 -m src.krx.source_ingestion.cli probe-news-provider --provider BIGKINDS --query "반도체" --sample-limit 10
+python3 -m src.krx.source_ingestion.cli sync-news --provider MK_RSS --scope themes --keyword "금리" --days 1
+python3 -m src.krx.source_ingestion.cli probe-news-provider --provider MK_RSS --query "금리" --sample-limit 10
 python3 -m src.krx.source_ingestion.cli probe-news-provider --provider NAVER_NEWS --query "반도체 증시" --sample-limit 10
 python3 -m src.krx.source_ingestion.cli probe-trend-provider --provider NAVER_DATALAB --group "반도체=반도체,삼성전자" --sample-limit 10
 python3 -m src.krx.source_ingestion.cli backfill --start-date 2026-03-01 --end-date 2026-03-09 --provider-scope all --company-id 1 --keyword "금리"
@@ -176,7 +176,7 @@ python3 -m src.krx.source_ingestion.cli import-company-financial-snapshots --com
 - `SKIPPED_DISABLED`(credential/flag 미설정)는 실패로 간주하지 않음
 
 read-only probe 동작:
-- `probe-news-provider`는 `BIGKINDS`, `NAVER_NEWS`를 직접 호출하고 DB에는 아무것도 쓰지 않는다.
+- `probe-news-provider`는 `MK_RSS`, `NAVER_NEWS`를 직접 호출하고 DB에는 아무것도 쓰지 않는다.
 - `probe-trend-provider`는 `NAVER_DATALAB` 점수 응답만 확인하며 기사 row를 만들지 않는다.
 - 두 명령 모두 기본 샘플 출력은 최대 10건이며, credential 누락 시 `SKIPPED_DISABLED`를 반환한다.
 
@@ -191,6 +191,7 @@ publisher backfill:
 
 ## 6) 권장 스케줄
 - DART disclosures: 10~20분 간격 incremental
+- MK RSS theme sync: 15~30분 간격 incremental
 - BigKinds/Naver theme sync: 30분 간격 incremental
 - BigKinds/Naver company sync: 30분 간격 incremental
 - 통합 배치: cron에서 `sync-scheduled`를 10~30분 간격 호출
@@ -202,5 +203,5 @@ publisher backfill:
 - `../scripts/krx-company-report.crontab.example`
 
 ## 7) 장애/비활성 동작
-- BigKinds/Naver가 비활성 또는 자격 증명 누락이면 fetch run 상태를 `SKIPPED_DISABLED`로 기록
+- MK RSS/BigKinds/Naver가 비활성 또는 자격 증명 누락이면 fetch run 상태를 `SKIPPED_DISABLED`로 기록
 - malformed payload는 run 상태를 `FAILED`로 기록하고 `error_message`에 원인 저장

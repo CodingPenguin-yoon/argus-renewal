@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     dart_corp_code_url: str = "https://opendart.fss.or.kr/api/corpCode.xml"
     dart_disclosure_list_url: str = "https://opendart.fss.or.kr/api/list.json"
     dart_disclosure_page_count: int = 100
+    dart_material_only: bool = True
+    dart_material_include_patterns: str = ""
+    dart_material_exclude_patterns: str = ""
 
     kis_master_provider: str = "disabled"
     kis_master_file_path: Optional[str] = None
@@ -71,6 +74,9 @@ class Settings(BaseSettings):
     raw_ingestion_max_retries: int = 3
     raw_ingestion_backoff_seconds: float = 1.0
     raw_ingestion_descriptor_factory_paths: Optional[str] = None
+
+    mk_rss_enabled: bool = False
+    mk_rss_feed_urls: str = "https://www.mk.co.kr/rss/30100041/,https://www.mk.co.kr/rss/50200011/"
 
     bigkinds_news_enabled: bool = False
     bigkinds_base_url: str = "https://tools.kinds.or.kr"

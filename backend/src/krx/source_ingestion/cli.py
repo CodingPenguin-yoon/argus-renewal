@@ -387,7 +387,7 @@ def _probe_news_provider(
     normalized_provider = provider.strip().upper()
 
     provider_map = {
-        "BIGKINDS": service.bigkinds_provider,
+        "MK_RSS": service.mk_rss_provider,
         "NAVER_NEWS": service.naver_provider,
     }
     selected_provider = provider_map.get(normalized_provider)
@@ -1107,7 +1107,7 @@ def build_parser() -> argparse.ArgumentParser:
         "probe-news-provider",
         help="Read-only probe for a raw news provider without writing to the DB",
     )
-    probe_news_parser.add_argument("--provider", required=True, choices=["BIGKINDS", "NAVER_NEWS"])
+    probe_news_parser.add_argument("--provider", required=True, choices=["NAVER_NEWS", "MK_RSS"])
     probe_news_parser.add_argument("--query", required=True)
     probe_news_parser.add_argument("--days", type=int, default=1)
     probe_news_parser.add_argument("--sample-limit", type=int, default=10)

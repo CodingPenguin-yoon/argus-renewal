@@ -1136,7 +1136,7 @@ class NewsProductService:
         raw_news_provider_keys = {
             definition.provider_key
             for definition in provider_definitions.values()
-            if definition.provider_family in RAW_NEWS_PROVIDER_FAMILIES
+            if definition.is_active and definition.provider_family in RAW_NEWS_PROVIDER_FAMILIES
         }
         raw_news_provider_keys.update(docs_by_provider.keys())
         raw_news_provider_keys.update(latest_runs.keys())
@@ -1219,7 +1219,7 @@ class NewsProductService:
             {
                 definition.provider_key
                 for definition in provider_definitions.values()
-                if definition.provider_family == PROVIDER_FAMILY_TREND_SIGNAL
+                if definition.is_active and definition.provider_family == PROVIDER_FAMILY_TREND_SIGNAL
             },
             key=lambda provider: (
                 _provider_priority(

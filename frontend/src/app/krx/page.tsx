@@ -1,4 +1,4 @@
-import { MarketSignalDashboard } from "@/krx/components/market-signal/market-signal-dashboard";
+import { MarketSignalDashboard } from "@/krx/market-signal/components/market-signal-dashboard";
 import { normalizeMarketSignalSubtab } from "@/krx/market-signal/lib/subtabs";
 import { getMarketSignalTabData } from "@/krx/server/data-service";
 

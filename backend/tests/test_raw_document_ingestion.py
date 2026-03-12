@@ -21,6 +21,7 @@ from src.krx.source_ingestion.models import ProviderFetchBatch, RawDocumentCandi
 from src.krx.source_ingestion.provider_descriptors import DocumentSyncRequest, NewsProviderDescriptor
 from src.krx.source_ingestion.providers.bigkinds_provider import BigKindsNewsProvider
 from src.krx.source_ingestion.providers.dart_provider import DartDisclosureProvider
+from src.krx.source_ingestion.providers.mk_rss_provider import MkRssNewsProvider
 from src.krx.source_ingestion.providers.naver_datalab_provider import TrendKeywordGroup, TrendScore, TrendScoreBatch
 from src.krx.source_ingestion.providers.naver_news_provider import NaverNewsProvider
 from src.krx.source_ingestion.service import RawDocumentIngestionService
@@ -30,12 +31,14 @@ def _make_service(
     *,
     db_path: str,
     dart_provider: DartDisclosureProvider,
-    bigkinds_provider: BigKindsNewsProvider,
+    mk_rss_provider: MkRssNewsProvider | None = None,
+    bigkinds_provider: BigKindsNewsProvider | None = None,
     naver_provider: NaverNewsProvider,
 ) -> RawDocumentIngestionService:
     return RawDocumentIngestionService(
         db_path=db_path,
         dart_provider=dart_provider,
+        mk_rss_provider=mk_rss_provider,
         bigkinds_provider=bigkinds_provider,
         naver_provider=naver_provider,
     )
@@ -90,6 +93,13 @@ def _make_disabled_bigkinds_provider() -> BigKindsNewsProvider:
         api_key=None,
         base_url="https://tools.kinds.or.kr",
         search_path="/api/news/search",
+    )
+
+
+def _make_disabled_mk_rss_provider() -> MkRssNewsProvider:
+    return MkRssNewsProvider(
+        enabled=False,
+        feed_urls=[],
     )
 
 
@@ -151,6 +161,52 @@ def test_dart_provider_success_path() -> None:
     assert batch.next_cursor == "20260309:20260309000456"
 
 
+def test_dart_provider_filters_non_material_reports_and_advances_cursor() -> None:
+    def _handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "status": "000",
+                "message": "OK",
+                "total_page": 1,
+                "list": [
+                    {
+                        "rcept_no": "20260308000123",
+                        "report_nm": "최대주주변경",
+                        "corp_code": "00126380",
+                        "corp_name": "삼성전자",
+                        "rcept_dt": "20260308",
+                    },
+                    {
+                        "rcept_no": "20260309000999",
+                        "report_nm": "주주총회소집공고",
+                        "corp_code": "00126380",
+                        "corp_name": "삼성전자",
+                        "rcept_dt": "20260309",
+                    },
+                ],
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(_handler))
+    provider = DartDisclosureProvider(
+        api_key="dummy",
+        list_url="https://opendart.fss.or.kr/api/list.json",
+        http_client=client,
+    )
+
+    try:
+        start, end = _window()
+        batch = provider.fetch_disclosures(window_start=start, window_end=end, cursor=None)
+    finally:
+        client.close()
+
+    assert len(batch.records) == 1
+    assert batch.records[0].title == "최대주주변경"
+    assert batch.next_cursor == "20260309:20260309000999"
+    assert batch.metadata["filtered_count"] == 1
+
+
 def test_bigkinds_provider_disabled_path() -> None:
     provider = BigKindsNewsProvider(
         enabled=True,
@@ -169,75 +225,6 @@ def test_bigkinds_provider_disabled_path() -> None:
 
     assert batch.disabled_reason == "missing_bigkinds_api_key"
     assert batch.records == []
-
-
-def test_bigkinds_variant_payload_and_safe_raw_snapshot(tmp_path: Path) -> None:
-    db_path = str(tmp_path / "raw-ingestion.db")
-
-    def _handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path.endswith("/api/news/search"):
-            return httpx.Response(
-                status_code=200,
-                json={
-                    "return_object": {
-                        "result": {
-                            "documents": [
-                                {
-                                    "news_id": "BK-999",
-                                    "title": "테마주 급등",
-                                    "url": "https://example.com/a/999",
-                                    "publisher": "테스트뉴스",
-                                    "publish_date": "2026/03/09 10:30:00",
-                                    "summary": "요약",
-                                    "content": "본문 전체 텍스트는 저장되면 안 됨",
-                                }
-                            ]
-                        }
-                    }
-                },
-            )
-        return httpx.Response(status_code=404)
-
-    http_client = httpx.Client(transport=httpx.MockTransport(_handler))
-    service = _make_service(
-        db_path=db_path,
-        dart_provider=_make_disabled_dart_provider(),
-        bigkinds_provider=BigKindsNewsProvider(
-            enabled=True,
-            api_key="dummy",
-            base_url="https://tools.kinds.or.kr",
-            search_path="/api/news/search",
-            http_client=http_client,
-            page_size=50,
-            page_limit=1,
-        ),
-        naver_provider=_make_disabled_naver_provider(),
-    )
-
-    try:
-        start, end = _window()
-        results = service.sync_news_candidates_for_themes_window(
-            keywords=["테마주"],
-            window_start=start,
-            window_end=end,
-            backfill=False,
-        )
-    finally:
-        http_client.close()
-
-    result = next(item for item in results if item.provider == "BIGKINDS")
-    assert result.status == "SUCCESS"
-    assert result.inserted_count == 1
-
-    with get_connection(db_path) as connection:
-        row = connection.execute(
-            "SELECT publisher, provider_metadata_json, raw_payload_json FROM raw_documents WHERE provider = 'BIGKINDS'"
-        ).fetchone()
-
-    assert row is not None
-    payload = json.loads(row["raw_payload_json"])
-    assert "content" not in payload
-    assert row["publisher"] == "테스트뉴스"
 
 
 def test_naver_publisher_host_normalization_and_safe_snapshot(tmp_path: Path) -> None:
@@ -307,25 +294,114 @@ def test_naver_publisher_host_normalization_and_safe_snapshot(tmp_path: Path) ->
     assert "content" not in payload
 
 
+def test_mk_rss_provider_filters_feed_and_stores_rows(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "raw-ingestion-mk-rss.db")
+
+    feed_xml = """<?xml version='1.0' encoding='UTF-8'?>
+<rss version="2.0">
+  <channel>
+    <title>매일경제 : 증권</title>
+    <item>
+      <no>11986837</no>
+      <title><![CDATA[금리 인상 우려에 증시 변동성 확대]]></title>
+      <link><![CDATA[https://www.mk.co.kr/news/stock/11986837]]></link>
+      <category><![CDATA[증권]]></category>
+      <author>매일경제</author>
+      <pubDate>Sun, 08 Mar 2026 09:04:19 +0900</pubDate>
+      <description><![CDATA[금리 부담으로 투자 심리가 흔들렸다.]]></description>
+    </item>
+    <item>
+      <no>11986821</no>
+      <title><![CDATA[조선 업황 개선 기대]]></title>
+      <link><![CDATA[https://www.mk.co.kr/news/stock/11986821]]></link>
+      <category><![CDATA[증권]]></category>
+      <author>매일경제</author>
+      <pubDate>Sun, 08 Mar 2026 08:52:06 +0900</pubDate>
+      <description><![CDATA[수주 회복 기대감이 반영됐다.]]></description>
+    </item>
+  </channel>
+</rss>
+"""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.host == "www.mk.co.kr":
+            return httpx.Response(
+                status_code=200,
+                text=feed_xml,
+                headers={"Content-Type": "application/rss+xml; charset=utf-8"},
+            )
+        return httpx.Response(status_code=404)
+
+    http_client = httpx.Client(transport=httpx.MockTransport(_handler))
+    service = _make_service(
+        db_path=db_path,
+        dart_provider=_make_disabled_dart_provider(),
+        mk_rss_provider=MkRssNewsProvider(
+            enabled=True,
+            feed_urls=["https://www.mk.co.kr/rss/50200011/"],
+            http_client=http_client,
+        ),
+        bigkinds_provider=_make_disabled_bigkinds_provider(),
+        naver_provider=_make_disabled_naver_provider(),
+    )
+
+    try:
+        start, end = _window()
+        results = service.sync_news_candidates_for_themes_window(
+            keywords=["금리"],
+            window_start=start,
+            window_end=end,
+            backfill=False,
+        )
+    finally:
+        http_client.close()
+
+    result = next(item for item in results if item.provider == "MK_RSS")
+    assert result.status == "SUCCESS"
+    assert result.inserted_count == 1
+
+    with get_connection(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT provider_document_id, publisher, publisher_key, query_text, raw_payload_json
+            FROM raw_documents
+            WHERE provider = 'MK_RSS'
+            """
+        ).fetchone()
+
+    assert row is not None
+    assert row["provider_document_id"] == "11986837"
+    assert row["publisher"] == "매일경제"
+    assert row["publisher_key"] == "매일경제"
+    assert row["query_text"] == "금리"
+    payload = json.loads(row["raw_payload_json"])
+    assert payload["no"] == "11986837"
+
+
 def test_duplicate_detection_across_news_providers(tmp_path: Path) -> None:
     db_path = str(tmp_path / "raw-ingestion.db")
 
     def _handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path.endswith("/api/news/search"):
+        if request.method == "GET" and request.url.host == "www.mk.co.kr":
             return httpx.Response(
                 status_code=200,
-                json={
-                    "documents": [
-                        {
-                            "id": "bk-1",
-                            "title": "삼성전자 실적 발표",
-                            "url": "https://news.example.com/articles/123?utm_source=test",
-                            "publisher": "연합뉴스",
-                            "published_at": "2026-03-08T01:00:00Z",
-                            "summary": "요약",
-                        }
-                    ]
-                },
+                text="""<?xml version='1.0' encoding='UTF-8'?>
+<rss version="2.0">
+  <channel>
+    <title>매일경제 : 증권</title>
+    <item>
+      <no>11986837</no>
+      <title><![CDATA[삼성전자 실적 발표]]></title>
+      <link><![CDATA[https://news.example.com/articles/123?utm_source=test]]></link>
+      <category><![CDATA[증권]]></category>
+      <author>매일경제</author>
+      <pubDate>Sun, 08 Mar 2026 10:00:00 +0900</pubDate>
+      <description><![CDATA[요약]]></description>
+    </item>
+  </channel>
+</rss>
+""",
+                headers={"Content-Type": "application/rss+xml; charset=utf-8"},
             )
 
         if request.method == "GET" and request.url.path.endswith("/v1/search/news.json"):
@@ -351,14 +427,10 @@ def test_duplicate_detection_across_news_providers(tmp_path: Path) -> None:
     service = _make_service(
         db_path=db_path,
         dart_provider=_make_disabled_dart_provider(),
-        bigkinds_provider=BigKindsNewsProvider(
+        mk_rss_provider=MkRssNewsProvider(
             enabled=True,
-            api_key="dummy",
-            base_url="https://tools.kinds.or.kr",
-            search_path="/api/news/search",
+            feed_urls=["https://www.mk.co.kr/rss/50200011/"],
             http_client=http_client,
-            page_size=50,
-            page_limit=1,
         ),
         naver_provider=NaverNewsProvider(
             enabled=True,
@@ -377,7 +449,7 @@ def test_duplicate_detection_across_news_providers(tmp_path: Path) -> None:
     try:
         start, end = _window()
         results = service.sync_news_candidates_for_themes_window(
-            keywords=["반도체"],
+            keywords=["삼성전자"],
             window_start=start,
             window_end=end,
             backfill=False,
@@ -385,7 +457,9 @@ def test_duplicate_detection_across_news_providers(tmp_path: Path) -> None:
     finally:
         http_client.close()
 
-    assert all(result.status == "SUCCESS" for result in results)
+    status_by_provider = {result.provider: result.status for result in results}
+    assert status_by_provider["MK_RSS"] == "SUCCESS"
+    assert status_by_provider["NAVER_NEWS"] == "SUCCESS"
 
     with get_connection(db_path) as connection:
         documents = connection.execute(
@@ -461,7 +535,7 @@ def test_incremental_sync_resume_for_dart(tmp_path: Path) -> None:
             *state["rows"],
             {
                 "rcept_no": "20260309000003",
-                "report_nm": "수시공시",
+                "report_nm": "최대주주변경",
                 "corp_code": "00333333",
                 "corp_name": "테스트",
                 "rcept_dt": "20260309",
@@ -487,47 +561,6 @@ def test_incremental_sync_resume_for_dart(tmp_path: Path) -> None:
     assert source_row is not None
     assert source_row["last_cursor"] == "20260309:20260309000003"
 
-
-def test_malformed_payload_handling(tmp_path: Path) -> None:
-    db_path = str(tmp_path / "raw-ingestion.db")
-
-    def _handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path.endswith("/api/news/search"):
-            return httpx.Response(status_code=200, json={"unexpected": "payload"})
-        return httpx.Response(status_code=404)
-
-    http_client = httpx.Client(transport=httpx.MockTransport(_handler))
-
-    service = _make_service(
-        db_path=db_path,
-        dart_provider=_make_disabled_dart_provider(),
-        bigkinds_provider=BigKindsNewsProvider(
-            enabled=True,
-            api_key="dummy",
-            base_url="https://tools.kinds.or.kr",
-            search_path="/api/news/search",
-            http_client=http_client,
-            page_limit=1,
-        ),
-        naver_provider=_make_disabled_naver_provider(),
-    )
-
-    try:
-        start, end = _window()
-        results = service.sync_news_candidates_for_themes_window(
-            keywords=["금리"],
-            window_start=start,
-            window_end=end,
-            backfill=False,
-        )
-    finally:
-        http_client.close()
-
-    bigkinds_result = next(result for result in results if result.provider == "BIGKINDS")
-    assert bigkinds_result.status == "FAILED"
-    assert bigkinds_result.error_message is not None
-
-
 def test_happy_path_integration_ingests_dart_and_company_news(tmp_path: Path) -> None:
     db_path = str(tmp_path / "raw-ingestion.db")
 
@@ -551,18 +584,17 @@ def test_happy_path_integration_ingests_dart_and_company_news(tmp_path: Path) ->
         )
 
     def _news_handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path.endswith("/api/news/search"):
+        if request.method == "GET" and request.url.path.endswith("/v1/search/news.json"):
             return httpx.Response(
                 status_code=200,
                 json={
-                    "documents": [
+                    "items": [
                         {
-                            "id": "bk-777",
                             "title": "삼성전자 투자 확대",
-                            "url": "https://news.example.com/articles/777",
-                            "publisher": "한국경제",
-                            "published_at": "2026-03-07T02:00:00Z",
-                            "summary": "투자 확대 소식",
+                            "originallink": "https://news.example.com/articles/777",
+                            "link": "https://n.news.naver.com/article/001/000000777",
+                            "description": "투자 확대 소식",
+                            "pubDate": "Fri, 07 Mar 2026 11:00:00 +0900",
                         }
                     ]
                 },
@@ -579,15 +611,19 @@ def test_happy_path_integration_ingests_dart_and_company_news(tmp_path: Path) ->
             list_url="https://opendart.fss.or.kr/api/list.json",
             http_client=dart_client,
         ),
-        bigkinds_provider=BigKindsNewsProvider(
+        mk_rss_provider=_make_disabled_mk_rss_provider(),
+        naver_provider=NaverNewsProvider(
             enabled=True,
-            api_key="dummy",
-            base_url="https://tools.kinds.or.kr",
-            search_path="/api/news/search",
+            client_id="id",
+            client_secret="secret",
+            base_url="https://openapi.naver.com",
+            search_path="/v1/search/news.json",
+            company_query_template="{company_name}",
+            theme_query_template="{keyword}",
             http_client=news_client,
+            display=50,
             page_limit=1,
         ),
-        naver_provider=_make_disabled_naver_provider(),
     )
 
     with get_connection(db_path) as connection:
@@ -638,7 +674,7 @@ def test_happy_path_integration_ingests_dart_and_company_news(tmp_path: Path) ->
         news_client.close()
 
     assert dart_result.status == "SUCCESS"
-    assert any(result.provider == "BIGKINDS" and result.status == "SUCCESS" for result in news_results)
+    assert any(result.provider == "NAVER_NEWS" and result.status == "SUCCESS" for result in news_results)
 
     with get_connection(db_path) as connection:
         dart_document = connection.execute(
@@ -652,7 +688,7 @@ def test_happy_path_integration_ingests_dart_and_company_news(tmp_path: Path) ->
             """
             SELECT provider, title, company_id
             FROM raw_documents
-            WHERE provider = 'BIGKINDS'
+            WHERE provider = 'NAVER_NEWS'
             """
         ).fetchone()
         run_count = connection.execute(
@@ -1081,7 +1117,7 @@ def test_cli_parser_supports_probe_news_provider_command() -> None:
         [
             "probe-news-provider",
             "--provider",
-            "BIGKINDS",
+            "NAVER_NEWS",
             "--query",
             "반도체",
             "--sample-limit",
@@ -1089,9 +1125,25 @@ def test_cli_parser_supports_probe_news_provider_command() -> None:
         ]
     )
     assert args.command == "probe-news-provider"
-    assert args.provider == "BIGKINDS"
+    assert args.provider == "NAVER_NEWS"
     assert args.query == "반도체"
     assert args.sample_limit == 5
+
+
+def test_cli_parser_supports_probe_news_provider_command_for_mk_rss() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "probe-news-provider",
+            "--provider",
+            "MK_RSS",
+            "--query",
+            "금리",
+        ]
+    )
+    assert args.command == "probe-news-provider"
+    assert args.provider == "MK_RSS"
+    assert args.query == "금리"
 
 
 def test_cli_parser_supports_probe_trend_provider_command() -> None:
@@ -1132,7 +1184,7 @@ def test_probe_news_provider_returns_limited_samples_without_sync_service(monkey
             return ProviderFetchBatch(
                 records=[
                     RawDocumentCandidate(
-                        provider="BIGKINDS",
+                        provider="NAVER_NEWS",
                         provider_document_id=f"BK-{index}",
                         document_type="NEWS_CANDIDATE",
                         title=f"기사 {index}",
@@ -1156,8 +1208,8 @@ def test_probe_news_provider_returns_limited_samples_without_sync_service(monkey
             )
 
     fake_service = SimpleNamespace(
-        bigkinds_provider=_FakeNewsProvider(),
-        naver_provider=None,
+        mk_rss_provider=None,
+        naver_provider=_FakeNewsProvider(),
     )
 
     monkeypatch.setattr(ingestion_cli, "get_settings", lambda: SimpleNamespace())
@@ -1165,7 +1217,7 @@ def test_probe_news_provider_returns_limited_samples_without_sync_service(monkey
     monkeypatch.setattr(ingestion_cli, "_print_json", lambda payload: captured.append(payload))
 
     ingestion_cli._probe_news_provider(
-        provider="BIGKINDS",
+        provider="NAVER_NEWS",
         query="반도체",
         days=2,
         sample_limit=2,
@@ -1188,12 +1240,12 @@ def test_probe_news_provider_surfaces_disabled_reason(monkeypatch: pytest.Monkey
             return ProviderFetchBatch(
                 records=[],
                 next_cursor=None,
-                disabled_reason="missing_bigkinds_api_key",
+                disabled_reason="missing_naver_credentials",
             )
 
     fake_service = SimpleNamespace(
-        bigkinds_provider=_DisabledNewsProvider(),
-        naver_provider=None,
+        mk_rss_provider=None,
+        naver_provider=_DisabledNewsProvider(),
     )
 
     monkeypatch.setattr(ingestion_cli, "get_settings", lambda: SimpleNamespace())
@@ -1201,14 +1253,14 @@ def test_probe_news_provider_surfaces_disabled_reason(monkeypatch: pytest.Monkey
     monkeypatch.setattr(ingestion_cli, "_print_json", lambda payload: captured.append(payload))
 
     ingestion_cli._probe_news_provider(
-        provider="BIGKINDS",
+        provider="NAVER_NEWS",
         query="반도체",
         days=1,
         sample_limit=10,
     )
 
     assert captured[0]["status"] == "SKIPPED_DISABLED"
-    assert captured[0]["disabled_reason"] == "missing_bigkinds_api_key"
+    assert captured[0]["disabled_reason"] == "missing_naver_credentials"
 
 
 def test_probe_trend_provider_returns_score_samples(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -15,6 +15,7 @@ const SCOPE_LABELS: Record<MarketNewsCard["marketScope"], string> = {
 const PROVIDER_LABELS: Record<MarketNewsCard["evidence"][number]["provider"], string> = {
   DART: "DART",
   BIGKINDS: "BIGKinds",
+  MK_RSS: "매일경제 RSS",
   NAVER_NEWS: "Naver 탐색",
 };
 

@@ -161,12 +161,19 @@ DEFAULT_PROVIDER_DEFINITIONS: dict[str, ProviderDefinition] = {
         display_name="BigKinds",
         provider_family=PROVIDER_FAMILY_CURATED_NEWS,
         priority=20,
+        is_active=False,
     ),
     "NAVER_NEWS": build_provider_definition(
         provider_key="NAVER_NEWS",
         display_name="Naver News",
         provider_family=PROVIDER_FAMILY_DISCOVERY_NEWS,
         priority=30,
+    ),
+    "MK_RSS": build_provider_definition(
+        provider_key="MK_RSS",
+        display_name="MK RSS",
+        provider_family=PROVIDER_FAMILY_CURATED_NEWS,
+        priority=22,
     ),
     "NAVER_DATALAB": build_provider_definition(
         provider_key="NAVER_DATALAB",

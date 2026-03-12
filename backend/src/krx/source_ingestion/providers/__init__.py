@@ -4,6 +4,7 @@ from .kis_domestic_derivatives_service import KisDomesticDerivativesService
 from .kis_market_breadth_service import KisMarketBreadthService
 from .kis_night_futures_service import KisNightFuturesService
 from .krx_derivatives_reference_service import KrxDerivativesReferenceService
+from .mk_rss_provider import MkRssNewsProvider
 from .naver_datalab_provider import NaverDatalabTrendProvider, TrendKeywordGroup, TrendScore, TrendScoreBatch
 from .naver_news_provider import NaverNewsProvider
 
@@ -14,6 +15,7 @@ __all__ = [
     "KisMarketBreadthService",
     "KisNightFuturesService",
     "KrxDerivativesReferenceService",
+    "MkRssNewsProvider",
     "NaverDatalabTrendProvider",
     "NaverNewsProvider",
     "TrendKeywordGroup",

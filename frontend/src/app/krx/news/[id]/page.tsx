@@ -2,10 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { DisclaimerBanner } from "@/krx/components/layout/disclaimer-banner";
-import { NewsCard } from "@/krx/components/news/news-card";
 import { Badge } from "@/krx/components/ui/badge";
 import { SectionHeader } from "@/krx/components/ui/section-header";
 import { IMPORTANCE_LABELS, SENTIMENT_LABELS } from "@/krx/lib/constants";
+import { NewsCard } from "@/krx/news/components/news-card";
 import { getNewsDetail } from "@/krx/server/data-service";
 import { formatKoreanDate } from "@/krx/lib/utils";
 

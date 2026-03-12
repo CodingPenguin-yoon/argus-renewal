@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -13,6 +14,58 @@ from ..normalize import dart_dedup_key
 
 logger = logging.getLogger(__name__)
 
+_LEADING_DART_MODIFIER_RE = re.compile(r"^\[[^\]]+\]")
+
+DART_DEFAULT_INCLUDE_PATTERNS = (
+    "사업보고서",
+    "반기보고서",
+    "분기보고서",
+    "매출액또는손익구조",
+    "영업(잠정)실적",
+    "주요사항보고서",
+    "최대주주변경",
+    "최대주주등소유주식변동신고서",
+    "주식등의대량보유상황보고서",
+    "유상증자결정",
+    "무상증자결정",
+    "전환사채권발행결정",
+    "신주인수권부사채권발행결정",
+    "교환사채권발행결정",
+    "감자결정",
+    "주식병합결정",
+    "주식분할결정",
+    "자기주식취득결정",
+    "자기주식처분결정",
+    "타법인주식및출자증권취득결정",
+    "타법인주식및출자증권처분결정",
+    "유형자산취득결정",
+    "유형자산처분결정",
+    "단일판매ㆍ공급계약체결",
+    "단일판매ㆍ공급계약해지",
+    "현금ㆍ현물배당결정",
+    "소송등의제기",
+    "소송등의판결ㆍ결정",
+    "회생절차개시신청",
+    "회생절차개시결정",
+    "부도발생",
+    "영업정지",
+    "해산사유발생",
+    "횡령ㆍ배임",
+)
+
+DART_DEFAULT_EXCLUDE_PATTERNS = (
+    "주주총회소집공고",
+    "주주총회소집결의",
+    "주주총회집중일개최사유신고",
+    "의결권대리행사권유참고서류",
+    "감사보고서제출",
+    "감사보고서",
+    "효력발생안내",
+    "일괄신고추가서류",
+    "증권발행실적보고서",
+    "현금ㆍ현물배당을위한주주명부폐쇄",
+)
+
 
 class DartDisclosureProvider:
     def __init__(
@@ -20,6 +73,9 @@ class DartDisclosureProvider:
         *,
         api_key: str | None,
         list_url: str,
+        material_only: bool = True,
+        include_patterns: tuple[str, ...] | list[str] | None = None,
+        exclude_patterns: tuple[str, ...] | list[str] | None = None,
         page_count: int = 100,
         timeout_seconds: float = 20.0,
         max_retries: int = 3,
@@ -28,6 +84,17 @@ class DartDisclosureProvider:
     ) -> None:
         self.api_key = (api_key or "").strip()
         self.list_url = list_url
+        self.material_only = material_only
+        self.include_patterns = tuple(
+            pattern.strip()
+            for pattern in (include_patterns or DART_DEFAULT_INCLUDE_PATTERNS)
+            if str(pattern).strip()
+        )
+        self.exclude_patterns = tuple(
+            pattern.strip()
+            for pattern in (exclude_patterns or DART_DEFAULT_EXCLUDE_PATTERNS)
+            if str(pattern).strip()
+        )
         self.page_count = page_count
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
@@ -95,10 +162,18 @@ class DartDisclosureProvider:
         ordered_rows = sorted(raw_rows, key=self._cursor_tuple)
         records: list[RawDocumentCandidate] = []
         next_cursor = cursor
+        filtered_count = 0
 
         for row in ordered_rows:
             row_cursor = self._make_cursor(row)
             if cursor and row_cursor and row_cursor <= cursor:
+                continue
+
+            if row_cursor and (next_cursor is None or row_cursor > next_cursor):
+                next_cursor = row_cursor
+
+            if self.material_only and not self._is_material_report(row):
+                filtered_count += 1
                 continue
 
             candidate = self._to_candidate(row)
@@ -106,8 +181,6 @@ class DartDisclosureProvider:
                 continue
 
             records.append(candidate)
-            if row_cursor and (next_cursor is None or row_cursor > next_cursor):
-                next_cursor = row_cursor
 
         logger.info(
             "dart_disclosure_fetch_success",
@@ -115,13 +188,20 @@ class DartDisclosureProvider:
                 "start_day": start_day,
                 "end_day": end_day,
                 "record_count": len(records),
+                "filtered_count": filtered_count,
                 "next_cursor": next_cursor,
             },
         )
         return ProviderFetchBatch(
             records=records,
             next_cursor=next_cursor,
-            metadata={"start_day": start_day, "end_day": end_day, "total_pages": total_page},
+            metadata={
+                "start_day": start_day,
+                "end_day": end_day,
+                "total_pages": total_page,
+                "material_only": self.material_only,
+                "filtered_count": filtered_count,
+            },
         )
 
     def _request_page(self, *, start_day: str, end_day: str, page_no: int) -> dict[str, Any]:
@@ -233,3 +313,22 @@ class DartDisclosureProvider:
         if not receipt_day or not receipt_no:
             return None
         return f"{receipt_day}:{receipt_no}"
+
+    def _is_material_report(self, row: dict[str, Any]) -> bool:
+        normalized_title = self._normalize_report_title(str(row.get("report_nm") or ""))
+        if not normalized_title:
+            return False
+
+        if any(pattern in normalized_title for pattern in self.exclude_patterns):
+            return False
+
+        return any(pattern in normalized_title for pattern in self.include_patterns)
+
+    def _normalize_report_title(self, report_name: str) -> str:
+        normalized = str(report_name or "").strip()
+        while True:
+            updated = _LEADING_DART_MODIFIER_RE.sub("", normalized, count=1).strip()
+            if updated == normalized:
+                break
+            normalized = updated
+        return normalized
