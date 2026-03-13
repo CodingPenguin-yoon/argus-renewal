@@ -221,64 +221,123 @@ class NewsProductService:
                 (column_key, limit or self.card_limit),
             ).fetchall()
 
-            items: list[dict[str, Any]] = []
-            for row in rows:
-                evidence_rows = connection.execute(
-                    """
-                    SELECT
-                        ee.evidence_role,
-                        ee.provider,
-                        ee.title,
-                        ee.snippet,
-                        ee.publisher,
-                        ee.source_url,
-                        ee.published_at,
-                        sd.storage_policy,
-                        sd.canonical_url
-                    FROM event_evidence ee
-                    JOIN news_cards nc ON nc.normalized_event_id = ee.normalized_event_id
-                    JOIN source_documents sd ON sd.id = ee.source_document_id
-                    WHERE nc.card_key = ?
-                    ORDER BY ee.sort_order ASC, COALESCE(ee.published_at, ee.updated_at) DESC
-                    LIMIT ?
-                    """,
-                    (row["card_key"], self.representative_evidence_limit),
-                ).fetchall()
+            return self._serialize_card_rows(connection, rows)
 
-                items.append(
-                    {
-                        "id": row["card_key"],
-                        "title": row["title"],
-                        "one_line_summary": row["one_line_summary"],
-                        "why_it_matters": row["why_it_matters"],
-                        "market_impact": row["market_impact"],
-                        "market_scope": row["market_scope"],
-                        "primary_region": row["primary_region"],
-                        "trust_score": float(row["trust_score"] or 0.0),
-                        "novelty_score": float(row["novelty_score"] or 0.0),
-                        "attention_score": float(row["attention_score"] or 0.0),
-                        "ranking_score": float(row["ranking_score"] or 0.0),
-                        "evidence_count": int(row["evidence_count"] or 0),
-                        "cross_source_score": float(row["cross_source_score"] or 0.0),
-                        "published_at": row["published_at"],
-                        "updated_at": row["updated_at"],
-                        "evidence": [
-                            {
-                                "role": evidence["evidence_role"],
-                                "provider": evidence["provider"],
-                                "title": evidence["title"],
-                                "snippet": evidence["snippet"],
-                                "publisher": evidence["publisher"],
-                                "source_url": evidence["source_url"],
-                                "canonical_url": evidence["canonical_url"],
-                                "storage_policy": evidence["storage_policy"],
-                                "published_at": evidence["published_at"],
-                            }
-                            for evidence in evidence_rows
-                        ],
-                        "provenance": _json_load(row["provenance_json"]) or {},
-                    }
+    def list_disclosure_cards(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+        self._ensure_materialized()
+
+        with get_connection(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    COALESCE(nc.card_key, 'disclosure-card-' || ne.id) AS card_key,
+                    COALESCE(nc.column_key, 'KR') AS column_key,
+                    ne.title,
+                    ne.one_line_summary,
+                    ne.why_it_matters,
+                    ne.market_impact,
+                    ne.market_scope,
+                    ne.primary_region,
+                    ne.trust_score,
+                    ne.novelty_score,
+                    ne.attention_score,
+                    ne.ranking_score,
+                    ne.evidence_count,
+                    ne.published_at,
+                    ne.updated_at,
+                    ne.cluster_key,
+                    ne.cross_source_score,
+                    ne.provenance_json,
+                    ne.id AS normalized_event_id
+                FROM normalized_events ne
+                LEFT JOIN news_cards nc ON nc.normalized_event_id = ne.id
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM event_evidence ee
+                    JOIN source_documents sd ON sd.id = ee.source_document_id
+                    WHERE ee.normalized_event_id = ne.id
+                      AND sd.storage_policy = 'CANONICAL_EVENT'
                 )
+                ORDER BY ne.ranking_score DESC, COALESCE(ne.published_at, ne.updated_at) DESC, ne.id DESC
+                LIMIT ?
+                """,
+                (limit or self.card_limit,),
+            ).fetchall()
+
+            return self._serialize_card_rows(connection, rows)
+
+    def _serialize_card_rows(self, connection, rows) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            normalized_event_id = int(row["normalized_event_id"]) if "normalized_event_id" in row.keys() else None
+            if normalized_event_id is None:
+                event_row = connection.execute(
+                    """
+                    SELECT normalized_event_id
+                    FROM news_cards
+                    WHERE card_key = ?
+                    """,
+                    (row["card_key"],),
+                ).fetchone()
+                normalized_event_id = int(event_row["normalized_event_id"]) if event_row is not None else None
+            if normalized_event_id is None:
+                continue
+
+            evidence_rows = connection.execute(
+                """
+                SELECT
+                    ee.evidence_role,
+                    ee.provider,
+                    ee.title,
+                    ee.snippet,
+                    ee.publisher,
+                    ee.source_url,
+                    ee.published_at,
+                    sd.storage_policy,
+                    sd.canonical_url
+                FROM event_evidence ee
+                JOIN source_documents sd ON sd.id = ee.source_document_id
+                WHERE ee.normalized_event_id = ?
+                ORDER BY ee.sort_order ASC, COALESCE(ee.published_at, ee.updated_at) DESC
+                LIMIT ?
+                """,
+                (normalized_event_id, self.representative_evidence_limit),
+            ).fetchall()
+
+            items.append(
+                {
+                    "id": row["card_key"],
+                    "title": row["title"],
+                    "one_line_summary": row["one_line_summary"],
+                    "why_it_matters": row["why_it_matters"],
+                    "market_impact": row["market_impact"],
+                    "market_scope": row["market_scope"],
+                    "primary_region": row["primary_region"],
+                    "trust_score": float(row["trust_score"] or 0.0),
+                    "novelty_score": float(row["novelty_score"] or 0.0),
+                    "attention_score": float(row["attention_score"] or 0.0),
+                    "ranking_score": float(row["ranking_score"] or 0.0),
+                    "evidence_count": int(row["evidence_count"] or 0),
+                    "cross_source_score": float(row["cross_source_score"] or 0.0),
+                    "published_at": row["published_at"],
+                    "updated_at": row["updated_at"],
+                    "evidence": [
+                        {
+                            "role": evidence["evidence_role"],
+                            "provider": evidence["provider"],
+                            "title": evidence["title"],
+                            "snippet": evidence["snippet"],
+                            "publisher": evidence["publisher"],
+                            "source_url": evidence["source_url"],
+                            "canonical_url": evidence["canonical_url"],
+                            "storage_policy": evidence["storage_policy"],
+                            "published_at": evidence["published_at"],
+                        }
+                        for evidence in evidence_rows
+                    ],
+                    "provenance": _json_load(row["provenance_json"]) or {},
+                }
+            )
 
         return items
 

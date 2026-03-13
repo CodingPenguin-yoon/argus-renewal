@@ -293,7 +293,7 @@ export function emptyMarketNewsHeaderContext(): MarketNewsHeaderContext {
   };
 }
 
-export async function getMarketNewsCards(region: "kr" | "global") {
+export async function getMarketNewsCards(region: "kr" | "global" | "disclosures") {
   const response = await getNewsProductJson<ApiListResponse<ApiMarketNewsCard>>(`/${region}`);
   return response.items.map(mapMarketNewsCard);
 }

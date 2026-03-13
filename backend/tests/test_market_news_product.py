@@ -442,9 +442,12 @@ def test_market_news_product_canonical_dart_event_prefers_primary_disclosure_evi
     news_service.refresh_materialized(force=True)
 
     cards = news_service.list_cards(region="KR", limit=10)
+    disclosure_cards = news_service.list_disclosure_cards(limit=10)
     dart_card = next((card for card in cards if card["evidence"] and card["evidence"][0]["provider"] == "DART"), None)
 
     assert dart_card is not None
+    assert disclosure_cards
+    assert disclosure_cards[0]["evidence"][0]["provider"] == "DART"
     assert dart_card["market_scope"] == "company"
     assert [evidence["provider"] for evidence in dart_card["evidence"][:3]] == ["DART", "MK_RSS", "NAVER_NEWS"]
     assert [evidence["role"] for evidence in dart_card["evidence"][:3]] == ["PRIMARY", "CONFIRMING", "DISCOVERY"]
@@ -644,7 +647,30 @@ def test_market_news_product_empty_and_partial_coverage_states(tmp_path: Path) -
 
 
 def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
-    _, db_path = _make_event_service(tmp_path)
+    event_service, db_path = _make_event_service(tmp_path)
+
+    samsung_id = _insert_company(
+        db_path,
+        canonical_key="manual:samsung-api",
+        canonical_name="삼성전자",
+        primary_stock_code="005930",
+        market_classification="반도체",
+    )
+    _insert_dart_mapping(db_path, corp_code="00126380", corp_name="삼성전자", company_id=samsung_id)
+
+    _insert_raw_document(
+        db_path,
+        provider="DART",
+        document_type="DISCLOSURE",
+        provider_document_id="20260312000001",
+        title="삼성전자 공급계약 체결",
+        summary="대형 공급계약 공시",
+        publisher="DART",
+        source_url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260312000001",
+        canonical_url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260312000001",
+        company_id=samsung_id,
+        provider_metadata={"corp_code": "00126380", "corp_name": "삼성전자"},
+    )
 
     _insert_raw_document(
         db_path,
@@ -671,6 +697,9 @@ def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
         query_text="미국 증시",
     )
 
+    result = event_service.normalize_pending_documents(limit=50, include_llm=False)
+    assert result.status == "SUCCESS"
+
     monkeypatch.setenv("DB_PATH", db_path)
     get_settings.cache_clear()
 
@@ -678,6 +707,7 @@ def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
     try:
         kr_response = client.get("/api/news/kr")
         global_response = client.get("/api/news/global")
+        disclosures_response = client.get("/api/news/disclosures")
         header_response = client.get("/api/news/header-context")
         coverage_response = client.get("/api/news/coverage")
     finally:
@@ -685,9 +715,12 @@ def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
 
     assert kr_response.status_code == 200
     assert global_response.status_code == 200
+    assert disclosures_response.status_code == 200
     assert header_response.status_code == 200
     assert coverage_response.status_code == 200
     assert len(kr_response.json()["items"]) >= 1
     assert len(global_response.json()["items"]) >= 1
+    assert len(disclosures_response.json()["items"]) >= 1
+    assert disclosures_response.json()["items"][0]["evidence"][0]["provider"] == "DART"
     assert header_response.json()["columns"][0]["label"] == "한국 증시"
     assert "items" in coverage_response.json()

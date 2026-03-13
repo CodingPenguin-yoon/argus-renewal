@@ -78,10 +78,6 @@ function keepMvpNewsScope(region: "KR" | "GLOBAL", cards: Awaited<ReturnType<typ
   return cards.filter((card) => card.primaryRegion === region && card.marketScope === allowedScope);
 }
 
-function hasDisclosureSignal(card: MarketNewsCard) {
-  return card.marketScope === "company" || card.evidence.some((evidence) => evidence.provider === "DART");
-}
-
 function sortByRankingScoreDesc(cards: MarketNewsCard[]) {
   return [...cards].sort((a, b) => {
     if (b.rankingScore !== a.rankingScore) {
@@ -242,17 +238,16 @@ export async function getMarketSignalTabData() {
 
 export async function getNewsTabData() {
   try {
-    const [krCardsRaw, globalCardsRaw, headerContext, coverage] = await Promise.all([
+    const [krCardsRaw, globalCardsRaw, disclosureCardsRaw, headerContext, coverage] = await Promise.all([
       getMarketNewsCards("kr"),
       getMarketNewsCards("global"),
+      getMarketNewsCards("disclosures"),
       getMarketNewsHeaderContext(),
       getMarketNewsCoverage(),
     ]);
     const krCards = sortByRankingScoreDesc(keepMvpNewsScope("KR", krCardsRaw));
     const globalCards = sortByRankingScoreDesc(keepMvpNewsScope("GLOBAL", globalCardsRaw));
-    const disclosureCards = sortByRankingScoreDesc(
-      [...krCardsRaw, ...globalCardsRaw].filter(hasDisclosureSignal),
-    ).slice(0, 12);
+    const disclosureCards = sortByRankingScoreDesc(disclosureCardsRaw).slice(0, 12);
 
     return {
       krCards,
