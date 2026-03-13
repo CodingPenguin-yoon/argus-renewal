@@ -151,6 +151,16 @@ class Settings(BaseSettings):
     news_product_representative_evidence_limit: int = 3
     news_product_refresh_ttl_seconds: int = 300
     news_product_datalab_window_days: int = 7
+    news_product_editorial_ai_enabled: bool = False
+    news_product_editorial_ai_provider: str = "disabled"
+    news_product_editorial_ai_base_url: Optional[str] = None
+    news_product_editorial_ai_api_key: Optional[str] = None
+    news_product_editorial_ai_model: Optional[str] = None
+    news_product_editorial_ai_timeout_seconds: float = 20.0
+    news_product_editorial_ai_max_retries: int = 2
+    news_product_editorial_ai_backoff_seconds: float = 1.0
+    news_product_editorial_ai_candidate_limit: int = 8
+    news_product_editorial_ai_min_editorial_score: float = 0.55
 
     global_events_sync_enabled: bool = True
     global_events_schedule_lookback_days: int = 7

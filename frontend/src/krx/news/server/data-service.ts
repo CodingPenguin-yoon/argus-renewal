@@ -25,6 +25,9 @@ type ApiNews = {
   credibility_score: number;
   materiality_score: number;
   editorial_score: number;
+  story_state: "NEW" | "ONGOING" | "DISCLOSURE_CONFIRMED";
+  editorial_reason: string | null;
+  ai_confidence: number;
   sentiment: "positive" | "neutral" | "negative";
   importance: "high" | "medium" | "low";
   related_sectors: string[];
@@ -58,6 +61,10 @@ type ApiMarketNewsCard = {
   novelty_score: number;
   attention_score: number;
   editorial_score: number;
+  story_state: "NEW" | "ONGOING" | "DISCLOSURE_CONFIRMED";
+  importance_label: "high" | "medium" | "low";
+  editorial_reason: string | null;
+  ai_confidence: number;
   ranking_score: number;
   evidence_count: number;
   cross_source_score: number;
@@ -120,6 +127,9 @@ function mapNews(item: ApiNews): News {
     credibilityScore: item.credibility_score,
     materialityScore: item.materiality_score,
     editorialScore: item.editorial_score,
+    storyState: item.story_state,
+    editorialReason: item.editorial_reason,
+    aiConfidence: item.ai_confidence,
     sentiment: item.sentiment,
     importance: item.importance,
     relatedSectors: item.related_sectors as Sector[],
@@ -158,6 +168,10 @@ function mapMarketNewsCard(item: ApiMarketNewsCard): MarketNewsCard {
     noveltyScore: item.novelty_score,
     attentionScore: item.attention_score,
     editorialScore: item.editorial_score,
+    storyState: item.story_state,
+    importanceLabel: item.importance_label,
+    editorialReason: item.editorial_reason,
+    aiConfidence: item.ai_confidence,
     rankingScore: item.ranking_score,
     evidenceCount: item.evidence_count,
     crossSourceScore: item.cross_source_score,

@@ -38,6 +38,16 @@
 - `NEWS_PRODUCT_REPRESENTATIVE_EVIDENCE_LIMIT`
 - `NEWS_PRODUCT_REFRESH_TTL_SECONDS`
 - `NEWS_PRODUCT_DATALAB_WINDOW_DAYS`
+- `NEWS_PRODUCT_EDITORIAL_AI_ENABLED`
+- `NEWS_PRODUCT_EDITORIAL_AI_PROVIDER`
+- `NEWS_PRODUCT_EDITORIAL_AI_BASE_URL`
+- `NEWS_PRODUCT_EDITORIAL_AI_API_KEY`
+- `NEWS_PRODUCT_EDITORIAL_AI_MODEL`
+- `NEWS_PRODUCT_EDITORIAL_AI_TIMEOUT_SECONDS`
+- `NEWS_PRODUCT_EDITORIAL_AI_MAX_RETRIES`
+- `NEWS_PRODUCT_EDITORIAL_AI_BACKOFF_SECONDS`
+- `NEWS_PRODUCT_EDITORIAL_AI_CANDIDATE_LIMIT`
+- `NEWS_PRODUCT_EDITORIAL_AI_MIN_EDITORIAL_SCORE`
 
 ## Source Persistence Policy
 - `source_documents`
@@ -56,13 +66,20 @@
   - provider별 데이터 가용성, 최근 동기화 시각, 부분 실패 상태를 추적
 
 ## Ranking Logic
+- score layers
+  - `trust_score`: source credibility
+  - `materiality_score`: 내용 영향도
+  - `editorial_score`: 화면 우선순위
 - 기본 점수
   - source trust (`DART` > `MK_RSS` > `NAVER_NEWS`)
-  - market scope priority (`kr_market`, `global_market` 우선)
+  - materiality (`event_type`, `impact`, `scope`, canonical anchor 기반)
   - novelty (최근성 기반)
 - 보너스
   - cross-source confirmation bonus
   - Naver Datalab attention bonus
+- AI editorial enrichment
+  - 상위 candidate 카드에만 optional `story_state`, `importance_label`, `editorial_reason`, `editorial_boost`를 적용
+  - 실패 시 deterministic score만 사용
 - 감점
   - 저품질 headline marker (`속보`, `관련주`, `급등` 등)
 - 노이즈 억제
@@ -77,8 +94,13 @@
   - `market_scope`
   - `primary_region`
   - `trust_score`
+  - `materiality_score`
   - `novelty_score`
   - `attention_score`
+  - `editorial_score`
+  - `story_state`
+  - `importance_label`
+  - `editorial_reason`
   - `evidence`
   - `published_at`
   - `updated_at`

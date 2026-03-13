@@ -17,6 +17,12 @@ from ..provider_registry import (
     list_provider_definitions,
     resolve_provider_definition,
 )
+from .editorial_ai import (
+    DisabledNewsEditorialAIProvider,
+    NewsEditorialAIProvider,
+    NewsEditorialAIRequest,
+    NewsEditorialAIResponse,
+)
 from ..source_ingestion.document_time import effective_document_time, effective_document_time_sql
 from ..source_ingestion.event_taxonomy import (
     SOURCE_TRUST_SCORES,
@@ -236,19 +242,25 @@ class NewsProductService:
         *,
         db_path: str,
         datalab_provider: NaverDatalabTrendProvider,
+        editorial_ai_provider: NewsEditorialAIProvider | None = None,
         lookback_days: int = 7,
         card_limit: int = 12,
         representative_evidence_limit: int = 3,
         refresh_ttl_seconds: int = 300,
         datalab_window_days: int = 7,
+        editorial_ai_candidate_limit: int = 8,
+        editorial_ai_min_editorial_score: float = 0.55,
     ) -> None:
         self.db_path = db_path
         self.datalab_provider = datalab_provider
+        self.editorial_ai_provider = editorial_ai_provider or DisabledNewsEditorialAIProvider()
         self.lookback_days = max(1, lookback_days)
         self.card_limit = max(1, card_limit)
         self.representative_evidence_limit = max(1, representative_evidence_limit)
         self.refresh_ttl_seconds = max(30, refresh_ttl_seconds)
         self.datalab_window_days = max(1, datalab_window_days)
+        self.editorial_ai_candidate_limit = max(0, editorial_ai_candidate_limit)
+        self.editorial_ai_min_editorial_score = _clamp(editorial_ai_min_editorial_score)
 
     def list_cards(self, *, region: str, limit: int | None = None) -> list[dict[str, Any]]:
         self._ensure_materialized()
@@ -406,6 +418,8 @@ class NewsProductService:
             if normalized_event_id is None:
                 continue
 
+            provenance = _json_load(row["provenance_json"]) or {}
+
             evidence_rows = connection.execute(
                 """
                 SELECT
@@ -446,6 +460,12 @@ class NewsProductService:
                     "cross_source_score": float(row["cross_source_score"] or 0.0),
                     "published_at": row["published_at"],
                     "updated_at": row["updated_at"],
+                    "story_state": provenance.get("story_state") or "NEW",
+                    "importance_label": provenance.get("importance_label") or self._legacy_importance_from_score(
+                        float(row["materiality_score"] or 0.0)
+                    ),
+                    "editorial_reason": provenance.get("editorial_reason"),
+                    "ai_confidence": float(provenance.get("ai_confidence") or 0.0),
                     "evidence": [
                         {
                             "role": evidence["evidence_role"],
@@ -460,7 +480,7 @@ class NewsProductService:
                         }
                         for evidence in evidence_rows
                     ],
-                    "provenance": _json_load(row["provenance_json"]) or {},
+                    "provenance": provenance,
                 }
             )
 
@@ -495,8 +515,11 @@ class NewsProductService:
             "credibility_score": float(card.get("trust_score") or 0.0),
             "materiality_score": float(card.get("materiality_score") or 0.0),
             "editorial_score": float(card.get("editorial_score") or 0.0),
+            "story_state": card.get("story_state") or "NEW",
+            "editorial_reason": card.get("editorial_reason"),
+            "ai_confidence": float(card.get("ai_confidence") or 0.0),
             "sentiment": self._legacy_sentiment(card),
-            "importance": self._legacy_importance(card),
+            "importance": str(card.get("importance_label") or self._legacy_importance(card)),
             "related_sectors": related_sectors,
             "related_tickers": related_tickers,
             "category": self._legacy_category(card),
@@ -691,7 +714,19 @@ class NewsProductService:
             provider_definitions=provider_definitions,
         )
         attention_scores, datalab_status = self._resolve_attention_scores(clusters)
-        self._replace_materialized_events(connection, clusters, attention_scores, now)
+        editorial_ai_enrichments = self._resolve_editorial_ai_enrichments(
+            connection,
+            clusters=clusters,
+            attention_scores=attention_scores,
+            now=now,
+        )
+        self._replace_materialized_events(
+            connection,
+            clusters,
+            attention_scores,
+            editorial_ai_enrichments,
+            now,
+        )
         self._replace_source_coverage(
             connection,
             now=now,
@@ -1204,17 +1239,28 @@ class NewsProductService:
             return {}, {"status": "missing", "note": disabled_reason, "disabled_reason": disabled_reason}
         return scores, {"status": "available", "note": "ok", "disabled_reason": None}
 
-    def _replace_materialized_events(
+    def _resolve_editorial_ai_enrichments(
         self,
         connection,
+        *,
         clusters: list[dict[str, Any]],
         attention_scores: dict[str, float],
         now: str,
-    ) -> None:
+    ) -> dict[str, dict[str, Any]]:
+        if self.editorial_ai_candidate_limit <= 0:
+            return {}
+
+        enabled, reason = self.editorial_ai_provider.is_enabled()
+        if not enabled:
+            logger.info("news_editorial_ai_skipped", extra={"reason": reason})
+            return {}
+
+        provisional_candidates = []
         for cluster in clusters:
+            if cluster["market_scope"] == "ignore":
+                continue
             attention_score = attention_scores.get(cluster["cluster_key"], 0.0)
-            cluster["attention_score"] = attention_score
-            cluster["editorial_score"] = self._editorial_score(
+            provisional_score = self._editorial_score(
                 trust_score=cluster["trust_score"],
                 materiality_score=cluster["materiality_score"],
                 novelty_score=cluster["novelty_score"],
@@ -1225,6 +1271,243 @@ class NewsProductService:
                 has_persistent_evidence=cluster["has_persistent_evidence"],
                 quality_flags=cluster["quality_flags"],
             )
+            if provisional_score < self.editorial_ai_min_editorial_score:
+                continue
+            provisional_candidates.append((provisional_score, attention_score, cluster))
+
+        enrichments: dict[str, dict[str, Any]] = {}
+        for _, attention_score, cluster in sorted(
+            provisional_candidates,
+            key=lambda item: item[0],
+            reverse=True,
+        )[: self.editorial_ai_candidate_limit]:
+            request = self._build_editorial_ai_request(cluster=cluster, attention_score=attention_score)
+            input_hash = self._hash_text(
+                json.dumps(
+                    {
+                        "title": request.title,
+                        "summary": request.one_line_summary,
+                        "why_it_matters": request.why_it_matters,
+                        "market_impact": request.market_impact,
+                        "market_scope": request.market_scope,
+                        "event_type": request.event_type,
+                        "event_subtype": request.event_subtype,
+                        "trust_score": request.trust_score,
+                        "materiality_score": request.materiality_score,
+                        "novelty_score": request.novelty_score,
+                        "cross_source_score": request.cross_source_score,
+                        "attention_score": request.attention_score,
+                        "evidence": request.evidence,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            cached = self._load_cached_editorial_enrichment(
+                connection,
+                cluster_key=request.cluster_key,
+                input_hash=input_hash,
+            )
+            if cached is not None:
+                enrichments[request.cluster_key] = cached
+                continue
+
+            try:
+                response = self.editorial_ai_provider.enrich(request)
+            except Exception as error:  # noqa: BLE001
+                logger.warning(
+                    "news_editorial_ai_failed",
+                    extra={"cluster_key": request.cluster_key, "error": str(error)},
+                )
+                continue
+
+            if response is None:
+                continue
+
+            enrichments[request.cluster_key] = {
+                "story_state": response.story_state,
+                "importance_label": response.importance_label,
+                "editorial_reason": response.editorial_reason,
+                "editorial_boost": response.editorial_boost,
+                "ai_confidence": response.confidence,
+                "provider_name": self.editorial_ai_provider.provider_name,
+                "model_name": self.editorial_ai_provider.model_name(),
+            }
+            self._upsert_editorial_enrichment(
+                connection,
+                cluster_key=request.cluster_key,
+                input_hash=input_hash,
+                response=response,
+                now=now,
+            )
+        return enrichments
+
+    def _build_editorial_ai_request(
+        self,
+        *,
+        cluster: dict[str, Any],
+        attention_score: float,
+    ) -> NewsEditorialAIRequest:
+        evidence_payload = [
+            {
+                "provider": evidence["provider"],
+                "publisher": evidence.get("publisher"),
+                "storage_policy": evidence["storage_policy"],
+                "title": evidence["title"],
+                "snippet": evidence["snippet"],
+                "published_at": evidence["published_at"],
+            }
+            for evidence in cluster["evidence"][: self.representative_evidence_limit]
+        ]
+        return NewsEditorialAIRequest(
+            cluster_key=cluster["cluster_key"],
+            title=cluster["title"],
+            one_line_summary=cluster["one_line_summary"],
+            why_it_matters=cluster["why_it_matters"],
+            market_impact=cluster["market_impact"],
+            market_scope=cluster["market_scope"],
+            primary_region=cluster["primary_region"],
+            event_type=cluster["event_type"],
+            event_subtype=cluster["event_subtype"],
+            impact_direction=cluster["impact_direction"],
+            impact_horizon=cluster["impact_horizon"],
+            source_type=cluster["source_type"],
+            trust_score=float(cluster["trust_score"]),
+            materiality_score=float(cluster["materiality_score"]),
+            novelty_score=float(cluster["novelty_score"]),
+            cross_source_score=float(cluster["cross_source_score"]),
+            attention_score=float(attention_score),
+            evidence_count=len(cluster["evidence"]),
+            direct_company_names=sorted(cluster["direct_company_names"]),
+            direct_company_tickers=sorted(cluster["direct_company_tickers"]),
+            sector_tags=sorted(cluster["sector_tags"]),
+            keyword_tags=sorted(cluster["keyword_tags"]),
+            evidence=evidence_payload,
+        )
+
+    def _load_cached_editorial_enrichment(
+        self,
+        connection,
+        *,
+        cluster_key: str,
+        input_hash: str,
+    ) -> dict[str, Any] | None:
+        row = connection.execute(
+            """
+            SELECT
+                story_state,
+                importance_label,
+                editorial_reason,
+                editorial_boost,
+                ai_confidence,
+                provider_name,
+                model_name
+            FROM news_editorial_enrichments
+            WHERE cluster_key = ?
+              AND input_hash = ?
+            """,
+            (cluster_key, input_hash),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "story_state": row["story_state"],
+            "importance_label": row["importance_label"],
+            "editorial_reason": row["editorial_reason"],
+            "editorial_boost": float(row["editorial_boost"] or 0.0),
+            "ai_confidence": float(row["ai_confidence"] or 0.0),
+            "provider_name": row["provider_name"],
+            "model_name": row["model_name"],
+        }
+
+    def _upsert_editorial_enrichment(
+        self,
+        connection,
+        *,
+        cluster_key: str,
+        input_hash: str,
+        response: NewsEditorialAIResponse,
+        now: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO news_editorial_enrichments (
+                cluster_key,
+                input_hash,
+                story_state,
+                importance_label,
+                editorial_reason,
+                editorial_boost,
+                ai_confidence,
+                provider_name,
+                model_name,
+                raw_output_json,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(cluster_key) DO UPDATE SET
+                input_hash = excluded.input_hash,
+                story_state = excluded.story_state,
+                importance_label = excluded.importance_label,
+                editorial_reason = excluded.editorial_reason,
+                editorial_boost = excluded.editorial_boost,
+                ai_confidence = excluded.ai_confidence,
+                provider_name = excluded.provider_name,
+                model_name = excluded.model_name,
+                raw_output_json = excluded.raw_output_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                cluster_key,
+                input_hash,
+                response.story_state,
+                response.importance_label,
+                response.editorial_reason,
+                response.editorial_boost,
+                response.confidence,
+                self.editorial_ai_provider.provider_name,
+                self.editorial_ai_provider.model_name(),
+                json.dumps(response.raw_output, ensure_ascii=False, sort_keys=True),
+                now,
+                now,
+            ),
+        )
+
+    def _replace_materialized_events(
+        self,
+        connection,
+        clusters: list[dict[str, Any]],
+        attention_scores: dict[str, float],
+        editorial_ai_enrichments: dict[str, dict[str, Any]],
+        now: str,
+    ) -> None:
+        for cluster in clusters:
+            attention_score = attention_scores.get(cluster["cluster_key"], 0.0)
+            cluster["attention_score"] = attention_score
+            base_editorial_score = self._editorial_score(
+                trust_score=cluster["trust_score"],
+                materiality_score=cluster["materiality_score"],
+                novelty_score=cluster["novelty_score"],
+                cross_source_score=cluster["cross_source_score"],
+                attention_score=attention_score,
+                market_scope=cluster["market_scope"],
+                has_canonical_anchor=cluster["has_canonical_anchor"],
+                has_persistent_evidence=cluster["has_persistent_evidence"],
+                quality_flags=cluster["quality_flags"],
+            )
+            editorial_enrichment = editorial_ai_enrichments.get(cluster["cluster_key"]) or {}
+            editorial_boost = float(editorial_enrichment.get("editorial_boost") or 0.0)
+            story_state = str(
+                editorial_enrichment.get("story_state")
+                or self._default_story_state(cluster=cluster, attention_score=attention_score)
+            )
+            importance_label = str(
+                editorial_enrichment.get("importance_label")
+                or self._legacy_importance_from_score(cluster["materiality_score"])
+            )
+            editorial_reason = editorial_enrichment.get("editorial_reason")
+            ai_confidence = float(editorial_enrichment.get("ai_confidence") or 0.0)
+            cluster["editorial_score"] = round(_clamp(base_editorial_score + editorial_boost), 4)
             cluster["ranking_score"] = cluster["editorial_score"]
             connection.execute(
                 """
@@ -1289,7 +1572,15 @@ class NewsProductService:
                             "canonical_anchor": cluster["has_canonical_anchor"],
                             "persistent_evidence": cluster["has_persistent_evidence"],
                             "materiality_score": cluster["materiality_score"],
+                            "base_editorial_score": base_editorial_score,
                             "editorial_score": cluster["editorial_score"],
+                            "editorial_boost": editorial_boost,
+                            "story_state": story_state,
+                            "importance_label": importance_label,
+                            "editorial_reason": editorial_reason,
+                            "ai_confidence": ai_confidence,
+                            "ai_provider": editorial_enrichment.get("provider_name"),
+                            "ai_model": editorial_enrichment.get("model_name"),
                             "quality_flags": sorted(cluster["quality_flags"]),
                             "direct_company_names": sorted(cluster["direct_company_names"]),
                             "direct_company_tickers": sorted(cluster["direct_company_tickers"]),
@@ -1920,6 +2211,23 @@ class NewsProductService:
             score -= 0.04
         return round(_clamp(score), 4)
 
+    def _default_story_state(self, *, cluster: dict[str, Any], attention_score: float) -> str:
+        if cluster["has_canonical_anchor"] and len(cluster["evidence"]) >= 2:
+            return "DISCLOSURE_CONFIRMED"
+        if cluster["novelty_score"] < 0.58 or attention_score >= 0.42 or len(cluster["evidence"]) >= 3:
+            return "ONGOING"
+        return "NEW"
+
+    def _hash_text(self, value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def _legacy_importance_from_score(self, materiality_score: float) -> str:
+        if materiality_score >= 0.8:
+            return "high"
+        if materiality_score >= 0.62:
+            return "medium"
+        return "low"
+
     def _legacy_news_type(self, card: dict[str, Any]) -> str:
         return "stock" if card.get("market_scope") == "company" else "macro"
 
@@ -1931,12 +2239,7 @@ class NewsProductService:
         return "neutral"
 
     def _legacy_importance(self, card: dict[str, Any]) -> str:
-        materiality_score = float(card.get("materiality_score") or 0.0)
-        if materiality_score >= 0.8:
-            return "high"
-        if materiality_score >= 0.62:
-            return "medium"
-        return "low"
+        return self._legacy_importance_from_score(float(card.get("materiality_score") or 0.0))
 
     def _legacy_category(self, card: dict[str, Any]) -> str:
         provenance = card.get("provenance") or {}

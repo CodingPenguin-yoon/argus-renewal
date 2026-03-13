@@ -5,6 +5,7 @@ export type NewsType = "macro" | "stock";
 export type Sentiment = "positive" | "neutral" | "negative";
 
 export type Importance = "high" | "medium" | "low";
+export type StoryState = "NEW" | "ONGOING" | "DISCLOSURE_CONFIRMED";
 
 export type MacroCategory =
   | "금리"
@@ -57,6 +58,9 @@ export type NewsBase = {
   credibilityScore: number;
   materialityScore: number;
   editorialScore: number;
+  storyState: StoryState;
+  editorialReason: string | null;
+  aiConfidence: number;
   sentiment: Sentiment;
   importance: Importance;
   relatedSectors: Sector[];
@@ -240,6 +244,10 @@ export type MarketNewsCard = {
   noveltyScore: number;
   attentionScore: number;
   editorialScore: number;
+  storyState: StoryState;
+  importanceLabel: Importance;
+  editorialReason: string | null;
+  aiConfidence: number;
   rankingScore: number;
   evidenceCount: number;
   crossSourceScore: number;

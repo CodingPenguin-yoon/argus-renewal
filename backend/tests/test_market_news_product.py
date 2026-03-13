@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from src.config.env import get_settings
 from src.krx.company_master.db import get_connection, utcnow_iso
+from src.krx.news.editorial_ai import NewsEditorialAIRequest, NewsEditorialAIResponse
 from src.krx.news.service import NewsProductService
 from src.krx.provider_registry import build_provider_definition, ensure_provider_definition
 from src.krx.source_ingestion.event_service import EventNormalizationService
@@ -43,6 +44,22 @@ class StubDatalabProvider:
         )
 
 
+class StubEditorialAIProvider:
+    provider_name = "stub_editorial_ai"
+
+    def __init__(self, response_by_title: dict[str, NewsEditorialAIResponse] | None = None) -> None:
+        self.response_by_title = response_by_title or {}
+
+    def is_enabled(self) -> tuple[bool, str | None]:
+        return True, None
+
+    def model_name(self) -> str | None:
+        return "stub-model"
+
+    def enrich(self, request: NewsEditorialAIRequest) -> NewsEditorialAIResponse | None:
+        return self.response_by_title.get(request.title)
+
+
 def _make_event_service(tmp_path: Path) -> tuple[EventNormalizationService, str]:
     db_path = str(tmp_path / "market-news.db")
     return (
@@ -60,15 +77,21 @@ def _make_news_service(
     *,
     scores: dict[str, float] | None = None,
     disabled_reason: str | None = None,
+    editorial_provider=None,
+    editorial_candidate_limit: int = 8,
+    editorial_min_score: float = 0.55,
 ) -> NewsProductService:
     return NewsProductService(
         db_path=db_path,
         datalab_provider=StubDatalabProvider(scores=scores, disabled_reason=disabled_reason),
+        editorial_ai_provider=editorial_provider,
         lookback_days=7,
         card_limit=12,
         representative_evidence_limit=3,
         refresh_ttl_seconds=300,
         datalab_window_days=7,
+        editorial_ai_candidate_limit=editorial_candidate_limit,
+        editorial_ai_min_editorial_score=editorial_min_score,
     )
 
 
@@ -380,6 +403,58 @@ def test_market_news_product_ranking_prefers_confirmed_high_quality_events(tmp_p
     assert cards[0]["materiality_score"] >= cards[1]["materiality_score"]
     assert cards[0]["editorial_score"] >= cards[1]["editorial_score"]
     assert cards[0]["ranking_score"] > cards[1]["ranking_score"]
+
+
+def test_market_news_product_applies_editorial_ai_enrichment(tmp_path: Path) -> None:
+    _, db_path = _make_event_service(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-EDITORIAL-1",
+        title="코스피 반도체주 강세, 외국인 순매수 확대",
+        summary="한국 증시 대표 섹터에 수급 개선이 겹쳤다.",
+        publisher="매일경제",
+        source_url="https://example.com/editorial-1",
+        canonical_url="https://example.com/editorial-1",
+        query_text="반도체 증시",
+    )
+
+    response = NewsEditorialAIResponse(
+        story_state="ONGOING",
+        importance_label="high",
+        editorial_reason="외국인 수급과 핵심 섹터 흐름이 겹쳐 오늘 요약판 상단 후보입니다.",
+        editorial_boost=0.06,
+        confidence=0.81,
+        raw_output={
+            "story_state": "ONGOING",
+            "importance_label": "high",
+            "editorial_reason": "외국인 수급과 핵심 섹터 흐름이 겹쳐 오늘 요약판 상단 후보입니다.",
+            "editorial_boost": 0.06,
+            "confidence": 0.81,
+        },
+    )
+    news_service = _make_news_service(
+        db_path,
+        scores={"group-1": 61.0},
+        editorial_provider=StubEditorialAIProvider(
+            response_by_title={"코스피 반도체주 강세, 외국인 순매수 확대": response}
+        ),
+        editorial_candidate_limit=3,
+        editorial_min_score=0.2,
+    )
+    news_service.refresh_materialized(force=True)
+
+    cards = news_service.list_cards(region="KR", limit=10)
+
+    assert cards
+    assert cards[0]["story_state"] == "ONGOING"
+    assert cards[0]["importance_label"] == "high"
+    assert cards[0]["editorial_reason"] == response.editorial_reason
+    assert abs(float(cards[0]["ai_confidence"]) - 0.81) < 1e-6
+    assert abs(float(cards[0]["ranking_score"]) - float(cards[0]["editorial_score"])) < 1e-6
+    assert cards[0]["provenance"]["ai_provider"] == "stub_editorial_ai"
 
 
 def test_market_news_product_canonical_dart_event_prefers_primary_disclosure_evidence(tmp_path: Path) -> None:
