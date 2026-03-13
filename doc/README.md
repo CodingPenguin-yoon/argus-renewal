@@ -14,6 +14,7 @@
 - `architecture/current-system-map.md`: 실제 런타임 진입점, 주요 실행 경로, 프런트와 백엔드 연결 지점
 - `architecture/domain-oriented-data-model.md`: 도메인/프로바이더/퍼블리셔 축 기준으로 본 추천 데이터 모델
 - `architecture/provider-flexibility-design.md`: provider 추가/교체를 전제로 한 뉴스/공시 파이프라인 유연화 설계안
+- `architecture/krx_market_news_rebuild_plan.md`: 국장 중심 뉴스/공시 가공 레이어 재설계안과 AI 도입 원칙
 - `PROJECT_STRUCTURE.md`: 현재 리포지토리의 디렉터리 구조와 역할 요약
 - `analysis/risk-priority.md`: 문제 가능성이 높은 영역을 우선순위로 정리한 점검 가이드
 
