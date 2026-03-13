@@ -120,6 +120,45 @@ _MARKET_SCOPE_PRIORITY = {
     "company": 0.18,
     "ignore": 0.0,
 }
+_EVENT_TYPE_MATERIALITY_BASE = {
+    "earnings": 0.82,
+    "guidance": 0.74,
+    "contract_order": 0.8,
+    "supply_customer": 0.78,
+    "capex_factory": 0.72,
+    "mna_investment": 0.88,
+    "shareholder_return": 0.8,
+    "financing": 0.78,
+    "regulation_policy": 0.76,
+    "product_launch": 0.6,
+    "management_change_of_control": 0.84,
+    "legal_dispute": 0.84,
+    "accident_outage_incident": 0.86,
+    "macro_theme": 0.64,
+}
+_MATERIALITY_SCOPE_BONUS = {
+    "kr_market": 0.12,
+    "global_market": 0.1,
+    "sector": 0.08,
+    "company": 0.1,
+    "ignore": 0.0,
+}
+_MATERIALITY_DIRECTION_BONUS = {
+    "positive": 0.05,
+    "negative": 0.05,
+    "mixed": 0.06,
+    "neutral": 0.02,
+}
+_MATERIALITY_HORIZON_BONUS = {
+    "intraday": 0.04,
+    "short": 0.05,
+    "medium": 0.03,
+}
+_MATERIALITY_SOURCE_BONUS = {
+    "DISCLOSURE": 0.08,
+    "CURATED_NEWS": 0.03,
+    "DISCOVERY_NEWS": 0.0,
+}
 _ALLOWED_SECTORS = {
     "테크",
     "반도체",
@@ -228,8 +267,10 @@ class NewsProductService:
                     nc.market_scope,
                     nc.primary_region,
                     nc.trust_score,
+                    nc.materiality_score,
                     nc.novelty_score,
                     nc.attention_score,
+                    nc.editorial_score,
                     nc.ranking_score,
                     nc.evidence_count,
                     nc.published_at,
@@ -264,8 +305,10 @@ class NewsProductService:
                     ne.market_scope,
                     ne.primary_region,
                     ne.trust_score,
+                    ne.materiality_score,
                     ne.novelty_score,
                     ne.attention_score,
+                    ne.editorial_score,
                     ne.ranking_score,
                     ne.evidence_count,
                     ne.published_at,
@@ -394,8 +437,10 @@ class NewsProductService:
                     "market_scope": row["market_scope"],
                     "primary_region": row["primary_region"],
                     "trust_score": float(row["trust_score"] or 0.0),
+                    "materiality_score": float(row["materiality_score"] or 0.0),
                     "novelty_score": float(row["novelty_score"] or 0.0),
                     "attention_score": float(row["attention_score"] or 0.0),
+                    "editorial_score": float(row["editorial_score"] or 0.0),
                     "ranking_score": float(row["ranking_score"] or 0.0),
                     "evidence_count": int(row["evidence_count"] or 0),
                     "cross_source_score": float(row["cross_source_score"] or 0.0),
@@ -447,6 +492,9 @@ class NewsProductService:
             "source": primary_evidence.get("publisher") or primary_evidence.get("provider") or "Argus",
             "source_url": primary_evidence.get("canonical_url") or primary_evidence.get("source_url") or "",
             "published_at": card.get("published_at") or card.get("updated_at"),
+            "credibility_score": float(card.get("trust_score") or 0.0),
+            "materiality_score": float(card.get("materiality_score") or 0.0),
+            "editorial_score": float(card.get("editorial_score") or 0.0),
             "sentiment": self._legacy_sentiment(card),
             "importance": self._legacy_importance(card),
             "related_sectors": related_sectors,
@@ -920,9 +968,11 @@ class NewsProductService:
                     "impact_horizon": self._impact_horizon(base_event),
                     "source_type": candidate_source_type,
                     "trust_score": candidate_trust_score,
+                    "materiality_score": 0.0,
                     "novelty_score": 0.0,
                     "attention_score": 0.0,
                     "cross_source_score": 0.0,
+                    "editorial_score": 0.0,
                     "ranking_score": 0.0,
                     "published_at": base_published_at,
                     "updated_at": base_published_at,
@@ -1075,29 +1125,29 @@ class NewsProductService:
             cluster["has_canonical_anchor"] = has_canonical_anchor
             cluster["has_persistent_evidence"] = has_persistent_evidence
 
-            quality_penalty = 0.14 if "low_quality_headline" in cluster["quality_flags"] else 0.0
-            scope_priority = _MARKET_SCOPE_PRIORITY.get(cluster["market_scope"], 0.0)
-            canonical_anchor_bonus = 0.08 if has_canonical_anchor else 0.0
-            persistent_evidence_bonus = 0.04 if has_persistent_evidence else 0.0
-            impact_bonus = self._impact_priority_bonus(
+            cluster["materiality_score"] = self._materiality_score(
+                event_type=cluster["event_type"],
+                event_subtype=cluster["event_subtype"],
+                market_scope=cluster["market_scope"],
                 impact_direction=cluster["impact_direction"],
                 impact_horizon=cluster["impact_horizon"],
-                event_subtype=cluster["event_subtype"],
+                source_type=cluster["source_type"],
+                has_canonical_anchor=has_canonical_anchor,
+                has_persistent_evidence=has_persistent_evidence,
+                quality_flags=cluster["quality_flags"],
             )
-            cluster["ranking_score"] = round(
-                max(
-                    0.0,
-                    (cluster["trust_score"] * 0.40)
-                    + (scope_priority * 0.23)
-                    + (cluster["novelty_score"] * 0.13)
-                    + cluster["cross_source_score"]
-                    + canonical_anchor_bonus
-                    + persistent_evidence_bonus
-                    + impact_bonus
-                    - quality_penalty,
-                ),
-                4,
+            cluster["editorial_score"] = self._editorial_score(
+                trust_score=cluster["trust_score"],
+                materiality_score=cluster["materiality_score"],
+                novelty_score=cluster["novelty_score"],
+                cross_source_score=cluster["cross_source_score"],
+                attention_score=0.0,
+                market_scope=cluster["market_scope"],
+                has_canonical_anchor=has_canonical_anchor,
+                has_persistent_evidence=has_persistent_evidence,
+                quality_flags=cluster["quality_flags"],
             )
+            cluster["ranking_score"] = cluster["editorial_score"]
             results.append(cluster)
         return results
 
@@ -1164,7 +1214,18 @@ class NewsProductService:
         for cluster in clusters:
             attention_score = attention_scores.get(cluster["cluster_key"], 0.0)
             cluster["attention_score"] = attention_score
-            cluster["ranking_score"] = round(cluster["ranking_score"] + (attention_score * 0.08), 4)
+            cluster["editorial_score"] = self._editorial_score(
+                trust_score=cluster["trust_score"],
+                materiality_score=cluster["materiality_score"],
+                novelty_score=cluster["novelty_score"],
+                cross_source_score=cluster["cross_source_score"],
+                attention_score=attention_score,
+                market_scope=cluster["market_scope"],
+                has_canonical_anchor=cluster["has_canonical_anchor"],
+                has_persistent_evidence=cluster["has_persistent_evidence"],
+                quality_flags=cluster["quality_flags"],
+            )
+            cluster["ranking_score"] = cluster["editorial_score"]
             connection.execute(
                 """
                 INSERT INTO normalized_events (
@@ -1177,9 +1238,11 @@ class NewsProductService:
                     market_scope,
                     primary_region,
                     trust_score,
+                    materiality_score,
                     novelty_score,
                     attention_score,
                     cross_source_score,
+                    editorial_score,
                     ranking_score,
                     published_at,
                     source_count,
@@ -1187,7 +1250,7 @@ class NewsProductService:
                     provenance_json,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cluster["event_id"],
@@ -1199,9 +1262,11 @@ class NewsProductService:
                     cluster["market_scope"],
                     cluster["primary_region"],
                     cluster["trust_score"],
+                    cluster["materiality_score"],
                     cluster["novelty_score"],
                     attention_score,
                     cluster["cross_source_score"],
+                    cluster["editorial_score"],
                     cluster["ranking_score"],
                     cluster["published_at"],
                     len(cluster["providers"]),
@@ -1223,6 +1288,8 @@ class NewsProductService:
                             "source_type": cluster["source_type"],
                             "canonical_anchor": cluster["has_canonical_anchor"],
                             "persistent_evidence": cluster["has_persistent_evidence"],
+                            "materiality_score": cluster["materiality_score"],
+                            "editorial_score": cluster["editorial_score"],
                             "quality_flags": sorted(cluster["quality_flags"]),
                             "direct_company_names": sorted(cluster["direct_company_names"]),
                             "direct_company_tickers": sorted(cluster["direct_company_tickers"]),
@@ -1331,15 +1398,17 @@ class NewsProductService:
                     market_scope,
                     primary_region,
                     trust_score,
+                    materiality_score,
                     novelty_score,
                     attention_score,
+                    editorial_score,
                     ranking_score,
                     representative_evidence_id,
                     evidence_count,
                     published_at,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     f"news-card-{normalized_event_id}",
@@ -1352,8 +1421,10 @@ class NewsProductService:
                     cluster["market_scope"],
                     cluster["primary_region"],
                     cluster["trust_score"],
+                    cluster["materiality_score"],
                     cluster["novelty_score"],
                     attention_score,
+                    cluster["editorial_score"],
                     cluster["ranking_score"],
                     representative_evidence_id,
                     len(cluster["evidence"]),
@@ -1788,6 +1859,67 @@ class NewsProductService:
             bonus += 0.01
         return _clamp(bonus, 0.0, 0.06)
 
+    def _materiality_score(
+        self,
+        *,
+        event_type: str,
+        event_subtype: str,
+        market_scope: str,
+        impact_direction: str,
+        impact_horizon: str,
+        source_type: str,
+        has_canonical_anchor: bool,
+        has_persistent_evidence: bool,
+        quality_flags: set[str],
+    ) -> float:
+        score = _EVENT_TYPE_MATERIALITY_BASE.get(event_type, 0.56)
+        score += _MATERIALITY_SCOPE_BONUS.get(market_scope, 0.0)
+        score += _MATERIALITY_DIRECTION_BONUS.get(impact_direction, 0.02)
+        score += _MATERIALITY_HORIZON_BONUS.get(impact_horizon, 0.0)
+        score += _MATERIALITY_SOURCE_BONUS.get(source_type, 0.0)
+        if event_subtype not in {"generic", "generic_disclosure", "periodic_report"}:
+            score += 0.03
+        if has_canonical_anchor:
+            score += 0.05
+        if has_persistent_evidence:
+            score += 0.02
+        if "low_quality_headline" in quality_flags:
+            score -= 0.12
+        if "thin_headline" in quality_flags:
+            score -= 0.04
+        return round(_clamp(score), 4)
+
+    def _editorial_score(
+        self,
+        *,
+        trust_score: float,
+        materiality_score: float,
+        novelty_score: float,
+        cross_source_score: float,
+        attention_score: float,
+        market_scope: str,
+        has_canonical_anchor: bool,
+        has_persistent_evidence: bool,
+        quality_flags: set[str],
+    ) -> float:
+        score = (
+            (materiality_score * 0.44)
+            + (trust_score * 0.12)
+            + (novelty_score * 0.16)
+            + (cross_source_score * 0.1)
+            + (attention_score * 0.08)
+            + (_MARKET_SCOPE_PRIORITY.get(market_scope, 0.0) * 0.1)
+        )
+        if has_canonical_anchor:
+            score += 0.05
+        if has_persistent_evidence:
+            score += 0.03
+        if "low_quality_headline" in quality_flags:
+            score -= 0.14
+        if "thin_headline" in quality_flags:
+            score -= 0.04
+        return round(_clamp(score), 4)
+
     def _legacy_news_type(self, card: dict[str, Any]) -> str:
         return "stock" if card.get("market_scope") == "company" else "macro"
 
@@ -1799,12 +1931,10 @@ class NewsProductService:
         return "neutral"
 
     def _legacy_importance(self, card: dict[str, Any]) -> str:
-        ranking_score = float(card.get("ranking_score") or 0.0)
-        trust_score = float(card.get("trust_score") or 0.0)
-        provenance = card.get("provenance") or {}
-        if ranking_score >= 0.88 or (provenance.get("canonical_anchor") and trust_score >= 0.95):
+        materiality_score = float(card.get("materiality_score") or 0.0)
+        if materiality_score >= 0.8:
             return "high"
-        if ranking_score >= 0.62:
+        if materiality_score >= 0.62:
             return "medium"
         return "low"
 

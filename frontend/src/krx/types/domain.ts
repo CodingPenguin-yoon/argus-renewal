@@ -54,6 +54,9 @@ export type NewsBase = {
   source: string;
   sourceUrl: string;
   publishedAt: string;
+  credibilityScore: number;
+  materialityScore: number;
+  editorialScore: number;
   sentiment: Sentiment;
   importance: Importance;
   relatedSectors: Sector[];
@@ -233,8 +236,10 @@ export type MarketNewsCard = {
   marketScope: "kr_market" | "global_market" | "sector" | "company" | "ignore";
   primaryRegion: "KR" | "GLOBAL";
   trustScore: number;
+  materialityScore: number;
   noveltyScore: number;
   attentionScore: number;
+  editorialScore: number;
   rankingScore: number;
   evidenceCount: number;
   crossSourceScore: number;

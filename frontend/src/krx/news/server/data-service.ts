@@ -22,6 +22,9 @@ type ApiNews = {
   source: string;
   source_url: string;
   published_at: string;
+  credibility_score: number;
+  materiality_score: number;
+  editorial_score: number;
   sentiment: "positive" | "neutral" | "negative";
   importance: "high" | "medium" | "low";
   related_sectors: string[];
@@ -51,8 +54,10 @@ type ApiMarketNewsCard = {
   market_scope: "kr_market" | "global_market" | "sector" | "company" | "ignore";
   primary_region: "KR" | "GLOBAL";
   trust_score: number;
+  materiality_score: number;
   novelty_score: number;
   attention_score: number;
+  editorial_score: number;
   ranking_score: number;
   evidence_count: number;
   cross_source_score: number;
@@ -112,6 +117,9 @@ function mapNews(item: ApiNews): News {
     source: item.source,
     sourceUrl: item.source_url,
     publishedAt: item.published_at,
+    credibilityScore: item.credibility_score,
+    materialityScore: item.materiality_score,
+    editorialScore: item.editorial_score,
     sentiment: item.sentiment,
     importance: item.importance,
     relatedSectors: item.related_sectors as Sector[],
@@ -146,8 +154,10 @@ function mapMarketNewsCard(item: ApiMarketNewsCard): MarketNewsCard {
     marketScope: item.market_scope,
     primaryRegion: item.primary_region,
     trustScore: item.trust_score,
+    materialityScore: item.materiality_score,
     noveltyScore: item.novelty_score,
     attentionScore: item.attention_score,
+    editorialScore: item.editorial_score,
     rankingScore: item.ranking_score,
     evidenceCount: item.evidence_count,
     crossSourceScore: item.cross_source_score,

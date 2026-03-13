@@ -377,6 +377,8 @@ def test_market_news_product_ranking_prefers_confirmed_high_quality_events(tmp_p
 
     assert len(cards) >= 2
     assert cards[0]["title"] == "코스피 수급 개선, 외국인 순매수 확대"
+    assert cards[0]["materiality_score"] >= cards[1]["materiality_score"]
+    assert cards[0]["editorial_score"] >= cards[1]["editorial_score"]
     assert cards[0]["ranking_score"] > cards[1]["ranking_score"]
 
 
@@ -727,12 +729,17 @@ def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
     assert len(global_response.json()["items"]) >= 1
     assert len(disclosures_response.json()["items"]) >= 1
     assert disclosures_response.json()["items"][0]["evidence"][0]["provider"] == "DART"
+    assert "materiality_score" in kr_response.json()["items"][0]
+    assert "editorial_score" in kr_response.json()["items"][0]
     assert all_news_response.status_code == 200
     assert macro_news_response.status_code == 200
     assert stock_news_response.status_code == 200
     assert ticker_news_response.status_code == 200
     assert search_response.status_code == 200
     assert len(all_news_response.json()["items"]) >= 2
+    assert "credibility_score" in all_news_response.json()["items"][0]
+    assert "materiality_score" in all_news_response.json()["items"][0]
+    assert "editorial_score" in all_news_response.json()["items"][0]
     assert any(item["type"] == "macro" for item in macro_news_response.json()["items"])
     assert any(item["type"] == "stock" for item in stock_news_response.json()["items"])
     assert len(ticker_news_response.json()["items"]) >= 1
