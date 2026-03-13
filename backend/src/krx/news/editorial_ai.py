@@ -146,7 +146,7 @@ class OpenAICompatibleNewsEditorialAIProvider:
         raise RuntimeError("Failed to enrich news editorial card via AI after retries") from last_error
 
     def _request_completion(self, request: NewsEditorialAIRequest) -> dict[str, Any]:
-        url = f"{self.base_url}/v1/chat/completions"
+        url = self._chat_completions_url()
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -206,6 +206,13 @@ class OpenAICompatibleNewsEditorialAIProvider:
         if not isinstance(payload, dict):
             raise ValueError("news editorial completion payload is not an object")
         return payload
+
+    def _chat_completions_url(self) -> str:
+        if self.base_url.endswith("/chat/completions"):
+            return self.base_url
+        if self.base_url.endswith("/openai") or self.base_url.endswith("/openai/v1") or self.base_url.endswith("/v1"):
+            return f"{self.base_url}/chat/completions"
+        return f"{self.base_url}/v1/chat/completions"
 
     def _parse_completion(self, payload: dict[str, Any]) -> NewsEditorialAIResponse:
         choices = payload.get("choices")

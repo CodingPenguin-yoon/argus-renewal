@@ -7,7 +7,11 @@ from fastapi.testclient import TestClient
 
 from src.config.env import get_settings
 from src.krx.company_master.db import get_connection, utcnow_iso
-from src.krx.news.editorial_ai import NewsEditorialAIRequest, NewsEditorialAIResponse
+from src.krx.news.editorial_ai import (
+    NewsEditorialAIRequest,
+    NewsEditorialAIResponse,
+    OpenAICompatibleNewsEditorialAIProvider,
+)
 from src.krx.news.service import NewsProductService
 from src.krx.provider_registry import build_provider_definition, ensure_provider_definition
 from src.krx.source_ingestion.event_service import EventNormalizationService
@@ -826,3 +830,110 @@ def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
     detail_response = client.get(f"/api/krx/news/{ticker_news_response.json()['items'][0]['id']}")
     assert detail_response.status_code == 200
     assert detail_response.json()["item"]["related_tickers"] == ["005930"]
+
+
+class _RecordingHTTPClient:
+    def __init__(self) -> None:
+        self.last_url: str | None = None
+
+    def post(self, url, headers=None, json=None, timeout=None):  # noqa: ANN001
+        self.last_url = url
+        return _StaticResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json_module.dumps(
+                                {
+                                    "story_state": "NEW",
+                                    "importance_label": "medium",
+                                    "editorial_reason": "stub",
+                                    "editorial_boost": 0.01,
+                                    "confidence": 0.8,
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+
+
+class _StaticResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return self.payload
+
+
+json_module = json
+
+
+def _sample_editorial_request() -> NewsEditorialAIRequest:
+    return NewsEditorialAIRequest(
+        cluster_key="cluster-1",
+        title="삼성전자 공급계약 체결",
+        one_line_summary="대형 공급계약",
+        why_it_matters="실적 가시성 개선",
+        market_impact="반도체 대형주 심리 개선",
+        market_scope="kr_market",
+        primary_region="KR",
+        event_type="contract",
+        event_subtype="supply",
+        impact_direction="positive",
+        impact_horizon="short",
+        source_type="CURATED_NEWS",
+        trust_score=0.8,
+        materiality_score=0.72,
+        novelty_score=0.6,
+        cross_source_score=0.4,
+        attention_score=0.5,
+        evidence_count=2,
+        direct_company_names=["삼성전자"],
+        direct_company_tickers=["005930"],
+        sector_tags=["반도체"],
+        keyword_tags=["공급계약"],
+        evidence=[{"title": "삼성전자 공급계약 체결"}],
+    )
+
+
+def test_openai_compatible_editorial_ai_supports_gemini_openai_base_url() -> None:
+    client = _RecordingHTTPClient()
+    provider = OpenAICompatibleNewsEditorialAIProvider(
+        enabled=True,
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        timeout_seconds=20.0,
+        max_retries=1,
+        backoff_seconds=0.0,
+        http_client=client,
+    )
+
+    response = provider.enrich(_sample_editorial_request())
+
+    assert response is not None
+    assert client.last_url == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+
+
+def test_openai_compatible_editorial_ai_keeps_standard_v1_base_url() -> None:
+    client = _RecordingHTTPClient()
+    provider = OpenAICompatibleNewsEditorialAIProvider(
+        enabled=True,
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        model="gpt-5-mini",
+        timeout_seconds=20.0,
+        max_retries=1,
+        backoff_seconds=0.0,
+        http_client=client,
+    )
+
+    response = provider.enrich(_sample_editorial_request())
+
+    assert response is not None
+    assert client.last_url == "https://api.openai.com/v1/chat/completions"
