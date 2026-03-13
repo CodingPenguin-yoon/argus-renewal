@@ -120,6 +120,31 @@ _MARKET_SCOPE_PRIORITY = {
     "company": 0.18,
     "ignore": 0.0,
 }
+_ALLOWED_SECTORS = {
+    "테크",
+    "반도체",
+    "자동차",
+    "에너지",
+    "금융",
+    "헬스케어",
+    "소비재",
+    "산업재",
+    "커뮤니케이션",
+}
+_STOCK_CATEGORY_BY_EVENT_TYPE = {
+    "earnings": "실적",
+    "guidance": "가이던스",
+    "mna_investment": "M&A",
+    "product_launch": "제품 출시",
+    "legal_dispute": "규제/소송",
+    "accident_outage_incident": "규제/소송",
+    "management_change_of_control": "경영진 변화",
+    "contract_order": "수주/계약",
+    "supply_customer": "수주/계약",
+    "capex_factory": "수주/계약",
+    "shareholder_return": "수주/계약",
+    "financing": "수주/계약",
+}
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -266,6 +291,61 @@ class NewsProductService:
 
             return self._serialize_card_rows(connection, rows)
 
+    def list_feed_items(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+        surface_limit = max(limit or self.card_limit, self.card_limit)
+        cards_by_id: dict[str, dict[str, Any]] = {}
+        for card in self.list_cards(region="KR", limit=surface_limit):
+            cards_by_id[card["id"]] = card
+        for card in self.list_cards(region="GLOBAL", limit=surface_limit):
+            cards_by_id[card["id"]] = card
+        for card in self.list_disclosure_cards(limit=surface_limit):
+            cards_by_id[card["id"]] = card
+
+        items = [
+            self._feed_item_from_card(card)
+            for card in sorted(
+                cards_by_id.values(),
+                key=lambda item: (
+                    -(float(item.get("ranking_score") or 0.0)),
+                    str(item.get("updated_at") or item.get("published_at") or ""),
+                ),
+            )
+        ]
+        return items[: limit or len(items)]
+
+    def get_feed_item(self, *, news_id: str) -> dict[str, Any] | None:
+        for item in self.list_feed_items(limit=max(self.card_limit * 3, 36)):
+            if str(item["id"]) == str(news_id):
+                return item
+        return None
+
+    def search_feed_items(self, *, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        normalized_query = query.strip().lower()
+        if not normalized_query:
+            return []
+        items = []
+        for item in self.list_feed_items(limit=max(limit * 3, 36)):
+            haystack = [
+                str(item["title"]),
+                str(item["summary"]),
+                str(item["why_it_matters"]),
+                " ".join(item.get("related_tickers") or []),
+                " ".join(item.get("tags") or []),
+            ]
+            if normalized_query in " ".join(haystack).lower():
+                items.append(item)
+        return items[:limit]
+
+    def list_feed_items_by_ticker(self, *, ticker: str, limit: int = 20) -> list[dict[str, Any]]:
+        normalized_ticker = ticker.strip().upper()
+        if not normalized_ticker:
+            return []
+        return [
+            item
+            for item in self.list_feed_items(limit=max(limit * 3, 36))
+            if any(str(candidate).upper() == normalized_ticker for candidate in item.get("related_tickers") or [])
+        ][:limit]
+
     def _serialize_card_rows(self, connection, rows) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         for row in rows:
@@ -340,6 +420,40 @@ class NewsProductService:
             )
 
         return items
+
+    def _feed_item_from_card(self, card: dict[str, Any]) -> dict[str, Any]:
+        provenance = card.get("provenance") or {}
+        evidence = card.get("evidence") or []
+        primary_evidence = evidence[0] if evidence else {}
+        related_sectors = [sector for sector in provenance.get("sector_tags") or [] if sector in _ALLOWED_SECTORS]
+        related_tickers = [str(ticker) for ticker in provenance.get("direct_company_tickers") or [] if str(ticker)]
+        event_type = str(provenance.get("event_type") or "")
+        event_subtype = str(provenance.get("event_subtype") or "")
+        tags = [
+            *[str(keyword) for keyword in provenance.get("keyword_tags") or [] if str(keyword)],
+            *[str(name) for name in provenance.get("direct_company_names") or [] if str(name)],
+            *related_sectors,
+        ]
+        for extra_tag in (event_type, event_subtype):
+            if extra_tag:
+                tags.append(extra_tag)
+
+        return {
+            "id": card["id"],
+            "type": self._legacy_news_type(card),
+            "title": card["title"],
+            "summary": card["one_line_summary"],
+            "why_it_matters": card["why_it_matters"],
+            "source": primary_evidence.get("publisher") or primary_evidence.get("provider") or "Argus",
+            "source_url": primary_evidence.get("canonical_url") or primary_evidence.get("source_url") or "",
+            "published_at": card.get("published_at") or card.get("updated_at"),
+            "sentiment": self._legacy_sentiment(card),
+            "importance": self._legacy_importance(card),
+            "related_sectors": related_sectors,
+            "related_tickers": related_tickers,
+            "category": self._legacy_category(card),
+            "tags": list(dict.fromkeys(tag for tag in tags if tag)),
+        }
 
     def get_header_context(self) -> dict[str, Any]:
         self._ensure_materialized()
@@ -817,6 +931,7 @@ class NewsProductService:
                     "tags": set(),
                     "quality_flags": set(),
                     "direct_company_names": set(scope_payload["direct_company_names"]),
+                    "direct_company_tickers": set(scope_payload["direct_company_tickers"]),
                     "sector_tags": set(scope_payload["sector_tags"]),
                     "keyword_tags": set(scope_payload["keyword_tags"]),
                 }
@@ -846,6 +961,8 @@ class NewsProductService:
 
             for company_name in scope_payload["direct_company_names"]:
                 cluster["tags"].add(("company", company_name))
+            for ticker in scope_payload["direct_company_tickers"]:
+                cluster["direct_company_tickers"].add(ticker)
             for sector_tag in scope_payload["sector_tags"]:
                 cluster["tags"].add(("sector", sector_tag))
             for keyword_tag in scope_payload["keyword_tags"]:
@@ -1108,6 +1225,9 @@ class NewsProductService:
                             "persistent_evidence": cluster["has_persistent_evidence"],
                             "quality_flags": sorted(cluster["quality_flags"]),
                             "direct_company_names": sorted(cluster["direct_company_names"]),
+                            "direct_company_tickers": sorted(cluster["direct_company_tickers"]),
+                            "sector_tags": sorted(cluster["sector_tags"]),
+                            "keyword_tags": sorted(cluster["keyword_tags"]),
                         },
                         ensure_ascii=False,
                         sort_keys=True,
@@ -1430,8 +1550,15 @@ class NewsProductService:
             for company in direct_companies
             if str(company.get("company_name") or "").strip()
         }
+        direct_company_tickers = {
+            str(company.get("primary_stock_code") or "").strip()
+            for company in direct_companies
+            if str(company.get("primary_stock_code") or "").strip()
+        }
         if row.get("company_name"):
             direct_company_names.add(str(row["company_name"]).strip())
+        if row.get("primary_stock_code"):
+            direct_company_tickers.add(str(row["primary_stock_code"]).strip())
 
         sector_tags = set()
         if row.get("market_classification"):
@@ -1461,6 +1588,7 @@ class NewsProductService:
             "market_scope": market_scope,
             "primary_region": primary_region,
             "direct_company_names": sorted(name for name in direct_company_names if name),
+            "direct_company_tickers": sorted(ticker for ticker in direct_company_tickers if ticker),
             "sector_tags": sorted(tag for tag in sector_tags if tag),
             "keyword_tags": sorted(keyword_tags),
         }
@@ -1659,6 +1787,61 @@ class NewsProductService:
         if event_subtype not in {"generic", "generic_disclosure", "periodic_report"}:
             bonus += 0.01
         return _clamp(bonus, 0.0, 0.06)
+
+    def _legacy_news_type(self, card: dict[str, Any]) -> str:
+        return "stock" if card.get("market_scope") == "company" else "macro"
+
+    def _legacy_sentiment(self, card: dict[str, Any]) -> str:
+        provenance = card.get("provenance") or {}
+        impact_direction = str(provenance.get("impact_direction") or "").strip().lower()
+        if impact_direction in {"positive", "negative"}:
+            return impact_direction
+        return "neutral"
+
+    def _legacy_importance(self, card: dict[str, Any]) -> str:
+        ranking_score = float(card.get("ranking_score") or 0.0)
+        trust_score = float(card.get("trust_score") or 0.0)
+        provenance = card.get("provenance") or {}
+        if ranking_score >= 0.88 or (provenance.get("canonical_anchor") and trust_score >= 0.95):
+            return "high"
+        if ranking_score >= 0.62:
+            return "medium"
+        return "low"
+
+    def _legacy_category(self, card: dict[str, Any]) -> str:
+        provenance = card.get("provenance") or {}
+        event_type = str(provenance.get("event_type") or "")
+        item_type = self._legacy_news_type(card)
+        if item_type == "stock":
+            return _STOCK_CATEGORY_BY_EVENT_TYPE.get(event_type, "수주/계약")
+
+        text = normalize_title(
+            " ".join(
+                filter(
+                    None,
+                    [
+                        card.get("title"),
+                        card.get("one_line_summary"),
+                        str(provenance.get("event_subtype") or ""),
+                    ],
+                )
+            )
+        ) or ""
+        if any(keyword in text for keyword in ("금리", "연준", "fomc", "기준금리", "boj", "ecb")):
+            return "금리"
+        if any(keyword in text for keyword in ("cpi", "pce", "물가", "인플레이션")):
+            return "인플레이션"
+        if any(keyword in text for keyword in ("고용", "실업", "노동")):
+            return "고용"
+        if any(keyword in text for keyword in ("환율", "달러", "원화", "엔화")):
+            return "환율"
+        if any(keyword in text for keyword in ("유가", "에너지", "원유", "wti", "브렌트")):
+            return "유가/에너지"
+        if any(keyword in text for keyword in ("전쟁", "지정학", "중동", "러시아", "우크라이나", "대만")):
+            return "전쟁/지정학"
+        if any(keyword in text for keyword in ("반도체", "ai", "엔비디아")):
+            return "AI/반도체"
+        return "규제"
 
     def _latest_timestamp(self, values: list[str | None]) -> str | None:
         parsed = [value for value in values if value]

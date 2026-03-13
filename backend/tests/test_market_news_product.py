@@ -710,6 +710,11 @@ def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
         disclosures_response = client.get("/api/news/disclosures")
         header_response = client.get("/api/news/header-context")
         coverage_response = client.get("/api/news/coverage")
+        all_news_response = client.get("/api/krx/news")
+        macro_news_response = client.get("/api/krx/news/macro")
+        stock_news_response = client.get("/api/krx/news/stock")
+        ticker_news_response = client.get("/api/krx/news/by-ticker/005930")
+        search_response = client.get("/api/krx/news/search?q=%EA%B3%B5%EA%B8%89%EA%B3%84%EC%95%BD")
     finally:
         get_settings.cache_clear()
 
@@ -722,5 +727,20 @@ def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
     assert len(global_response.json()["items"]) >= 1
     assert len(disclosures_response.json()["items"]) >= 1
     assert disclosures_response.json()["items"][0]["evidence"][0]["provider"] == "DART"
+    assert all_news_response.status_code == 200
+    assert macro_news_response.status_code == 200
+    assert stock_news_response.status_code == 200
+    assert ticker_news_response.status_code == 200
+    assert search_response.status_code == 200
+    assert len(all_news_response.json()["items"]) >= 2
+    assert any(item["type"] == "macro" for item in macro_news_response.json()["items"])
+    assert any(item["type"] == "stock" for item in stock_news_response.json()["items"])
+    assert len(ticker_news_response.json()["items"]) >= 1
+    assert all("005930" in item["related_tickers"] for item in ticker_news_response.json()["items"])
+    assert any("공급계약" in item["title"] for item in search_response.json()["items"])
     assert header_response.json()["columns"][0]["label"] == "한국 증시"
     assert "items" in coverage_response.json()
+
+    detail_response = client.get(f"/api/krx/news/{ticker_news_response.json()['items'][0]['id']}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["item"]["related_tickers"] == ["005930"]
