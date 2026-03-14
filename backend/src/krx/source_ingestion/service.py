@@ -691,50 +691,11 @@ class RawDocumentIngestionService:
                 )
                 """
             ).rowcount
-            updated_source_documents = connection.execute(
-                """
-                UPDATE source_documents
-                SET publisher_key = (
-                    SELECT rd.publisher_key
-                    FROM raw_documents rd
-                    WHERE rd.id = source_documents.raw_document_id
-                )
-                WHERE (
-                    publisher_key IS NULL OR TRIM(publisher_key) = ''
-                )
-                  AND raw_document_id IN (
-                    SELECT id
-                    FROM raw_documents
-                    WHERE publisher_key IS NOT NULL
-                )
-                """
-            ).rowcount
-            updated_event_evidence = connection.execute(
-                """
-                UPDATE event_evidence
-                SET publisher_key = (
-                    SELECT sd.publisher_key
-                    FROM source_documents sd
-                    WHERE sd.id = event_evidence.source_document_id
-                )
-                WHERE (
-                    publisher_key IS NULL OR TRIM(publisher_key) = ''
-                )
-                  AND source_document_id IN (
-                    SELECT id
-                    FROM source_documents
-                    WHERE publisher_key IS NOT NULL
-                )
-                """
-            ).rowcount
-
         return {
             "processed_count": len(rows),
             "publisher_count": len(seen_publishers),
             "updated_raw_documents": updated_raw_documents,
             "updated_events": updated_events,
-            "updated_source_documents": updated_source_documents,
-            "updated_event_evidence": updated_event_evidence,
         }
 
     def _run_document_sync(

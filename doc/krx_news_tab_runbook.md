@@ -50,20 +50,22 @@
 - `NEWS_PRODUCT_EDITORIAL_AI_MIN_EDITORIAL_SCORE`
 
 ## Source Persistence Policy
-- `source_documents`
+- `raw_documents`
+  - 수집 원천을 그대로 유지하는 입력 계층
+- `news_batch_triage`
+  - 뉴스/공시별 1차 시장 관련성 판단 결과
+  - `market_scope`, `market_importance_prelim`, `impact_direction`를 저장
+- `market_surface_candidates`
+  - 메인 표면 후보 카드 read model
+  - `news-card-*`, `disclosure-card-*` 안정 ID를 보관
+- `market_surface_state`
+  - 현재 표면 요약과 coverage 스냅샷을 저장
+- `market_surface_history`
+  - 표면 리프레시 이력 저장
+- evidence policy
   - `DART` -> `CANONICAL_EVENT`
   - `MK_RSS` -> `PERSISTENT_EVIDENCE`
   - `NAVER_NEWS` -> `TRANSIENT_DISCOVERY`
-- `normalized_events`
-  - raw/event pipeline 결과를 이슈 클러스터 단위로 재구성한 read model
-- `event_evidence`
-  - 대표 근거, 확인 기사, 탐색 후보를 분리 저장
-- `event_tags`
-  - `sector`, `theme`, `company`, `keyword`, `quality` 태그를 내부적으로 유지
-- `news_cards`
-  - UI용 두 칼럼 read model
-- `source_coverage`
-  - provider별 데이터 가용성, 최근 동기화 시각, 부분 실패 상태를 추적
 
 ## Ranking Logic
 - score layers
@@ -108,14 +110,16 @@
 ## 로컬 확인
 ```bash
 cd backend
-python3 -m pytest -q backend/tests/test_market_news_product.py
+pytest -q tests/test_market_news_product.py tests/test_api.py
 
-cd /Users/yoon/03_projects/05_economy_project/argus_renewal
-pnpm --filter frontend test -- src/app/krx/news/page.test.tsx
+cd ../frontend
+pnpm vitest run src/app/krx/news/page.test.tsx
 ```
 
 ## API
+- `GET /api/news/dashboard`
 - `GET /api/news/kr`
 - `GET /api/news/global`
+- `GET /api/news/disclosures`
 - `GET /api/news/header-context`
 - `GET /api/news/coverage`

@@ -1,4 +1,5 @@
 import { NewsTabDashboard } from "@/krx/news/components/news-tab-dashboard";
+import { NewsTabScrollReset } from "@/krx/news/components/news-tab-scroll-reset";
 import { normalizeNewsTab } from "@/krx/news/lib/tabs";
 import { getNewsTabData } from "@/krx/server/data-service";
 
@@ -13,5 +14,10 @@ export default async function KrxNewsPage({
   const activeTab = normalizeNewsTab(resolvedSearchParams.tab);
   const data = await getNewsTabData();
 
-  return <NewsTabDashboard {...data} activeTab={activeTab} />;
+  return (
+    <>
+      <NewsTabScrollReset />
+      <NewsTabDashboard {...data} activeTab={activeTab} />
+    </>
+  );
 }

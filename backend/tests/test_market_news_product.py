@@ -14,8 +14,6 @@ from src.krx.news.editorial_ai import (
 )
 from src.krx.news.service import NewsProductService
 from src.krx.provider_registry import build_provider_definition, ensure_provider_definition
-from src.krx.source_ingestion.event_service import EventNormalizationService
-from src.krx.source_ingestion.llm import DisabledLLMExtractionProvider
 from src.krx.source_ingestion.providers.naver_datalab_provider import (
     TrendKeywordGroup,
     TrendScore,
@@ -64,16 +62,8 @@ class StubEditorialAIProvider:
         return self.response_by_title.get(request.title)
 
 
-def _make_event_service(tmp_path: Path) -> tuple[EventNormalizationService, str]:
-    db_path = str(tmp_path / "market-news.db")
-    return (
-        EventNormalizationService(
-            db_path=db_path,
-            llm_provider=DisabledLLMExtractionProvider(),
-            low_confidence_threshold=0.55,
-        ),
-        db_path,
-    )
+def _make_db_path(tmp_path: Path) -> str:
+    return str(tmp_path / "market-news.db")
 
 
 def _make_news_service(
@@ -254,7 +244,7 @@ def _register_provider(
 
 
 def test_market_news_product_materializes_event_first_cards(tmp_path: Path) -> None:
-    event_service, db_path = _make_event_service(tmp_path)
+    db_path = _make_db_path(tmp_path)
 
     samsung_id = _insert_company(
         db_path,
@@ -321,41 +311,59 @@ def test_market_news_product_materializes_event_first_cards(tmp_path: Path) -> N
         query_text="연준 증시",
     )
 
-    result = event_service.normalize_pending_documents(limit=50, include_llm=False)
-    assert result.status == "SUCCESS"
 
     news_service = _make_news_service(
         db_path,
         scores={"group-1": 74.0, "group-2": 61.0, "group-3": 12.0},
     )
     news_service.refresh_materialized(force=True)
+    kr_cards = news_service.list_cards(region="KR", limit=10)
+    global_cards = news_service.list_cards(region="GLOBAL", limit=10)
+    disclosure_cards = news_service.list_disclosure_cards(limit=10)
 
     with get_connection(db_path) as connection:
-        source_documents = connection.execute(
-            "SELECT provider, storage_policy FROM source_documents ORDER BY provider, id"
-        ).fetchall()
-        evidence_rows = connection.execute(
+        triage_rows = connection.execute(
             """
-            SELECT ne.market_scope, COUNT(*) AS evidence_count
-            FROM event_evidence ee
-            JOIN normalized_events ne ON ne.id = ee.normalized_event_id
-            GROUP BY ne.market_scope
-            ORDER BY ne.market_scope
+            SELECT provider, market_scope, market_importance_prelim
+            FROM news_batch_triage
+            ORDER BY provider, raw_document_id
             """
         ).fetchall()
-        card_rows = connection.execute(
-            "SELECT column_key, market_scope FROM news_cards ORDER BY ranking_score DESC, id DESC"
+        candidate_rows = connection.execute(
+            """
+            SELECT surface_key, source_kind
+            FROM market_surface_candidates
+            ORDER BY surface_key, ranking_score DESC, id DESC
+            """
+        ).fetchall()
+        state_rows = connection.execute(
+            """
+            SELECT surface_key, active_candidate_key
+            FROM market_surface_state
+            WHERE surface_key IN ('KR', 'GLOBAL', 'DISCLOSURE')
+            ORDER BY surface_key
+            """
+        ).fetchall()
+        history_rows = connection.execute(
+            """
+            SELECT surface_key, change_type
+            FROM market_surface_history
+            ORDER BY id
+            """
         ).fetchall()
 
-    assert ("DART", "CANONICAL_EVENT") in {(row["provider"], row["storage_policy"]) for row in source_documents}
-    assert ("MK_RSS", "PERSISTENT_EVIDENCE") in {(row["provider"], row["storage_policy"]) for row in source_documents}
-    assert ("NAVER_NEWS", "TRANSIENT_DISCOVERY") in {(row["provider"], row["storage_policy"]) for row in source_documents}
-    assert any(row["market_scope"] == "kr_market" and row["evidence_count"] >= 2 for row in evidence_rows)
-    assert {row["column_key"] for row in card_rows} == {"KR", "GLOBAL"}
+    assert {row["provider"] for row in triage_rows} >= {"DART", "MK_RSS", "NAVER_NEWS"}
+    assert any(row["provider"] == "DART" and row["market_scope"] == "company" for row in triage_rows)
+    assert {row["surface_key"] for row in candidate_rows} >= {"KR", "GLOBAL", "DISCLOSURE"}
+    assert {row["surface_key"] for row in state_rows} == {"DISCLOSURE", "GLOBAL", "KR"}
+    assert {row["surface_key"] for row in history_rows} >= {"KR", "GLOBAL", "DISCLOSURE"}
+    assert any(card["market_scope"] == "kr_market" and card["evidence_count"] >= 2 for card in kr_cards)
+    assert global_cards
+    assert disclosure_cards
 
 
 def test_market_news_product_ranking_prefers_confirmed_high_quality_events(tmp_path: Path) -> None:
-    _, db_path = _make_event_service(tmp_path)
+    db_path = _make_db_path(tmp_path)
 
     primary_id = _insert_raw_document(
         db_path,
@@ -410,7 +418,7 @@ def test_market_news_product_ranking_prefers_confirmed_high_quality_events(tmp_p
 
 
 def test_market_news_product_applies_editorial_ai_enrichment(tmp_path: Path) -> None:
-    _, db_path = _make_event_service(tmp_path)
+    db_path = _make_db_path(tmp_path)
 
     _insert_raw_document(
         db_path,
@@ -462,7 +470,7 @@ def test_market_news_product_applies_editorial_ai_enrichment(tmp_path: Path) -> 
 
 
 def test_market_news_product_canonical_dart_event_prefers_primary_disclosure_evidence(tmp_path: Path) -> None:
-    event_service, db_path = _make_event_service(tmp_path)
+    db_path = _make_db_path(tmp_path)
 
     samsung_id = _insert_company(
         db_path,
@@ -516,8 +524,6 @@ def test_market_news_product_canonical_dart_event_prefers_primary_disclosure_evi
         duplicate_of_document_id=primary_curated_id,
     )
 
-    result = event_service.normalize_pending_documents(limit=50, include_llm=False)
-    assert result.status == "SUCCESS"
 
     news_service = _make_news_service(db_path, scores={"group-1": 58.0})
     news_service.refresh_materialized(force=True)
@@ -534,27 +540,28 @@ def test_market_news_product_canonical_dart_event_prefers_primary_disclosure_evi
     assert [evidence["role"] for evidence in dart_card["evidence"][:3]] == ["PRIMARY", "CONFIRMING", "DISCOVERY"]
 
     with get_connection(db_path) as connection:
-        normalized_event = connection.execute(
+        candidate = connection.execute(
             """
-            SELECT ne.provenance_json
-            FROM news_cards nc
-            JOIN normalized_events ne ON ne.id = nc.normalized_event_id
-            WHERE nc.card_key = ?
+            SELECT payload_json, source_kind, surface_key
+            FROM market_surface_candidates
+            WHERE card_key = ?
             """,
             (dart_card["id"],),
         ).fetchone()
 
-    assert normalized_event is not None
-    provenance = json.loads(normalized_event["provenance_json"])
+    assert candidate is not None
+    assert candidate["source_kind"] == "news"
+    assert candidate["surface_key"] == "KR"
+    provenance = json.loads(candidate["payload_json"])["provenance"]
     assert provenance["canonical_anchor"] is True
     assert provenance["persistent_evidence"] is True
     assert provenance["event_subtype"] == "capital_return"
     assert provenance["impact_direction"] == "positive"
-    assert set(provenance["publisher_keys"]) == {"DART", "매일경제"}
+    assert {"매일경제", "dart"} <= set(provenance["publisher_keys"])
 
 
 def test_market_news_product_uses_observed_at_when_news_published_at_missing(tmp_path: Path) -> None:
-    event_service, db_path = _make_event_service(tmp_path)
+    db_path = _make_db_path(tmp_path)
     observed_at = "2026-03-10T09:15:00Z"
 
     _insert_raw_document(
@@ -574,49 +581,19 @@ def test_market_news_product_uses_observed_at_when_news_published_at_missing(tmp
         published_at_source="OBSERVED_AT",
     )
 
-    result = event_service.normalize_pending_documents(limit=20, include_llm=False)
-    assert result.status == "SUCCESS"
 
     news_service = _make_news_service(db_path)
     news_service.refresh_materialized(force=True)
+    cards = news_service.list_cards(region="KR", limit=10)
 
-    with get_connection(db_path) as connection:
-        source_document = connection.execute(
-            """
-            SELECT provider, published_at, observed_at, published_at_source
-            FROM source_documents
-            WHERE provider = 'MK_RSS'
-            """
-        ).fetchone()
-        evidence = connection.execute(
-            """
-            SELECT provider, published_at, observed_at
-            FROM event_evidence
-            WHERE provider = 'MK_RSS'
-            """
-        ).fetchone()
-        card = connection.execute(
-            """
-            SELECT published_at
-            FROM news_cards
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
-
-    assert source_document is not None
-    assert source_document["published_at"] is None
-    assert source_document["observed_at"] == observed_at
-    assert source_document["published_at_source"] == "OBSERVED_AT"
-    assert evidence is not None
-    assert evidence["published_at"] == observed_at
-    assert evidence["observed_at"] == observed_at
-    assert card is not None
-    assert card["published_at"] == observed_at
+    assert cards
+    assert cards[0]["published_at"] == observed_at
+    assert cards[0]["evidence"][0]["provider"] == "MK_RSS"
+    assert cards[0]["evidence"][0]["published_at"] == observed_at
 
 
 def test_market_news_product_accepts_unregistered_custom_provider(tmp_path: Path) -> None:
-    _, db_path = _make_event_service(tmp_path)
+    db_path = _make_db_path(tmp_path)
 
     _insert_raw_document(
         db_path,
@@ -641,26 +618,23 @@ def test_market_news_product_accepts_unregistered_custom_provider(tmp_path: Path
     cards = news_service.list_cards(region="KR", limit=10)
 
     with get_connection(db_path) as connection:
-        source_document = connection.execute(
+        triage_row = connection.execute(
             """
-            SELECT provider, document_kind, storage_policy
-            FROM source_documents
+            SELECT provider, triage_metadata_json
+            FROM news_batch_triage
             WHERE provider = 'CUSTOM_RSS'
-            ORDER BY id DESC
-            LIMIT 1
             """
         ).fetchone()
 
-    assert source_document is not None
-    assert source_document["document_kind"] == "DISCOVERY_CANDIDATE"
-    assert source_document["storage_policy"] == "TRANSIENT_DISCOVERY"
+    assert triage_row is not None
     assert any(item["provider"] == "CUSTOM_RSS" and item["status"] == "available" for item in coverage["items"])
     assert cards
     assert cards[0]["evidence"][0]["provider"] == "CUSTOM_RSS"
+    assert cards[0]["evidence"][0]["storage_policy"] == "TRANSIENT_DISCOVERY"
 
 
 def test_market_news_product_registered_custom_provider_uses_registry_storage_policy(tmp_path: Path) -> None:
-    _, db_path = _make_event_service(tmp_path)
+    db_path = _make_db_path(tmp_path)
     _register_provider(
         db_path,
         provider_key="CUSTOM_RSS",
@@ -687,34 +661,26 @@ def test_market_news_product_registered_custom_provider_uses_registry_storage_po
         scores={"group-1": 47.0},
     )
     news_service.refresh_materialized(force=True)
+    cards = news_service.list_cards(region="KR", limit=10)
 
     with get_connection(db_path) as connection:
-        source_document = connection.execute(
+        triage_row = connection.execute(
             """
-            SELECT provider, document_kind, storage_policy
-            FROM source_documents
+            SELECT provider
+            FROM news_batch_triage
             WHERE provider = 'CUSTOM_RSS'
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
-        coverage_row = connection.execute(
-            """
-            SELECT provider, status
-            FROM source_coverage
-            WHERE surface_key = 'news_tab' AND provider = 'CUSTOM_RSS'
             """
         ).fetchone()
 
-    assert source_document is not None
-    assert source_document["document_kind"] == "CURATED_NEWS"
-    assert source_document["storage_policy"] == "PERSISTENT_EVIDENCE"
-    assert coverage_row is not None
-    assert coverage_row["status"] == "available"
+    assert triage_row is not None
+    assert cards
+    assert cards[0]["evidence"][0]["provider"] == "CUSTOM_RSS"
+    assert cards[0]["evidence"][0]["storage_policy"] == "PERSISTENT_EVIDENCE"
+    assert any(item["provider"] == "CUSTOM_RSS" and item["status"] == "available" for item in news_service.get_coverage()["items"])
 
 
 def test_market_news_product_empty_and_partial_coverage_states(tmp_path: Path) -> None:
-    _, db_path = _make_event_service(tmp_path)
+    db_path = _make_db_path(tmp_path)
     news_service = _make_news_service(db_path, disabled_reason="missing_naver_datalab_credentials")
     news_service.refresh_materialized(force=True)
 
@@ -728,7 +694,7 @@ def test_market_news_product_empty_and_partial_coverage_states(tmp_path: Path) -
 
 
 def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
-    event_service, db_path = _make_event_service(tmp_path)
+    db_path = _make_db_path(tmp_path)
 
     samsung_id = _insert_company(
         db_path,
@@ -778,14 +744,13 @@ def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
         query_text="미국 증시",
     )
 
-    result = event_service.normalize_pending_documents(limit=50, include_llm=False)
-    assert result.status == "SUCCESS"
 
     monkeypatch.setenv("DB_PATH", db_path)
     get_settings.cache_clear()
 
     client = TestClient(app)
     try:
+        dashboard_response = client.get("/api/news/dashboard")
         kr_response = client.get("/api/news/kr")
         global_response = client.get("/api/news/global")
         disclosures_response = client.get("/api/news/disclosures")
@@ -799,11 +764,17 @@ def test_market_news_product_api_endpoints(tmp_path: Path, monkeypatch) -> None:
     finally:
         get_settings.cache_clear()
 
+    assert dashboard_response.status_code == 200
     assert kr_response.status_code == 200
     assert global_response.status_code == 200
     assert disclosures_response.status_code == 200
     assert header_response.status_code == 200
     assert coverage_response.status_code == 200
+    assert len(dashboard_response.json()["kr_cards"]) >= 1
+    assert len(dashboard_response.json()["global_cards"]) >= 1
+    assert len(dashboard_response.json()["disclosure_cards"]) >= 1
+    assert dashboard_response.json()["header_context"]["columns"][0]["label"] == "한국 증시"
+    assert dashboard_response.json()["coverage"]["items"]
     assert len(kr_response.json()["items"]) >= 1
     assert len(global_response.json()["items"]) >= 1
     assert len(disclosures_response.json()["items"]) >= 1

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -9,7 +9,6 @@ import re
 from typing import Any
 
 from ..company_master.db import get_connection, utcnow_iso
-from ..publisher_registry import build_publisher_definition, ensure_publisher_definition
 from ..provider_registry import (
     PROVIDER_FAMILY_TREND_SIGNAL,
     RAW_NEWS_PROVIDER_FAMILIES,
@@ -21,19 +20,16 @@ from .editorial_ai import (
     DisabledNewsEditorialAIProvider,
     NewsEditorialAIProvider,
     NewsEditorialAIRequest,
-    NewsEditorialAIResponse,
 )
 from ..source_ingestion.document_time import effective_document_time, effective_document_time_sql
 from ..source_ingestion.event_taxonomy import (
     SOURCE_TRUST_SCORES,
+    classify_dart_disclosure,
     classify_event_type,
     classify_sentiment,
 )
 from ..source_ingestion.normalize import normalize_title
-from ..source_ingestion.providers import (
-    NaverDatalabTrendProvider,
-    TrendKeywordGroup,
-)
+from ..source_ingestion.providers import NaverDatalabTrendProvider, TrendKeywordGroup
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +186,17 @@ _STOCK_CATEGORY_BY_EVENT_TYPE = {
     "shareholder_return": "수주/계약",
     "financing": "수주/계약",
 }
+_DISCLOSURE_IMPORTANCE_HINTS = {
+    "capital_return",
+    "capital_structure",
+    "contract_award",
+    "contract_termination",
+    "ownership_change",
+    "legal_risk",
+    "distress_event",
+    "asset_investment",
+    "earnings_update",
+}
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -217,6 +224,13 @@ def _json_load(value: str | None) -> Any:
         return None
 
 
+def _published_sort_rank(value: str | None) -> float:
+    parsed = _parse_iso_datetime(value)
+    if parsed is None:
+        return float("inf")
+    return -parsed.timestamp()
+
+
 def _storage_policy_rank(storage_policy: str | None) -> int:
     if storage_policy == "CANONICAL_EVENT":
         return 0
@@ -227,13 +241,6 @@ def _storage_policy_rank(storage_policy: str | None) -> int:
 
 def _provider_priority(definition: ProviderDefinition) -> int:
     return int(definition.priority if definition.priority is not None else 100)
-
-
-def _published_sort_rank(value: str | None) -> float:
-    parsed = _parse_iso_datetime(value)
-    if parsed is None:
-        return float("inf")
-    return -parsed.timestamp()
 
 
 class NewsProductService:
@@ -264,87 +271,14 @@ class NewsProductService:
 
     def list_cards(self, *, region: str, limit: int | None = None) -> list[dict[str, Any]]:
         self._ensure_materialized()
-        column_key = "KR" if region.upper() == "KR" else "GLOBAL"
-
+        surface_key = "KR" if region.upper() == "KR" else "GLOBAL"
         with get_connection(self.db_path) as connection:
-            rows = connection.execute(
-                """
-                SELECT
-                    nc.card_key,
-                    nc.column_key,
-                    nc.title,
-                    nc.one_line_summary,
-                    nc.why_it_matters,
-                    nc.market_impact,
-                    nc.market_scope,
-                    nc.primary_region,
-                    nc.trust_score,
-                    nc.materiality_score,
-                    nc.novelty_score,
-                    nc.attention_score,
-                    nc.editorial_score,
-                    nc.ranking_score,
-                    nc.evidence_count,
-                    nc.published_at,
-                    nc.updated_at,
-                    ne.cluster_key,
-                    ne.cross_source_score,
-                    ne.provenance_json
-                FROM news_cards nc
-                JOIN normalized_events ne ON ne.id = nc.normalized_event_id
-                WHERE nc.column_key = ?
-                ORDER BY nc.ranking_score DESC, COALESCE(nc.published_at, nc.updated_at) DESC, nc.id DESC
-                LIMIT ?
-                """,
-                (column_key, limit or self.card_limit),
-            ).fetchall()
-
-            return self._serialize_card_rows(connection, rows)
+            return self._load_cards(connection, surface_key=surface_key, limit=limit or self.card_limit)
 
     def list_disclosure_cards(self, *, limit: int | None = None) -> list[dict[str, Any]]:
         self._ensure_materialized()
-
         with get_connection(self.db_path) as connection:
-            rows = connection.execute(
-                """
-                SELECT
-                    COALESCE(nc.card_key, 'disclosure-card-' || ne.id) AS card_key,
-                    COALESCE(nc.column_key, 'KR') AS column_key,
-                    ne.title,
-                    ne.one_line_summary,
-                    ne.why_it_matters,
-                    ne.market_impact,
-                    ne.market_scope,
-                    ne.primary_region,
-                    ne.trust_score,
-                    ne.materiality_score,
-                    ne.novelty_score,
-                    ne.attention_score,
-                    ne.editorial_score,
-                    ne.ranking_score,
-                    ne.evidence_count,
-                    ne.published_at,
-                    ne.updated_at,
-                    ne.cluster_key,
-                    ne.cross_source_score,
-                    ne.provenance_json,
-                    ne.id AS normalized_event_id
-                FROM normalized_events ne
-                LEFT JOIN news_cards nc ON nc.normalized_event_id = ne.id
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM event_evidence ee
-                    JOIN source_documents sd ON sd.id = ee.source_document_id
-                    WHERE ee.normalized_event_id = ne.id
-                      AND sd.storage_policy = 'CANONICAL_EVENT'
-                )
-                ORDER BY ne.ranking_score DESC, COALESCE(ne.published_at, ne.updated_at) DESC, ne.id DESC
-                LIMIT ?
-                """,
-                (limit or self.card_limit,),
-            ).fetchall()
-
-            return self._serialize_card_rows(connection, rows)
+            return self._load_cards(connection, surface_key="DISCLOSURE", limit=limit or self.card_limit)
 
     def list_feed_items(self, *, limit: int | None = None) -> list[dict[str, Any]]:
         surface_limit = max(limit or self.card_limit, self.card_limit)
@@ -363,16 +297,29 @@ class NewsProductService:
                 key=lambda item: (
                     -(float(item.get("ranking_score") or 0.0)),
                     str(item.get("updated_at") or item.get("published_at") or ""),
+                    str(item.get("id") or ""),
                 ),
             )
         ]
         return items[: limit or len(items)]
 
     def get_feed_item(self, *, news_id: str) -> dict[str, Any] | None:
-        for item in self.list_feed_items(limit=max(self.card_limit * 3, 36)):
-            if str(item["id"]) == str(news_id):
-                return item
-        return None
+        self._ensure_materialized()
+        with get_connection(self.db_path) as connection:
+            row = connection.execute(
+                """
+                SELECT payload_json
+                FROM market_surface_candidates
+                WHERE card_key = ?
+                """,
+                (news_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            card = _json_load(row["payload_json"])
+            if not isinstance(card, dict):
+                return None
+            return self._feed_item_from_card(card)
 
     def search_feed_items(self, *, query: str, limit: int = 20) -> list[dict[str, Any]]:
         normalized_query = query.strip().lower()
@@ -401,147 +348,104 @@ class NewsProductService:
             if any(str(candidate).upper() == normalized_ticker for candidate in item.get("related_tickers") or [])
         ][:limit]
 
-    def _serialize_card_rows(self, connection, rows) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []
-        for row in rows:
-            normalized_event_id = int(row["normalized_event_id"]) if "normalized_event_id" in row.keys() else None
-            if normalized_event_id is None:
-                event_row = connection.execute(
-                    """
-                    SELECT normalized_event_id
-                    FROM news_cards
-                    WHERE card_key = ?
-                    """,
-                    (row["card_key"],),
-                ).fetchone()
-                normalized_event_id = int(event_row["normalized_event_id"]) if event_row is not None else None
-            if normalized_event_id is None:
-                continue
-
-            provenance = _json_load(row["provenance_json"]) or {}
-
-            evidence_rows = connection.execute(
-                """
-                SELECT
-                    ee.evidence_role,
-                    ee.provider,
-                    ee.title,
-                    ee.snippet,
-                    ee.publisher,
-                    ee.source_url,
-                    ee.published_at,
-                    sd.storage_policy,
-                    sd.canonical_url
-                FROM event_evidence ee
-                JOIN source_documents sd ON sd.id = ee.source_document_id
-                WHERE ee.normalized_event_id = ?
-                ORDER BY ee.sort_order ASC, COALESCE(ee.published_at, ee.updated_at) DESC
-                LIMIT ?
-                """,
-                (normalized_event_id, self.representative_evidence_limit),
-            ).fetchall()
-
-            items.append(
-                {
-                    "id": row["card_key"],
-                    "title": row["title"],
-                    "one_line_summary": row["one_line_summary"],
-                    "why_it_matters": row["why_it_matters"],
-                    "market_impact": row["market_impact"],
-                    "market_scope": row["market_scope"],
-                    "primary_region": row["primary_region"],
-                    "trust_score": float(row["trust_score"] or 0.0),
-                    "materiality_score": float(row["materiality_score"] or 0.0),
-                    "novelty_score": float(row["novelty_score"] or 0.0),
-                    "attention_score": float(row["attention_score"] or 0.0),
-                    "editorial_score": float(row["editorial_score"] or 0.0),
-                    "ranking_score": float(row["ranking_score"] or 0.0),
-                    "evidence_count": int(row["evidence_count"] or 0),
-                    "cross_source_score": float(row["cross_source_score"] or 0.0),
-                    "published_at": row["published_at"],
-                    "updated_at": row["updated_at"],
-                    "story_state": provenance.get("story_state") or "NEW",
-                    "importance_label": provenance.get("importance_label") or self._legacy_importance_from_score(
-                        float(row["materiality_score"] or 0.0)
-                    ),
-                    "editorial_reason": provenance.get("editorial_reason"),
-                    "ai_confidence": float(provenance.get("ai_confidence") or 0.0),
-                    "evidence": [
-                        {
-                            "role": evidence["evidence_role"],
-                            "provider": evidence["provider"],
-                            "title": evidence["title"],
-                            "snippet": evidence["snippet"],
-                            "publisher": evidence["publisher"],
-                            "source_url": evidence["source_url"],
-                            "canonical_url": evidence["canonical_url"],
-                            "storage_policy": evidence["storage_policy"],
-                            "published_at": evidence["published_at"],
-                        }
-                        for evidence in evidence_rows
-                    ],
-                    "provenance": provenance,
-                }
-            )
-
-        return items
-
-    def _feed_item_from_card(self, card: dict[str, Any]) -> dict[str, Any]:
-        provenance = card.get("provenance") or {}
-        evidence = card.get("evidence") or []
-        primary_evidence = evidence[0] if evidence else {}
-        related_sectors = [sector for sector in provenance.get("sector_tags") or [] if sector in _ALLOWED_SECTORS]
-        related_tickers = [str(ticker) for ticker in provenance.get("direct_company_tickers") or [] if str(ticker)]
-        event_type = str(provenance.get("event_type") or "")
-        event_subtype = str(provenance.get("event_subtype") or "")
-        tags = [
-            *[str(keyword) for keyword in provenance.get("keyword_tags") or [] if str(keyword)],
-            *[str(name) for name in provenance.get("direct_company_names") or [] if str(name)],
-            *related_sectors,
-        ]
-        for extra_tag in (event_type, event_subtype):
-            if extra_tag:
-                tags.append(extra_tag)
-
-        return {
-            "id": card["id"],
-            "type": self._legacy_news_type(card),
-            "title": card["title"],
-            "summary": card["one_line_summary"],
-            "why_it_matters": card["why_it_matters"],
-            "source": primary_evidence.get("publisher") or primary_evidence.get("provider") or "Argus",
-            "source_url": primary_evidence.get("canonical_url") or primary_evidence.get("source_url") or "",
-            "published_at": card.get("published_at") or card.get("updated_at"),
-            "credibility_score": float(card.get("trust_score") or 0.0),
-            "materiality_score": float(card.get("materiality_score") or 0.0),
-            "editorial_score": float(card.get("editorial_score") or 0.0),
-            "story_state": card.get("story_state") or "NEW",
-            "editorial_reason": card.get("editorial_reason"),
-            "ai_confidence": float(card.get("ai_confidence") or 0.0),
-            "sentiment": self._legacy_sentiment(card),
-            "importance": str(card.get("importance_label") or self._legacy_importance(card)),
-            "related_sectors": related_sectors,
-            "related_tickers": related_tickers,
-            "category": self._legacy_category(card),
-            "tags": list(dict.fromkeys(tag for tag in tags if tag)),
-        }
-
     def get_header_context(self) -> dict[str, Any]:
         self._ensure_materialized()
-        kr_cards = self.list_cards(region="KR", limit=1)
-        global_cards = self.list_cards(region="GLOBAL", limit=1)
-        coverage = self.get_coverage()
+        with get_connection(self.db_path) as connection:
+            kr_cards = self._load_cards(connection, surface_key="KR", limit=self.card_limit)
+            global_cards = self._load_cards(connection, surface_key="GLOBAL", limit=self.card_limit)
+            coverage = self._load_coverage(connection)
+            return self._build_header_context(
+                kr_cards=kr_cards,
+                global_cards=global_cards,
+                coverage=coverage,
+            )
 
+    def get_coverage(self) -> dict[str, Any]:
+        self._ensure_materialized()
+        with get_connection(self.db_path) as connection:
+            return self._load_coverage(connection)
+
+    def get_dashboard(self) -> dict[str, Any]:
+        self._ensure_materialized()
+        with get_connection(self.db_path) as connection:
+            kr_cards = self._load_cards(connection, surface_key="KR", limit=self.card_limit)
+            global_cards = self._load_cards(connection, surface_key="GLOBAL", limit=self.card_limit)
+            disclosure_cards = self._load_cards(connection, surface_key="DISCLOSURE", limit=self.card_limit)
+            coverage = self._load_coverage(connection)
+            header_context = self._build_header_context(
+                kr_cards=kr_cards,
+                global_cards=global_cards,
+                coverage=coverage,
+            )
+            return {
+                "kr_cards": kr_cards,
+                "global_cards": global_cards,
+                "disclosure_cards": disclosure_cards,
+                "header_context": header_context,
+                "coverage": coverage,
+            }
+
+    def refresh_materialized(self, *, force: bool = False) -> None:
+        self._ensure_materialized(force=force)
+
+    def _load_cards(self, connection, *, surface_key: str, limit: int) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            """
+            SELECT payload_json
+            FROM market_surface_candidates
+            WHERE surface_key = ?
+            ORDER BY ranking_score DESC, COALESCE(published_at, updated_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (surface_key, limit),
+        ).fetchall()
+        cards: list[dict[str, Any]] = []
+        for row in rows:
+            payload = _json_load(row["payload_json"])
+            if isinstance(payload, dict):
+                cards.append(payload)
+        return cards
+
+    def _load_coverage(self, connection) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            SELECT state_json
+            FROM market_surface_state
+            WHERE surface_key = 'COVERAGE'
+            """
+        ).fetchone()
+        payload = _json_load(row["state_json"]) if row is not None else None
+        if isinstance(payload, dict):
+            return payload
+        return {
+            "state": "empty",
+            "coverage_ratio": 0.0,
+            "available_sources": 0,
+            "expected_sources": 0,
+            "summary": "표시 가능한 뉴스 소스가 없습니다.",
+            "updated_at": None,
+            "items": [],
+        }
+
+    def _build_header_context(
+        self,
+        *,
+        kr_cards: list[dict[str, Any]],
+        global_cards: list[dict[str, Any]],
+        coverage: dict[str, Any],
+    ) -> dict[str, Any]:
         updated_at = self._latest_timestamp(
-            [coverage.get("updated_at"), kr_cards[0]["updated_at"] if kr_cards else None, global_cards[0]["updated_at"] if global_cards else None]
+            [
+                coverage.get("updated_at"),
+                kr_cards[0]["updated_at"] if kr_cards else None,
+                global_cards[0]["updated_at"] if global_cards else None,
+            ]
         )
         lead = kr_cards[0] if kr_cards else (global_cards[0] if global_cards else None)
-
         if lead is None:
             summary_line = "표시 가능한 이벤트 카드가 아직 준비되지 않았습니다."
         else:
             summary_line = f"{lead['title']} 중심으로 {lead['primary_region']} 이슈를 먼저 확인할 수 있습니다."
-
         return {
             "updated_at": updated_at,
             "summary_line": summary_line,
@@ -556,89 +460,19 @@ class NewsProductService:
                 {
                     "key": "KR",
                     "label": "한국 증시",
-                    "count": len(self.list_cards(region="KR")),
+                    "count": len(kr_cards),
                     "lead_title": kr_cards[0]["title"] if kr_cards else None,
                     "lead_scope": kr_cards[0]["market_scope"] if kr_cards else None,
                 },
                 {
                     "key": "GLOBAL",
                     "label": "글로벌 증시",
-                    "count": len(self.list_cards(region="GLOBAL")),
+                    "count": len(global_cards),
                     "lead_title": global_cards[0]["title"] if global_cards else None,
                     "lead_scope": global_cards[0]["market_scope"] if global_cards else None,
                 },
             ],
         }
-
-    def get_coverage(self) -> dict[str, Any]:
-        self._ensure_materialized()
-        with get_connection(self.db_path) as connection:
-            rows = connection.execute(
-                """
-                SELECT
-                    sc.*,
-                    COALESCE(pr.priority, 999) AS provider_priority
-                FROM source_coverage sc
-                LEFT JOIN provider_registry pr
-                    ON pr.provider_key = sc.provider
-                WHERE sc.surface_key = 'news_tab'
-                ORDER BY provider_priority ASC, sc.provider ASC
-                """
-            ).fetchall()
-
-        items = []
-        available_count = 0
-        updated_candidates: list[str | None] = []
-        for row in rows:
-            status = str(row["status"])
-            if status == "available":
-                available_count += 1
-            elif status == "partial":
-                available_count += 0.5
-            updated_candidates.append(row["updated_at"])
-            items.append(
-                {
-                    "provider": row["provider"],
-                    "status": status,
-                    "document_count": int(row["document_count"] or 0),
-                    "event_count": int(row["event_count"] or 0),
-                    "evidence_count": int(row["evidence_count"] or 0),
-                    "last_published_at": row["last_published_at"],
-                    "last_synced_at": row["last_synced_at"],
-                    "note": row["note"],
-                    "metadata": _json_load(row["metadata_json"]) or {},
-                }
-            )
-
-        expected_sources = len(items)
-        coverage_ratio = round(available_count / expected_sources, 2) if expected_sources else 0.0
-        state = "empty"
-        if coverage_ratio >= 0.99:
-            state = "full"
-        elif coverage_ratio > 0:
-            state = "partial"
-
-        if not items:
-            summary = "아직 수집/정규화된 뉴스 소스가 없습니다."
-        elif state == "full":
-            summary = "핵심 소스와 관심도 신호가 모두 반영되었습니다."
-        elif state == "partial":
-            summary = "일부 소스 또는 관심도 신호가 비어 있어 랭킹이 부분적으로만 반영됩니다."
-        else:
-            summary = "표시 가능한 뉴스 소스가 없습니다."
-
-        return {
-            "state": state,
-            "coverage_ratio": coverage_ratio,
-            "available_sources": sum(1 for item in items if item["status"] == "available"),
-            "expected_sources": expected_sources,
-            "summary": summary,
-            "updated_at": self._latest_timestamp(updated_candidates),
-            "items": items,
-        }
-
-    def refresh_materialized(self, *, force: bool = False) -> None:
-        self._ensure_materialized(force=force)
 
     def _ensure_materialized(self, *, force: bool = False) -> None:
         try:
@@ -653,40 +487,25 @@ class NewsProductService:
             )
 
     def _needs_refresh(self, connection) -> bool:
-        latest_materialized = connection.execute(
-            "SELECT MAX(updated_at) AS updated_at FROM news_cards"
-        ).fetchone()["updated_at"]
-        if latest_materialized is None:
+        row = connection.execute(
+            """
+            SELECT updated_at
+            FROM market_surface_state
+            WHERE surface_key = 'REFRESH_META'
+            """
+        ).fetchone()
+        if row is None or row["updated_at"] is None:
             return True
-
+        latest_materialized = row["updated_at"]
         latest_source = connection.execute(
             """
             SELECT MAX(updated_at) AS updated_at
-            FROM (
-                SELECT updated_at FROM raw_documents
-                UNION ALL
-                SELECT updated_at FROM events
-            )
+            FROM raw_documents
             """
         ).fetchone()["updated_at"]
         if latest_source and latest_source > latest_materialized:
             return True
-
-        latest_trend = connection.execute(
-            """
-            SELECT MAX(sc.updated_at) AS updated_at
-            FROM source_coverage sc
-            LEFT JOIN provider_registry pr
-                ON pr.provider_key = sc.provider
-            WHERE sc.surface_key = 'news_tab'
-              AND COALESCE(pr.provider_family, '') = ?
-            """,
-            (PROVIDER_FAMILY_TREND_SIGNAL,),
-        ).fetchone()
-        if latest_trend is None:
-            return True
-
-        refreshed_at = _parse_iso_datetime(latest_trend["updated_at"])
+        refreshed_at = _parse_iso_datetime(latest_materialized)
         if refreshed_at is None:
             return True
         return datetime.now(timezone.utc) - refreshed_at > timedelta(seconds=self.refresh_ttl_seconds)
@@ -696,54 +515,34 @@ class NewsProductService:
         cutoff_dt = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
         cutoff_iso = cutoff_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
         provider_definitions = list_provider_definitions(connection)
-
         raw_documents = self._load_recent_raw_documents(connection, cutoff_iso)
-        event_map = self._load_recent_event_map(connection, cutoff_iso)
         latest_runs = self._load_latest_runs(connection)
-
-        source_document_id_by_raw_id = self._rebuild_source_documents(
-            connection,
-            raw_documents,
-            now,
-            provider_definitions,
-        )
-        clusters = self._build_clusters(
+        clusters, triage_rows = self._build_clusters(
             raw_documents=raw_documents,
-            event_map=event_map,
-            source_document_id_by_raw_id=source_document_id_by_raw_id,
             provider_definitions=provider_definitions,
         )
         attention_scores, datalab_status = self._resolve_attention_scores(clusters)
         editorial_ai_enrichments = self._resolve_editorial_ai_enrichments(
-            connection,
             clusters=clusters,
             attention_scores=attention_scores,
-            now=now,
         )
-        self._replace_materialized_events(
-            connection,
-            clusters,
-            attention_scores,
-            editorial_ai_enrichments,
-            now,
-        )
-        self._replace_source_coverage(
-            connection,
-            now=now,
+        coverage_payload = self._build_coverage(
             raw_documents=raw_documents,
             clusters=clusters,
             latest_runs=latest_runs,
             datalab_status=datalab_status,
             provider_definitions=provider_definitions,
+            now=now,
         )
-
-        logger.info(
-            "news_product_refresh_completed",
-            extra={
-                "raw_document_count": len(raw_documents),
-                "cluster_count": len(clusters),
-                "cutoff": cutoff_iso,
-            },
+        self._replace_materialized(
+            connection,
+            clusters=clusters,
+            triage_rows=triage_rows,
+            attention_scores=attention_scores,
+            editorial_ai_enrichments=editorial_ai_enrichments,
+            coverage_payload=coverage_payload,
+            now=now,
+            provider_definitions=provider_definitions,
         )
 
     def _load_recent_raw_documents(self, connection, cutoff_iso: str) -> list[dict[str, Any]]:
@@ -764,68 +563,15 @@ class NewsProductService:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def _load_recent_event_map(self, connection, cutoff_iso: str) -> dict[int, dict[str, Any]]:
-        rows = connection.execute(
-            """
-            SELECT
-                e.*,
-                edge.company_id AS edge_company_id,
-                edge.impact_tier,
-                edge.reason AS edge_reason,
-                edge.evidence_text,
-                edge.mapping_rule_source,
-                edge.confidence AS edge_confidence,
-                c.canonical_name AS edge_company_name,
-                c.primary_stock_code AS edge_primary_stock_code
-            FROM events e
-            LEFT JOIN event_company_edges edge ON edge.event_id = e.id
-            LEFT JOIN companies c ON c.id = edge.company_id
-            WHERE COALESCE(e.occurred_at, e.updated_at, e.created_at) >= ?
-              AND e.status != 'REJECTED'
-            ORDER BY e.id ASC
-            """,
-            (cutoff_iso,),
-        ).fetchall()
-
-        grouped: dict[int, dict[str, Any]] = {}
-        for row in rows:
-            primary_document_id = int(row["primary_document_id"])
-            item = grouped.get(primary_document_id)
-            if item is None:
-                item = {
-                    "event_id": int(row["id"]),
-                    "primary_document_id": primary_document_id,
-                    "event_type": row["event_type"],
-                    "summary": row["summary"],
-                    "sentiment": row["sentiment"],
-                    "source_type": row["source_type"],
-                    "source_provider": row["source_provider"],
-                    "trust_score": float(row["trust_score"] or 0.0),
-                    "confidence": float(row["confidence"] or 0.0),
-                    "occurred_at": row["occurred_at"],
-                    "metadata": _json_load(row["metadata_json"]) or {},
-                    "companies": [],
-                }
-                grouped[primary_document_id] = item
-
-            if row["edge_company_id"] is None:
-                continue
-            item["companies"].append(
-                {
-                    "company_id": int(row["edge_company_id"]),
-                    "impact_tier": row["impact_tier"],
-                    "reason": row["edge_reason"],
-                    "evidence_text": row["evidence_text"],
-                    "mapping_rule_source": row["mapping_rule_source"],
-                    "confidence": float(row["edge_confidence"] or 0.0),
-                    "company_name": row["edge_company_name"],
-                    "primary_stock_code": row["edge_primary_stock_code"],
-                }
-            )
-
-        return grouped
-
     def _load_latest_runs(self, connection) -> dict[str, dict[str, Any]]:
+        if connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'raw_document_fetch_runs'
+            """
+        ).fetchone()["count"] == 0:
+            return {}
         rows = connection.execute(
             """
             SELECT provider, status, finished_at, error_message, metadata_json
@@ -847,264 +593,128 @@ class NewsProductService:
             for row in rows
         }
 
-    def _rebuild_source_documents(
-        self,
-        connection,
-        raw_documents: list[dict[str, Any]],
-        now: str,
-        provider_definitions: dict[str, ProviderDefinition],
-    ) -> dict[int, int]:
-        connection.execute("DELETE FROM source_coverage")
-        connection.execute("DELETE FROM news_cards")
-        connection.execute("DELETE FROM event_tags")
-        connection.execute("DELETE FROM event_evidence")
-        connection.execute("DELETE FROM normalized_events")
-        connection.execute("DELETE FROM source_documents")
-
-        source_document_id_by_raw_id: dict[int, int] = {}
-        for row in raw_documents:
-            definition = resolve_provider_definition(
-                provider_definitions,
-                provider_key=str(row["provider"]),
-                document_type=str(row.get("document_type") or ""),
-            )
-            publisher_definition = ensure_publisher_definition(
-                connection,
-                publisher_name=row.get("publisher"),
-                publisher_key=row.get("publisher_key"),
-            )
-            publisher_key = publisher_definition.publisher_key if publisher_definition is not None else None
-            row["publisher_key"] = publisher_key
-            provenance = {
-                "raw_document_id": int(row["id"]),
-                "duplicate_of_document_id": row["duplicate_of_document_id"],
-                "first_seen_run_id": row["first_seen_run_id"],
-                "last_seen_run_id": row["last_seen_run_id"],
-            }
-            metadata = _json_load(row.get("provider_metadata_json")) or {}
-            connection.execute(
-                """
-                INSERT INTO source_documents (
-                    raw_document_id,
-                    provider,
-                    provider_document_id,
-                    document_kind,
-                    storage_policy,
-                    title,
-                    snippet,
-                    publisher,
-                    publisher_key,
-                    source_url,
-                    canonical_url,
-                    published_at,
-                    observed_at,
-                    published_at_source,
-                    receipt_at,
-                    company_id,
-                    company_ref,
-                    query_text,
-                    source_metadata_json,
-                    provenance_json,
-                    created_at,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    int(row["id"]),
-                    row["provider"],
-                    row["provider_document_id"],
-                    definition.document_kind,
-                    definition.storage_policy,
-                    row["title"],
-                    row["summary"],
-                    row["publisher"],
-                    publisher_key,
-                    row["source_url"],
-                    row["canonical_url"],
-                    row["published_at"],
-                    row.get("observed_at"),
-                    row.get("published_at_source"),
-                    row["receipt_at"],
-                    row["company_id"],
-                    row["company_ref"],
-                    row["query_text"],
-                    json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-                    json.dumps(provenance, ensure_ascii=False, sort_keys=True),
-                    now,
-                    now,
-                ),
-            )
-            source_document_id = int(connection.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
-            source_document_id_by_raw_id[int(row["id"])] = source_document_id
-        return source_document_id_by_raw_id
-
     def _build_clusters(
         self,
         *,
         raw_documents: list[dict[str, Any]],
-        event_map: dict[int, dict[str, Any]],
-        source_document_id_by_raw_id: dict[int, int],
         provider_definitions: dict[str, ProviderDefinition],
-    ) -> list[dict[str, Any]]:
-        cluster_key_by_raw_id: dict[int, str] = {}
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         clusters: dict[str, dict[str, Any]] = {}
-        ordered_docs = sorted(raw_documents, key=lambda item: int(item["is_duplicate"] or 0))
+        cluster_key_by_raw_id: dict[int, str] = {}
+        triage_rows: list[dict[str, Any]] = []
+        batch_key = utcnow_iso()
 
-        for row in ordered_docs:
+        for row in raw_documents:
+            triage = self._triage_document(row=row, provider_definitions=provider_definitions)
             raw_document_id = int(row["id"])
             duplicate_of = int(row["duplicate_of_document_id"]) if row["duplicate_of_document_id"] is not None else None
-            base_event = event_map.get(duplicate_of or raw_document_id)
-            event_type = (base_event or {}).get("event_type") or classify_event_type(
-                " ".join(filter(None, [row.get("title"), row.get("summary")]))
-            )
-            candidate_source_type = (base_event or {}).get("source_type") or resolve_provider_definition(
-                provider_definitions,
-                provider_key=str(row["provider"]),
-                document_type=str(row.get("document_type") or ""),
-            ).source_type
-            candidate_trust_score = float(
-                (base_event or {}).get("trust_score")
-                or self._trust_score_for(
-                    provider_definitions,
-                    provider=str(row["provider"]),
-                    document_type=str(row.get("document_type") or ""),
-                )
-            )
-            scope_payload = self._classify_scope(row=row, base_event=base_event)
-
             if duplicate_of is not None and duplicate_of in cluster_key_by_raw_id:
                 cluster_key = cluster_key_by_raw_id[duplicate_of]
             else:
-                cluster_key = self._cluster_key_for(row=row, base_event=base_event, scope_payload=scope_payload)
-
+                cluster_key = self._cluster_key_for(row=row, triage=triage)
             cluster_key_by_raw_id[raw_document_id] = cluster_key
+
+            triage_rows.append(
+                {
+                    "raw_document_id": raw_document_id,
+                    "batch_key": batch_key,
+                    "cluster_key": cluster_key,
+                    "provider": row["provider"],
+                    "document_type": row.get("document_type") or "",
+                    "market_scope": triage["market_scope"],
+                    "primary_region": triage["primary_region"],
+                    "market_importance_prelim": triage["importance_label"],
+                    "impact_direction": triage["impact_direction"],
+                    "reason_short": triage["reason_short"],
+                    "affected_companies_json": json.dumps(
+                        {
+                            "names": triage["direct_company_names"],
+                            "tickers": triage["direct_company_tickers"],
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    "related_sectors_json": json.dumps(triage["sector_tags"], ensure_ascii=False, sort_keys=True),
+                    "keyword_tags_json": json.dumps(triage["keyword_tags"], ensure_ascii=False, sort_keys=True),
+                    "triage_metadata_json": json.dumps(
+                        {
+                            "event_type": triage["event_type"],
+                            "event_subtype": triage["event_subtype"],
+                            "impact_horizon": triage["impact_horizon"],
+                            "source_type": triage["source_type"],
+                            "canonical_anchor": triage["storage_policy"] == "CANONICAL_EVENT",
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                }
+            )
+
             cluster = clusters.get(cluster_key)
             if cluster is None:
-                base_published_at = effective_document_time(
-                    document_type=str(row.get("document_type") or ""),
-                    published_at=row.get("published_at"),
-                    observed_at=row.get("observed_at"),
-                    receipt_at=row.get("receipt_at"),
-                    updated_at=(base_event or {}).get("occurred_at") or row.get("updated_at"),
-                    created_at=row.get("created_at"),
-                )
+                published_at = self._document_published_at(row)
                 cluster = {
                     "cluster_key": cluster_key,
-                    "event_id": (base_event or {}).get("event_id"),
-                    "title": row["title"] or self._fallback_title(base_event),
-                    "one_line_summary": self._one_line_summary(row=row, base_event=base_event),
-                    "why_it_matters": self._why_it_matters(scope_payload["market_scope"], base_event),
-                    "market_impact": self._market_impact(scope_payload["market_scope"], base_event),
-                    "market_scope": scope_payload["market_scope"],
-                    "primary_region": scope_payload["primary_region"],
-                    "event_type": event_type,
-                    "event_subtype": self._event_subtype(base_event),
-                    "impact_direction": self._impact_direction(base_event),
-                    "impact_horizon": self._impact_horizon(base_event),
-                    "source_type": candidate_source_type,
-                    "trust_score": candidate_trust_score,
-                    "materiality_score": 0.0,
-                    "novelty_score": 0.0,
-                    "attention_score": 0.0,
-                    "cross_source_score": 0.0,
-                    "editorial_score": 0.0,
-                    "ranking_score": 0.0,
-                    "published_at": base_published_at,
-                    "updated_at": base_published_at,
-                    "providers": set(),
+                    "title": str(row.get("title") or "").strip() or "시장 이벤트",
+                    "one_line_summary": self._one_line_summary(row=row),
+                    "why_it_matters": self._why_it_matters(triage["market_scope"]),
+                    "market_impact": self._market_impact(triage["market_scope"], triage["impact_direction"]),
+                    "market_scope": triage["market_scope"],
+                    "primary_region": triage["primary_region"],
+                    "event_type": triage["event_type"],
+                    "event_subtype": triage["event_subtype"],
+                    "impact_direction": triage["impact_direction"],
+                    "impact_horizon": triage["impact_horizon"],
+                    "source_type": triage["source_type"],
+                    "trust_score": triage["trust_score"],
+                    "published_at": published_at,
+                    "providers": {str(row["provider"])},
+                    "direct_company_names": set(triage["direct_company_names"]),
+                    "direct_company_tickers": set(triage["direct_company_tickers"]),
+                    "sector_tags": set(triage["sector_tags"]),
+                    "keyword_tags": set(triage["keyword_tags"]),
+                    "quality_flags": set(self._quality_flags(row)),
                     "evidence": [],
-                    "tags": set(),
-                    "quality_flags": set(),
-                    "direct_company_names": set(scope_payload["direct_company_names"]),
-                    "direct_company_tickers": set(scope_payload["direct_company_tickers"]),
-                    "sector_tags": set(scope_payload["sector_tags"]),
-                    "keyword_tags": set(scope_payload["keyword_tags"]),
                 }
                 clusters[cluster_key] = cluster
             else:
-                if self._source_priority_rank(candidate_source_type) < self._source_priority_rank(cluster["source_type"]) or (
-                    self._event_subtype(base_event) not in {"generic", "generic_disclosure"}
-                    and cluster["event_subtype"] in {"generic", "generic_disclosure"}
-                ):
-                    cluster["event_id"] = (base_event or {}).get("event_id") or cluster["event_id"]
-                    cluster["title"] = row["title"] or cluster["title"]
-                    cluster["one_line_summary"] = self._one_line_summary(row=row, base_event=base_event)
-                    cluster["why_it_matters"] = self._why_it_matters(scope_payload["market_scope"], base_event)
-                    cluster["market_impact"] = self._market_impact(scope_payload["market_scope"], base_event)
-                    cluster["event_type"] = event_type
-                    cluster["event_subtype"] = self._event_subtype(base_event)
-                    cluster["impact_direction"] = self._impact_direction(base_event)
-                    cluster["impact_horizon"] = self._impact_horizon(base_event)
-                    cluster["source_type"] = candidate_source_type
-                cluster["trust_score"] = max(cluster["trust_score"], candidate_trust_score)
+                cluster["providers"].add(str(row["provider"]))
+                cluster["trust_score"] = max(cluster["trust_score"], triage["trust_score"])
+                cluster["direct_company_names"].update(triage["direct_company_names"])
+                cluster["direct_company_tickers"].update(triage["direct_company_tickers"])
+                cluster["sector_tags"].update(triage["sector_tags"])
+                cluster["keyword_tags"].update(triage["keyword_tags"])
+                cluster["quality_flags"].update(self._quality_flags(row))
+                cluster["market_scope"] = self._prefer_scope(cluster["market_scope"], triage["market_scope"])
+                cluster["primary_region"] = self._prefer_region(cluster["primary_region"], triage["primary_region"])
+                cluster["source_type"] = self._prefer_source_type(cluster["source_type"], triage["source_type"])
+                cluster["event_type"] = self._prefer_event_type(cluster["event_type"], triage["event_type"])
+                cluster["event_subtype"] = self._prefer_event_subtype(cluster["event_subtype"], triage["event_subtype"])
+                cluster["impact_direction"] = self._prefer_direction(cluster["impact_direction"], triage["impact_direction"])
+                cluster["impact_horizon"] = self._prefer_horizon(cluster["impact_horizon"], triage["impact_horizon"])
+                cluster["why_it_matters"] = self._why_it_matters(cluster["market_scope"])
+                cluster["market_impact"] = self._market_impact(cluster["market_scope"], cluster["impact_direction"])
+                cluster["one_line_summary"] = self._prefer_summary(cluster["one_line_summary"], row.get("summary"))
+                candidate_published_at = self._document_published_at(row)
+                if self._latest_timestamp([cluster["published_at"], candidate_published_at]) == candidate_published_at:
+                    cluster["published_at"] = candidate_published_at
 
-            provider = str(row["provider"])
-            cluster["providers"].add(provider)
-            cluster["tags"].add(("region", scope_payload["primary_region"]))
-            cluster["tags"].add(("scope", scope_payload["market_scope"]))
-            cluster["tags"].add(("event_type", event_type))
-
-            for company_name in scope_payload["direct_company_names"]:
-                cluster["tags"].add(("company", company_name))
-            for ticker in scope_payload["direct_company_tickers"]:
-                cluster["direct_company_tickers"].add(ticker)
-            for sector_tag in scope_payload["sector_tags"]:
-                cluster["tags"].add(("sector", sector_tag))
-            for keyword_tag in scope_payload["keyword_tags"]:
-                cluster["tags"].add(("keyword", keyword_tag))
-
-            quality_flags = self._quality_flags(row)
-            for flag in quality_flags:
-                cluster["quality_flags"].add(flag)
-                cluster["tags"].add(("quality", flag))
-
-            publisher_definition = build_publisher_definition(
-                publisher_name=row.get("publisher"),
-                publisher_key=row.get("publisher_key"),
-            )
             cluster["evidence"].append(
                 {
-                    "source_document_id": source_document_id_by_raw_id[raw_document_id],
-                    "provider": provider,
-                    "title": row["title"],
-                    "snippet": row["summary"],
-                    "publisher": row["publisher"],
-                    "publisher_key": publisher_definition.publisher_key if publisher_definition is not None else None,
-                    "source_url": row["source_url"] or row["canonical_url"],
-                    "canonical_url": row["canonical_url"],
-                    "published_at": effective_document_time(
-                        document_type=str(row.get("document_type") or ""),
-                        published_at=row.get("published_at"),
-                        observed_at=row.get("observed_at"),
-                        receipt_at=row.get("receipt_at"),
-                        updated_at=row.get("updated_at"),
-                        created_at=row.get("created_at"),
-                    ),
-                    "observed_at": row.get("observed_at"),
-                    "storage_policy": resolve_provider_definition(
-                        provider_definitions,
-                        provider_key=provider,
-                        document_type=str(row.get("document_type") or ""),
-                    ).storage_policy,
-                    "is_duplicate": bool(row["is_duplicate"]),
+                    "raw_document_id": raw_document_id,
+                    "provider": str(row["provider"]),
+                    "title": row.get("title"),
+                    "snippet": row.get("summary"),
+                    "publisher": row.get("publisher"),
+                    "source_url": row.get("source_url"),
+                    "canonical_url": row.get("canonical_url"),
+                    "published_at": self._document_published_at(row),
+                    "storage_policy": triage["storage_policy"],
+                    "document_type": str(row.get("document_type") or ""),
                 }
             )
 
-            current_published = _parse_iso_datetime(cluster["published_at"])
-            candidate_published = _parse_iso_datetime(
-                effective_document_time(
-                    document_type=str(row.get("document_type") or ""),
-                    published_at=row.get("published_at"),
-                    observed_at=row.get("observed_at"),
-                    receipt_at=row.get("receipt_at"),
-                    updated_at=row.get("updated_at"),
-                    created_at=row.get("created_at"),
-                )
-            )
-            if candidate_published and (current_published is None or candidate_published > current_published):
-                cluster["published_at"] = candidate_published.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-        return self._finalize_clusters(list(clusters.values()), provider_definitions)
+        return self._finalize_clusters(list(clusters.values()), provider_definitions), triage_rows
 
     def _finalize_clusters(
         self,
@@ -1122,44 +732,34 @@ class NewsProductService:
                         resolve_provider_definition(
                             provider_definitions,
                             provider_key=item["provider"],
+                            document_type=item["document_type"],
                         )
                     ),
                     _published_sort_rank(item["published_at"]),
+                    item["raw_document_id"],
                 ),
             )
             cluster["evidence"] = evidence
-            distinct_providers = len(cluster["providers"])
-            distinct_publishers = {
-                publisher_key
-                for publisher_key in (self._publisher_identity(item) for item in evidence)
-                if publisher_key
-            }
+            distinct_providers = len({item["provider"] for item in evidence})
+            distinct_publishers = {self._publisher_identity(item) for item in evidence if self._publisher_identity(item)}
             has_canonical_anchor = any(item["storage_policy"] == "CANONICAL_EVENT" for item in evidence)
             has_persistent_evidence = any(item["storage_policy"] == "PERSISTENT_EVIDENCE" for item in evidence)
-
             provider_confirmation = 0.0
             if distinct_providers >= 2:
                 provider_confirmation += 0.06
             if distinct_providers >= 3:
                 provider_confirmation += 0.04
-
             publisher_confirmation = 0.0
             if len(distinct_publishers) >= 2:
                 publisher_confirmation += 0.04
             if len(distinct_publishers) >= 3:
                 publisher_confirmation += 0.02
-
             cluster["cross_source_score"] = _clamp(provider_confirmation + publisher_confirmation)
             published_at = _parse_iso_datetime(cluster["published_at"]) or now
             age_hours = max((now - published_at).total_seconds() / 3600.0, 0.0)
-            recency_score = _clamp(1.0 - (age_hours / (self.lookback_days * 24.0)))
-            repetition_penalty = min(max(len(evidence) - 1, 0) * 0.05, 0.25)
-            cluster["novelty_score"] = _clamp(recency_score - repetition_penalty)
-            cluster["updated_at"] = utcnow_iso()
-            cluster["publisher_count"] = len(distinct_publishers)
+            cluster["novelty_score"] = _clamp(1.0 - (age_hours / (self.lookback_days * 24.0)) - min(max(len(evidence) - 1, 0) * 0.05, 0.25))
             cluster["has_canonical_anchor"] = has_canonical_anchor
             cluster["has_persistent_evidence"] = has_persistent_evidence
-
             cluster["materiality_score"] = self._materiality_score(
                 event_type=cluster["event_type"],
                 event_subtype=cluster["event_subtype"],
@@ -1186,10 +786,7 @@ class NewsProductService:
             results.append(cluster)
         return results
 
-    def _resolve_attention_scores(
-        self,
-        clusters: list[dict[str, Any]],
-    ) -> tuple[dict[str, float], dict[str, Any]]:
+    def _resolve_attention_scores(self, clusters: list[dict[str, Any]]) -> tuple[dict[str, float], dict[str, Any]]:
         target_clusters = [
             cluster
             for cluster in sorted(clusters, key=lambda item: item["ranking_score"], reverse=True)
@@ -1241,124 +838,62 @@ class NewsProductService:
 
     def _resolve_editorial_ai_enrichments(
         self,
-        connection,
         *,
         clusters: list[dict[str, Any]],
         attention_scores: dict[str, float],
-        now: str,
     ) -> dict[str, dict[str, Any]]:
         if self.editorial_ai_candidate_limit <= 0:
             return {}
-
         enabled, reason = self.editorial_ai_provider.is_enabled()
         if not enabled:
             logger.info("news_editorial_ai_skipped", extra={"reason": reason})
             return {}
 
-        provisional_candidates = []
+        candidates: list[tuple[float, dict[str, Any]]] = []
         for cluster in clusters:
             if cluster["market_scope"] == "ignore":
                 continue
-            attention_score = attention_scores.get(cluster["cluster_key"], 0.0)
-            provisional_score = self._editorial_score(
+            provisional = self._editorial_score(
                 trust_score=cluster["trust_score"],
                 materiality_score=cluster["materiality_score"],
                 novelty_score=cluster["novelty_score"],
                 cross_source_score=cluster["cross_source_score"],
-                attention_score=attention_score,
+                attention_score=attention_scores.get(cluster["cluster_key"], 0.0),
                 market_scope=cluster["market_scope"],
                 has_canonical_anchor=cluster["has_canonical_anchor"],
                 has_persistent_evidence=cluster["has_persistent_evidence"],
                 quality_flags=cluster["quality_flags"],
             )
-            if provisional_score < self.editorial_ai_min_editorial_score:
+            if provisional < self.editorial_ai_min_editorial_score:
                 continue
-            provisional_candidates.append((provisional_score, attention_score, cluster))
+            candidates.append((provisional, cluster))
 
         enrichments: dict[str, dict[str, Any]] = {}
-        for _, attention_score, cluster in sorted(
-            provisional_candidates,
-            key=lambda item: item[0],
-            reverse=True,
-        )[: self.editorial_ai_candidate_limit]:
-            request = self._build_editorial_ai_request(cluster=cluster, attention_score=attention_score)
-            input_hash = self._hash_text(
-                json.dumps(
-                    {
-                        "title": request.title,
-                        "summary": request.one_line_summary,
-                        "why_it_matters": request.why_it_matters,
-                        "market_impact": request.market_impact,
-                        "market_scope": request.market_scope,
-                        "event_type": request.event_type,
-                        "event_subtype": request.event_subtype,
-                        "trust_score": request.trust_score,
-                        "materiality_score": request.materiality_score,
-                        "novelty_score": request.novelty_score,
-                        "cross_source_score": request.cross_source_score,
-                        "attention_score": request.attention_score,
-                        "evidence": request.evidence,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
+        for _, cluster in sorted(candidates, key=lambda item: item[0], reverse=True)[: self.editorial_ai_candidate_limit]:
+            request = self._build_editorial_ai_request(
+                cluster=cluster,
+                attention_score=attention_scores.get(cluster["cluster_key"], 0.0),
             )
-            cached = self._load_cached_editorial_enrichment(
-                connection,
-                cluster_key=request.cluster_key,
-                input_hash=input_hash,
-            )
-            if cached is not None:
-                enrichments[request.cluster_key] = cached
-                continue
-
             try:
                 response = self.editorial_ai_provider.enrich(request)
             except Exception as error:  # noqa: BLE001
-                logger.warning(
-                    "news_editorial_ai_failed",
-                    extra={"cluster_key": request.cluster_key, "error": str(error)},
-                )
+                logger.warning("news_editorial_ai_failed", extra={"title": cluster["title"], "error": str(error)})
                 continue
-
             if response is None:
                 continue
-
-            enrichments[request.cluster_key] = {
+            enrichments[cluster["cluster_key"]] = {
                 "story_state": response.story_state,
                 "importance_label": response.importance_label,
                 "editorial_reason": response.editorial_reason,
-                "editorial_boost": response.editorial_boost,
-                "ai_confidence": response.confidence,
+                "editorial_boost": float(response.editorial_boost or 0.0),
+                "ai_confidence": float(response.confidence or 0.0),
+                "raw_output": response.raw_output or {},
                 "provider_name": self.editorial_ai_provider.provider_name,
                 "model_name": self.editorial_ai_provider.model_name(),
             }
-            self._upsert_editorial_enrichment(
-                connection,
-                cluster_key=request.cluster_key,
-                input_hash=input_hash,
-                response=response,
-                now=now,
-            )
         return enrichments
 
-    def _build_editorial_ai_request(
-        self,
-        *,
-        cluster: dict[str, Any],
-        attention_score: float,
-    ) -> NewsEditorialAIRequest:
-        evidence_payload = [
-            {
-                "provider": evidence["provider"],
-                "publisher": evidence.get("publisher"),
-                "storage_policy": evidence["storage_policy"],
-                "title": evidence["title"],
-                "snippet": evidence["snippet"],
-                "published_at": evidence["published_at"],
-            }
-            for evidence in cluster["evidence"][: self.representative_evidence_limit]
-        ]
+    def _build_editorial_ai_request(self, *, cluster: dict[str, Any], attention_score: float) -> NewsEditorialAIRequest:
         return NewsEditorialAIRequest(
             cluster_key=cluster["cluster_key"],
             title=cluster["title"],
@@ -1382,373 +917,37 @@ class NewsProductService:
             direct_company_tickers=sorted(cluster["direct_company_tickers"]),
             sector_tags=sorted(cluster["sector_tags"]),
             keyword_tags=sorted(cluster["keyword_tags"]),
-            evidence=evidence_payload,
+            evidence=[
+                {
+                    "title": evidence["title"],
+                    "snippet": evidence["snippet"],
+                    "provider": evidence["provider"],
+                    "publisher": evidence["publisher"],
+                }
+                for evidence in cluster["evidence"][: self.representative_evidence_limit]
+            ],
         )
 
-    def _load_cached_editorial_enrichment(
+    def _build_coverage(
         self,
-        connection,
         *,
-        cluster_key: str,
-        input_hash: str,
-    ) -> dict[str, Any] | None:
-        row = connection.execute(
-            """
-            SELECT
-                story_state,
-                importance_label,
-                editorial_reason,
-                editorial_boost,
-                ai_confidence,
-                provider_name,
-                model_name
-            FROM news_editorial_enrichments
-            WHERE cluster_key = ?
-              AND input_hash = ?
-            """,
-            (cluster_key, input_hash),
-        ).fetchone()
-        if row is None:
-            return None
-        return {
-            "story_state": row["story_state"],
-            "importance_label": row["importance_label"],
-            "editorial_reason": row["editorial_reason"],
-            "editorial_boost": float(row["editorial_boost"] or 0.0),
-            "ai_confidence": float(row["ai_confidence"] or 0.0),
-            "provider_name": row["provider_name"],
-            "model_name": row["model_name"],
-        }
-
-    def _upsert_editorial_enrichment(
-        self,
-        connection,
-        *,
-        cluster_key: str,
-        input_hash: str,
-        response: NewsEditorialAIResponse,
-        now: str,
-    ) -> None:
-        connection.execute(
-            """
-            INSERT INTO news_editorial_enrichments (
-                cluster_key,
-                input_hash,
-                story_state,
-                importance_label,
-                editorial_reason,
-                editorial_boost,
-                ai_confidence,
-                provider_name,
-                model_name,
-                raw_output_json,
-                created_at,
-                updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(cluster_key) DO UPDATE SET
-                input_hash = excluded.input_hash,
-                story_state = excluded.story_state,
-                importance_label = excluded.importance_label,
-                editorial_reason = excluded.editorial_reason,
-                editorial_boost = excluded.editorial_boost,
-                ai_confidence = excluded.ai_confidence,
-                provider_name = excluded.provider_name,
-                model_name = excluded.model_name,
-                raw_output_json = excluded.raw_output_json,
-                updated_at = excluded.updated_at
-            """,
-            (
-                cluster_key,
-                input_hash,
-                response.story_state,
-                response.importance_label,
-                response.editorial_reason,
-                response.editorial_boost,
-                response.confidence,
-                self.editorial_ai_provider.provider_name,
-                self.editorial_ai_provider.model_name(),
-                json.dumps(response.raw_output, ensure_ascii=False, sort_keys=True),
-                now,
-                now,
-            ),
-        )
-
-    def _replace_materialized_events(
-        self,
-        connection,
-        clusters: list[dict[str, Any]],
-        attention_scores: dict[str, float],
-        editorial_ai_enrichments: dict[str, dict[str, Any]],
-        now: str,
-    ) -> None:
-        for cluster in clusters:
-            attention_score = attention_scores.get(cluster["cluster_key"], 0.0)
-            cluster["attention_score"] = attention_score
-            base_editorial_score = self._editorial_score(
-                trust_score=cluster["trust_score"],
-                materiality_score=cluster["materiality_score"],
-                novelty_score=cluster["novelty_score"],
-                cross_source_score=cluster["cross_source_score"],
-                attention_score=attention_score,
-                market_scope=cluster["market_scope"],
-                has_canonical_anchor=cluster["has_canonical_anchor"],
-                has_persistent_evidence=cluster["has_persistent_evidence"],
-                quality_flags=cluster["quality_flags"],
-            )
-            editorial_enrichment = editorial_ai_enrichments.get(cluster["cluster_key"]) or {}
-            editorial_boost = float(editorial_enrichment.get("editorial_boost") or 0.0)
-            story_state = str(
-                editorial_enrichment.get("story_state")
-                or self._default_story_state(cluster=cluster, attention_score=attention_score)
-            )
-            importance_label = str(
-                editorial_enrichment.get("importance_label")
-                or self._legacy_importance_from_score(cluster["materiality_score"])
-            )
-            editorial_reason = editorial_enrichment.get("editorial_reason")
-            ai_confidence = float(editorial_enrichment.get("ai_confidence") or 0.0)
-            cluster["editorial_score"] = round(_clamp(base_editorial_score + editorial_boost), 4)
-            cluster["ranking_score"] = cluster["editorial_score"]
-            connection.execute(
-                """
-                INSERT INTO normalized_events (
-                    event_id,
-                    cluster_key,
-                    title,
-                    one_line_summary,
-                    why_it_matters,
-                    market_impact,
-                    market_scope,
-                    primary_region,
-                    trust_score,
-                    materiality_score,
-                    novelty_score,
-                    attention_score,
-                    cross_source_score,
-                    editorial_score,
-                    ranking_score,
-                    published_at,
-                    source_count,
-                    evidence_count,
-                    provenance_json,
-                    created_at,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    cluster["event_id"],
-                    cluster["cluster_key"],
-                    cluster["title"],
-                    cluster["one_line_summary"],
-                    cluster["why_it_matters"],
-                    cluster["market_impact"],
-                    cluster["market_scope"],
-                    cluster["primary_region"],
-                    cluster["trust_score"],
-                    cluster["materiality_score"],
-                    cluster["novelty_score"],
-                    attention_score,
-                    cluster["cross_source_score"],
-                    cluster["editorial_score"],
-                    cluster["ranking_score"],
-                    cluster["published_at"],
-                    len(cluster["providers"]),
-                    len(cluster["evidence"]),
-                    json.dumps(
-                        {
-                            "providers": sorted(cluster["providers"]),
-                            "publisher_keys": sorted(
-                                {
-                                    publisher_key
-                                for publisher_key in (self._publisher_identity(item) for item in cluster["evidence"])
-                                if publisher_key
-                                }
-                            ),
-                            "event_type": cluster["event_type"],
-                            "event_subtype": cluster["event_subtype"],
-                            "impact_direction": cluster["impact_direction"],
-                            "impact_horizon": cluster["impact_horizon"],
-                            "source_type": cluster["source_type"],
-                            "canonical_anchor": cluster["has_canonical_anchor"],
-                            "persistent_evidence": cluster["has_persistent_evidence"],
-                            "materiality_score": cluster["materiality_score"],
-                            "base_editorial_score": base_editorial_score,
-                            "editorial_score": cluster["editorial_score"],
-                            "editorial_boost": editorial_boost,
-                            "story_state": story_state,
-                            "importance_label": importance_label,
-                            "editorial_reason": editorial_reason,
-                            "ai_confidence": ai_confidence,
-                            "ai_provider": editorial_enrichment.get("provider_name"),
-                            "ai_model": editorial_enrichment.get("model_name"),
-                            "quality_flags": sorted(cluster["quality_flags"]),
-                            "direct_company_names": sorted(cluster["direct_company_names"]),
-                            "direct_company_tickers": sorted(cluster["direct_company_tickers"]),
-                            "sector_tags": sorted(cluster["sector_tags"]),
-                            "keyword_tags": sorted(cluster["keyword_tags"]),
-                        },
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
-                    now,
-                    now,
-                ),
-            )
-            normalized_event_id = int(connection.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
-
-            representative_evidence_id: int | None = None
-            for sort_order, evidence in enumerate(cluster["evidence"], start=1):
-                role = self._evidence_role(evidence, sort_order)
-                connection.execute(
-                    """
-                    INSERT INTO event_evidence (
-                        normalized_event_id,
-                        source_document_id,
-                        evidence_role,
-                        provider,
-                        title,
-                        snippet,
-                        publisher,
-                        publisher_key,
-                        source_url,
-                        published_at,
-                        observed_at,
-                        sort_order,
-                        created_at,
-                        updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        normalized_event_id,
-                        evidence["source_document_id"],
-                        role,
-                        evidence["provider"],
-                        evidence["title"],
-                        evidence["snippet"],
-                        evidence["publisher"],
-                        evidence.get("publisher_key"),
-                        evidence["source_url"],
-                        evidence["published_at"],
-                        evidence.get("observed_at"),
-                        sort_order,
-                        now,
-                        now,
-                    ),
-                )
-                evidence_id = int(connection.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
-                if representative_evidence_id is None:
-                    representative_evidence_id = evidence_id
-
-            for tag_type, tag_value in sorted(cluster["tags"]):
-                connection.execute(
-                    """
-                    INSERT INTO event_tags (
-                        normalized_event_id,
-                        tag_type,
-                        tag_value,
-                        tag_score,
-                        created_at
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        normalized_event_id,
-                        tag_type,
-                        tag_value,
-                        1.0,
-                        now,
-                    ),
-                )
-
-            if cluster["market_scope"] == "ignore":
-                continue
-
-            if cluster["primary_region"] == "KR":
-                column_key = "KR"
-            else:
-                column_key = "GLOBAL"
-
-            if cluster["market_scope"] == "company":
-                company_threshold = 0.92
-                if cluster["has_canonical_anchor"]:
-                    company_threshold = 0.82
-                    if cluster["event_subtype"] not in {"generic", "generic_disclosure", "periodic_report"}:
-                        company_threshold = 0.76
-                if cluster["ranking_score"] < company_threshold:
-                    continue
-
-            connection.execute(
-                """
-                INSERT INTO news_cards (
-                    card_key,
-                    normalized_event_id,
-                    column_key,
-                    title,
-                    one_line_summary,
-                    why_it_matters,
-                    market_impact,
-                    market_scope,
-                    primary_region,
-                    trust_score,
-                    materiality_score,
-                    novelty_score,
-                    attention_score,
-                    editorial_score,
-                    ranking_score,
-                    representative_evidence_id,
-                    evidence_count,
-                    published_at,
-                    created_at,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"news-card-{normalized_event_id}",
-                    normalized_event_id,
-                    column_key,
-                    cluster["title"],
-                    cluster["one_line_summary"],
-                    cluster["why_it_matters"],
-                    cluster["market_impact"],
-                    cluster["market_scope"],
-                    cluster["primary_region"],
-                    cluster["trust_score"],
-                    cluster["materiality_score"],
-                    cluster["novelty_score"],
-                    attention_score,
-                    cluster["editorial_score"],
-                    cluster["ranking_score"],
-                    representative_evidence_id,
-                    len(cluster["evidence"]),
-                    cluster["published_at"],
-                    now,
-                    now,
-                ),
-            )
-
-    def _replace_source_coverage(
-        self,
-        connection,
-        *,
-        now: str,
         raw_documents: list[dict[str, Any]],
         clusters: list[dict[str, Any]],
         latest_runs: dict[str, dict[str, Any]],
         datalab_status: dict[str, Any],
         provider_definitions: dict[str, ProviderDefinition],
-    ) -> None:
+        now: str,
+    ) -> dict[str, Any]:
         docs_by_provider: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        surface_counts: dict[str, int] = defaultdict(int)
         evidence_counts: dict[str, int] = defaultdict(int)
-        event_counts: dict[str, int] = defaultdict(int)
-
         for row in raw_documents:
             docs_by_provider[str(row["provider"])].append(row)
-
         for cluster in clusters:
-            providers = set(cluster["providers"])
-            for provider in providers:
-                event_counts[provider] += 1
+            for provider in {evidence["provider"] for evidence in cluster["evidence"]}:
+                surface_counts[provider] += 1
             for evidence in cluster["evidence"]:
-                evidence_counts[str(evidence["provider"])] += 1
+                evidence_counts[evidence["provider"]] += 1
 
         raw_news_provider_keys = {
             definition.provider_key
@@ -1761,75 +960,45 @@ class NewsProductService:
         ordered_raw_news_providers = sorted(
             raw_news_provider_keys,
             key=lambda provider: (
-                _provider_priority(
-                    resolve_provider_definition(
-                        provider_definitions,
-                        provider_key=provider,
-                    )
-                ),
+                _provider_priority(resolve_provider_definition(provider_definitions, provider_key=provider)),
                 provider,
             ),
         )
 
+        items: list[dict[str, Any]] = []
+        updated_candidates: list[str | None] = []
+        availability_score = 0.0
         for provider in ordered_raw_news_providers:
             rows = docs_by_provider.get(provider, [])
             latest_run = latest_runs.get(provider, {})
             status = "available" if rows else "missing"
             note = None
             if latest_run:
-                latest_status = str(latest_run.get("status") or "")
-                if latest_status in {"FAILED", "SKIPPED_DISABLED"} and rows:
+                run_status = str(latest_run.get("status") or "")
+                if run_status in {"FAILED", "SKIPPED_DISABLED"} and rows:
                     status = "partial"
-                elif latest_status in {"FAILED", "SKIPPED_DISABLED"} and not rows:
+                elif run_status in {"FAILED", "SKIPPED_DISABLED"} and not rows:
                     status = "missing"
                 metadata = latest_run.get("metadata") or {}
-                disabled_reason = metadata.get("disabled_reason") if isinstance(metadata, dict) else None
-                note = disabled_reason or latest_run.get("error_message")
-
-            last_published_at = self._latest_timestamp(
-                [
-                    effective_document_time(
-                        document_type=str(row.get("document_type") or ""),
-                        published_at=row.get("published_at"),
-                        observed_at=row.get("observed_at"),
-                        receipt_at=row.get("receipt_at"),
-                        updated_at=row.get("updated_at"),
-                        created_at=row.get("created_at"),
-                    )
-                    for row in rows
-                ]
-            )
-            connection.execute(
-                """
-                INSERT INTO source_coverage (
-                    surface_key,
-                    provider,
-                    status,
-                    document_count,
-                    event_count,
-                    evidence_count,
-                    last_published_at,
-                    last_synced_at,
-                    note,
-                    metadata_json,
-                    created_at,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    "news_tab",
-                    provider,
-                    status,
-                    len(rows),
-                    event_counts.get(provider, 0),
-                    evidence_counts.get(provider, 0),
-                    last_published_at,
-                    latest_run.get("finished_at"),
-                    note,
-                    json.dumps(latest_run or {}, ensure_ascii=False, sort_keys=True),
-                    now,
-                    now,
-                ),
+                note = (metadata.get("disabled_reason") if isinstance(metadata, dict) else None) or latest_run.get("error_message")
+            if status == "available":
+                availability_score += 1.0
+            elif status == "partial":
+                availability_score += 0.5
+            last_published_at = self._latest_timestamp([self._document_published_at(row) for row in rows])
+            updated_candidates.extend([last_published_at, latest_run.get("finished_at")])
+            items.append(
+                {
+                    "provider": provider,
+                    "status": status,
+                    "document_count": len(rows),
+                    "event_count": surface_counts.get(provider, 0),
+                    "evidence_count": evidence_counts.get(provider, 0),
+                    "last_published_at": last_published_at,
+                    "last_synced_at": latest_run.get("finished_at"),
+                    "note": note,
+                    "metadata": latest_run.get("metadata") or {},
+                }
             )
 
         trend_provider_keys = sorted(
@@ -1850,87 +1019,488 @@ class NewsProductService:
             ),
         )
         for provider in trend_provider_keys:
+            status = datalab_status["status"]
+            if status == "available":
+                availability_score += 1.0
+            elif status == "partial":
+                availability_score += 0.5
+            updated_candidates.append(now if status != "missing" else None)
+            items.append(
+                {
+                    "provider": provider,
+                    "status": status,
+                    "document_count": 0,
+                    "event_count": 0,
+                    "evidence_count": 0,
+                    "last_published_at": None,
+                    "last_synced_at": now if status != "missing" else None,
+                    "note": datalab_status.get("note"),
+                    "metadata": datalab_status,
+                }
+            )
+
+        expected_sources = len(items)
+        coverage_ratio = round(availability_score / expected_sources, 2) if expected_sources else 0.0
+        state = "empty"
+        if coverage_ratio >= 0.99:
+            state = "full"
+        elif coverage_ratio > 0:
+            state = "partial"
+        if not items:
+            summary = "아직 수집/정규화된 뉴스 소스가 없습니다."
+        elif state == "full":
+            summary = "핵심 소스와 관심도 신호가 모두 반영되었습니다."
+        elif state == "partial":
+            summary = "일부 소스 또는 관심도 신호가 비어 있어 랭킹이 부분적으로만 반영됩니다."
+        else:
+            summary = "표시 가능한 뉴스 소스가 없습니다."
+        return {
+            "state": state,
+            "coverage_ratio": coverage_ratio,
+            "available_sources": sum(1 for item in items if item["status"] == "available"),
+            "expected_sources": expected_sources,
+            "summary": summary,
+            "updated_at": self._latest_timestamp(updated_candidates),
+            "items": items,
+        }
+
+    def _replace_materialized(
+        self,
+        connection,
+        *,
+        clusters: list[dict[str, Any]],
+        triage_rows: list[dict[str, Any]],
+        attention_scores: dict[str, float],
+        editorial_ai_enrichments: dict[str, dict[str, Any]],
+        coverage_payload: dict[str, Any],
+        now: str,
+        provider_definitions: dict[str, ProviderDefinition],
+    ) -> None:
+        previous_state = {
+            row["surface_key"]: dict(row)
+            for row in connection.execute(
+                """
+                SELECT surface_key, active_candidate_key, state_json
+                FROM market_surface_state
+                """
+            ).fetchall()
+        }
+        connection.execute("DELETE FROM news_batch_triage")
+        connection.execute("DELETE FROM market_surface_candidates")
+        connection.execute("DELETE FROM market_surface_state")
+
+        for row in triage_rows:
             connection.execute(
                 """
-                INSERT INTO source_coverage (
-                    surface_key,
+                INSERT INTO news_batch_triage (
+                    raw_document_id,
+                    batch_key,
+                    cluster_key,
                     provider,
-                    status,
-                    document_count,
-                    event_count,
-                    evidence_count,
-                    last_published_at,
-                    last_synced_at,
-                    note,
-                    metadata_json,
+                    document_type,
+                    market_scope,
+                    primary_region,
+                    market_importance_prelim,
+                    impact_direction,
+                    reason_short,
+                    affected_companies_json,
+                    related_sectors_json,
+                    keyword_tags_json,
+                    triage_metadata_json,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    "news_tab",
-                    provider,
-                    datalab_status["status"],
-                    0,
-                    0,
-                    0,
-                    None,
-                    now,
-                    datalab_status.get("note"),
-                    json.dumps(datalab_status, ensure_ascii=False, sort_keys=True),
+                    row["raw_document_id"],
+                    row["batch_key"],
+                    row["cluster_key"],
+                    row["provider"],
+                    row["document_type"],
+                    row["market_scope"],
+                    row["primary_region"],
+                    row["market_importance_prelim"],
+                    row["impact_direction"],
+                    row["reason_short"],
+                    row["affected_companies_json"],
+                    row["related_sectors_json"],
+                    row["keyword_tags_json"],
+                    row["triage_metadata_json"],
                     now,
                     now,
                 ),
             )
 
-    def _classify_scope(
+        candidates_by_surface: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for cluster in clusters:
+            attention_score = float(attention_scores.get(cluster["cluster_key"], 0.0))
+            editorial = editorial_ai_enrichments.get(cluster["cluster_key"], {})
+            base_editorial_score = self._editorial_score(
+                trust_score=cluster["trust_score"],
+                materiality_score=cluster["materiality_score"],
+                novelty_score=cluster["novelty_score"],
+                cross_source_score=cluster["cross_source_score"],
+                attention_score=attention_score,
+                market_scope=cluster["market_scope"],
+                has_canonical_anchor=cluster["has_canonical_anchor"],
+                has_persistent_evidence=cluster["has_persistent_evidence"],
+                quality_flags=cluster["quality_flags"],
+            )
+            editorial_boost = _clamp(float(editorial.get("editorial_boost") or 0.0), 0.0, 0.2)
+            editorial_score = round(_clamp(base_editorial_score + editorial_boost), 4)
+            ranking_score = editorial_score
+            story_state = editorial.get("story_state") or self._default_story_state(cluster=cluster, attention_score=attention_score)
+            importance_label = editorial.get("importance_label") or self._legacy_importance_from_score(cluster["materiality_score"])
+            editorial_reason = editorial.get("editorial_reason")
+            ai_confidence = float(editorial.get("ai_confidence") or 0.0)
+
+            evidence_payload = [
+                {
+                    "role": self._evidence_role(evidence, index),
+                    "provider": evidence["provider"],
+                    "title": evidence["title"],
+                    "snippet": evidence["snippet"],
+                    "publisher": evidence["publisher"],
+                    "source_url": evidence["source_url"],
+                    "canonical_url": evidence["canonical_url"],
+                    "storage_policy": evidence["storage_policy"],
+                    "published_at": evidence["published_at"],
+                }
+                for index, evidence in enumerate(cluster["evidence"][: self.representative_evidence_limit], start=1)
+            ]
+            provenance = {
+                "providers": sorted(cluster["providers"]),
+                "publisher_keys": sorted(
+                    {publisher for publisher in (self._publisher_identity(item) for item in cluster["evidence"]) if publisher}
+                ),
+                "event_type": cluster["event_type"],
+                "event_subtype": cluster["event_subtype"],
+                "impact_direction": cluster["impact_direction"],
+                "impact_horizon": cluster["impact_horizon"],
+                "source_type": cluster["source_type"],
+                "canonical_anchor": cluster["has_canonical_anchor"],
+                "persistent_evidence": cluster["has_persistent_evidence"],
+                "materiality_score": cluster["materiality_score"],
+                "base_editorial_score": base_editorial_score,
+                "editorial_score": editorial_score,
+                "editorial_boost": editorial_boost,
+                "story_state": story_state,
+                "importance_label": importance_label,
+                "editorial_reason": editorial_reason,
+                "ai_confidence": ai_confidence,
+                "ai_provider": editorial.get("provider_name"),
+                "ai_model": editorial.get("model_name"),
+                "quality_flags": sorted(cluster["quality_flags"]),
+                "direct_company_names": sorted(cluster["direct_company_names"]),
+                "direct_company_tickers": sorted(cluster["direct_company_tickers"]),
+                "sector_tags": sorted(cluster["sector_tags"]),
+                "keyword_tags": sorted(cluster["keyword_tags"]),
+            }
+            card_base = {
+                "title": cluster["title"],
+                "one_line_summary": cluster["one_line_summary"],
+                "why_it_matters": cluster["why_it_matters"],
+                "market_impact": cluster["market_impact"],
+                "market_scope": cluster["market_scope"],
+                "primary_region": cluster["primary_region"],
+                "trust_score": float(cluster["trust_score"]),
+                "materiality_score": float(cluster["materiality_score"]),
+                "novelty_score": float(cluster["novelty_score"]),
+                "attention_score": attention_score,
+                "editorial_score": editorial_score,
+                "ranking_score": ranking_score,
+                "evidence_count": len(cluster["evidence"]),
+                "cross_source_score": float(cluster["cross_source_score"]),
+                "published_at": cluster["published_at"],
+                "updated_at": now,
+                "story_state": story_state,
+                "importance_label": importance_label,
+                "editorial_reason": editorial_reason,
+                "ai_confidence": ai_confidence,
+                "evidence": evidence_payload,
+                "provenance": provenance,
+            }
+
+            if cluster["market_scope"] != "ignore":
+                surface_key = "KR" if cluster["primary_region"] == "KR" else "GLOBAL"
+                if not (cluster["market_scope"] == "company" and ranking_score < self._company_surface_threshold(cluster)):
+                    candidates_by_surface[surface_key].append(
+                        self._candidate_record(
+                            card_prefix="news-card",
+                            surface_key=surface_key,
+                            source_kind="news",
+                            cluster=cluster,
+                            card_payload=card_base,
+                            ranking_score=ranking_score,
+                            editorial_score=editorial_score,
+                        )
+                    )
+
+            if cluster["has_canonical_anchor"]:
+                candidates_by_surface["DISCLOSURE"].append(
+                    self._candidate_record(
+                        card_prefix="disclosure-card",
+                        surface_key="DISCLOSURE",
+                        source_kind="disclosure",
+                        cluster=cluster,
+                        card_payload=card_base,
+                        ranking_score=ranking_score,
+                        editorial_score=editorial_score,
+                    )
+                )
+
+        for surface_key, candidates in candidates_by_surface.items():
+            ordered = sorted(
+                candidates,
+                key=lambda item: (-item["ranking_score"], item["published_at"] or "", item["candidate_key"]),
+            )
+            for candidate in ordered:
+                connection.execute(
+                    """
+                    INSERT INTO market_surface_candidates (
+                        candidate_key,
+                        card_key,
+                        surface_key,
+                        cluster_key,
+                        source_kind,
+                        source_document_ids_json,
+                        title,
+                        one_line_summary,
+                        why_it_matters,
+                        market_impact,
+                        market_scope,
+                        primary_region,
+                        trust_score,
+                        materiality_score,
+                        novelty_score,
+                        attention_score,
+                        cross_source_score,
+                        editorial_score,
+                        ranking_score,
+                        evidence_count,
+                        published_at,
+                        payload_json,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        candidate["candidate_key"],
+                        candidate["card_key"],
+                        candidate["surface_key"],
+                        candidate["cluster_key"],
+                        candidate["source_kind"],
+                        candidate["source_document_ids_json"],
+                        candidate["title"],
+                        candidate["one_line_summary"],
+                        candidate["why_it_matters"],
+                        candidate["market_impact"],
+                        candidate["market_scope"],
+                        candidate["primary_region"],
+                        candidate["trust_score"],
+                        candidate["materiality_score"],
+                        candidate["novelty_score"],
+                        candidate["attention_score"],
+                        candidate["cross_source_score"],
+                        candidate["editorial_score"],
+                        candidate["ranking_score"],
+                        candidate["evidence_count"],
+                        candidate["published_at"],
+                        candidate["payload_json"],
+                        now,
+                        now,
+                    ),
+                )
+
+        state_rows = {
+            surface_key: (
+                sorted(
+                    candidates,
+                    key=lambda item: (-item["ranking_score"], item["published_at"] or "", item["candidate_key"]),
+                )[0]
+                if candidates
+                else None
+            )
+            for surface_key, candidates in candidates_by_surface.items()
+        }
+        state_rows.setdefault("KR", None)
+        state_rows.setdefault("GLOBAL", None)
+        state_rows.setdefault("DISCLOSURE", None)
+
+        for surface_key in ("KR", "GLOBAL", "DISCLOSURE"):
+            lead = state_rows[surface_key]
+            state_json = json.dumps(
+                {
+                    "surface_key": surface_key,
+                    "lead_card_id": lead["card_key"] if lead else None,
+                    "count": len(candidates_by_surface.get(surface_key, [])),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            connection.execute(
+                """
+                INSERT INTO market_surface_state (
+                    surface_key,
+                    active_candidate_key,
+                    state_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (surface_key, lead["candidate_key"] if lead else None, state_json, now, now),
+            )
+            previous = previous_state.get(surface_key, {})
+            if previous.get("active_candidate_key") != (lead["candidate_key"] if lead else None):
+                connection.execute(
+                    """
+                    INSERT INTO market_surface_history (
+                        surface_key,
+                        candidate_key,
+                        change_type,
+                        snapshot_json,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        surface_key,
+                        lead["candidate_key"] if lead else None,
+                        "refresh",
+                        state_json,
+                        now,
+                    ),
+                )
+
+        connection.execute(
+            """
+            INSERT INTO market_surface_state (
+                surface_key,
+                active_candidate_key,
+                state_json,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            ("COVERAGE", None, json.dumps(coverage_payload, ensure_ascii=False, sort_keys=True), now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO market_surface_state (
+                surface_key,
+                active_candidate_key,
+                state_json,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "REFRESH_META",
+                None,
+                json.dumps(
+                    {
+                        "cluster_count": len(clusters),
+                        "provider_count": len(provider_definitions),
+                        "raw_document_count": len(triage_rows),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                now,
+                now,
+            ),
+        )
+
+    def _candidate_record(
+        self,
+        *,
+        card_prefix: str,
+        surface_key: str,
+        source_kind: str,
+        cluster: dict[str, Any],
+        card_payload: dict[str, Any],
+        ranking_score: float,
+        editorial_score: float,
+    ) -> dict[str, Any]:
+        card_hash = self._hash_text(f"{surface_key}:{cluster['cluster_key']}")
+        card_key = f"{card_prefix}-{card_hash[:16]}"
+        candidate_key = f"{surface_key.lower()}-{card_hash[:24]}"
+        payload = dict(card_payload)
+        payload["id"] = card_key
+        payload["editorial_score"] = editorial_score
+        payload["ranking_score"] = ranking_score
+        payload["provenance"] = dict(card_payload["provenance"])
+        return {
+            "candidate_key": candidate_key,
+            "card_key": card_key,
+            "surface_key": surface_key,
+            "cluster_key": cluster["cluster_key"],
+            "source_kind": source_kind,
+            "source_document_ids_json": json.dumps(
+                [evidence["raw_document_id"] for evidence in cluster["evidence"]],
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            "title": payload["title"],
+            "one_line_summary": payload["one_line_summary"],
+            "why_it_matters": payload["why_it_matters"],
+            "market_impact": payload["market_impact"],
+            "market_scope": payload["market_scope"],
+            "primary_region": payload["primary_region"],
+            "trust_score": payload["trust_score"],
+            "materiality_score": payload["materiality_score"],
+            "novelty_score": payload["novelty_score"],
+            "attention_score": payload["attention_score"],
+            "cross_source_score": payload["cross_source_score"],
+            "editorial_score": payload["editorial_score"],
+            "ranking_score": payload["ranking_score"],
+            "evidence_count": payload["evidence_count"],
+            "published_at": payload["published_at"],
+            "payload_json": json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        }
+
+    def _triage_document(
         self,
         *,
         row: dict[str, Any],
-        base_event: dict[str, Any] | None,
+        provider_definitions: dict[str, ProviderDefinition],
     ) -> dict[str, Any]:
-        text = " ".join(
-            filter(
-                None,
-                [
-                    str(row.get("title") or ""),
-                    str(row.get("summary") or ""),
-                    str(row.get("query_text") or ""),
-                    str((base_event or {}).get("summary") or ""),
-                ],
-            )
+        provider_key = str(row["provider"])
+        definition = resolve_provider_definition(
+            provider_definitions,
+            provider_key=provider_key,
+            document_type=str(row.get("document_type") or ""),
         )
+        source_type = definition.source_type or "DISCOVERY_NEWS"
+        storage_policy = definition.storage_policy or "TRANSIENT_DISCOVERY"
+        title = str(row.get("title") or "")
+        summary = str(row.get("summary") or "")
+        text = " ".join(filter(None, [title, summary, str(row.get("query_text") or "")]))
         normalized = normalize_title(text) or ""
-        event_companies = list((base_event or {}).get("companies") or [])
-        direct_companies = [
-            company
-            for company in event_companies
-            if str(company.get("impact_tier") or "").lower() == "direct"
-        ]
-        direct_company_names = {
-            str(company.get("company_name") or "").strip()
-            for company in direct_companies
-            if str(company.get("company_name") or "").strip()
-        }
-        direct_company_tickers = {
-            str(company.get("primary_stock_code") or "").strip()
-            for company in direct_companies
-            if str(company.get("primary_stock_code") or "").strip()
-        }
-        if row.get("company_name"):
-            direct_company_names.add(str(row["company_name"]).strip())
-        if row.get("primary_stock_code"):
-            direct_company_tickers.add(str(row["primary_stock_code"]).strip())
 
-        sector_tags = set()
-        if row.get("market_classification"):
-            sector_tags.add(str(row["market_classification"]).strip())
-        keyword_tags = set(self._headline_tokens(text)[:4])
+        direct_company_names = []
+        direct_company_tickers = []
+        if row.get("company_name"):
+            direct_company_names.append(str(row["company_name"]).strip())
+        if row.get("primary_stock_code"):
+            direct_company_tickers.append(str(row["primary_stock_code"]).strip())
+        sector_tags = [str(row["market_classification"]).strip()] if row.get("market_classification") else []
+        keyword_tags = self._headline_tokens(text)[:4]
+
+        if str(row.get("document_type") or "").upper() == "DISCLOSURE":
+            disclosure = classify_dart_disclosure(str(row.get("report_type") or row.get("title") or ""))
+            event_type = disclosure.event_type
+            event_subtype = disclosure.event_subtype
+            impact_direction = disclosure.impact_direction
+            impact_horizon = disclosure.impact_horizon
+        else:
+            event_type = classify_event_type(text)
+            event_subtype = "generic"
+            impact_direction = classify_sentiment(text)
+            impact_horizon = "short"
 
         has_kr_market = any(term.casefold() in normalized for term in _KR_MARKET_TERMS)
         has_global_market = any(term.casefold() in normalized for term in _GLOBAL_MARKET_TERMS)
         has_sector_term = any(term.casefold() in normalized for term in _SECTOR_TERMS)
-
         primary_region = "GLOBAL" if has_global_market and not has_kr_market else "KR"
 
         if has_kr_market:
@@ -1946,53 +1516,108 @@ class NewsProductService:
         else:
             market_scope = "ignore"
 
+        trust_score = self._trust_score_for(
+            provider_definitions,
+            provider=provider_key,
+            document_type=str(row.get("document_type") or ""),
+        )
+        importance_score = self._materiality_score(
+            event_type=event_type,
+            event_subtype=event_subtype,
+            market_scope=market_scope,
+            impact_direction=impact_direction,
+            impact_horizon=impact_horizon,
+            source_type=source_type,
+            has_canonical_anchor=storage_policy == "CANONICAL_EVENT",
+            has_persistent_evidence=storage_policy == "PERSISTENT_EVIDENCE",
+            quality_flags=self._quality_flags(row),
+        )
+        importance_label = self._legacy_importance_from_score(importance_score)
+        if event_subtype in _DISCLOSURE_IMPORTANCE_HINTS and importance_label == "low":
+            importance_label = "medium"
+        reason_short = self._why_it_matters(market_scope)
         return {
+            "event_type": event_type,
+            "event_subtype": event_subtype,
+            "impact_direction": impact_direction,
+            "impact_horizon": impact_horizon,
             "market_scope": market_scope,
             "primary_region": primary_region,
-            "direct_company_names": sorted(name for name in direct_company_names if name),
-            "direct_company_tickers": sorted(ticker for ticker in direct_company_tickers if ticker),
-            "sector_tags": sorted(tag for tag in sector_tags if tag),
-            "keyword_tags": sorted(keyword_tags),
+            "importance_label": importance_label,
+            "reason_short": reason_short,
+            "source_type": source_type,
+            "storage_policy": storage_policy,
+            "trust_score": trust_score,
+            "direct_company_names": [name for name in direct_company_names if name],
+            "direct_company_tickers": [ticker for ticker in direct_company_tickers if ticker],
+            "sector_tags": [tag for tag in sector_tags if tag],
+            "keyword_tags": keyword_tags,
         }
 
-    def _cluster_key_for(
-        self,
-        *,
-        row: dict[str, Any],
-        base_event: dict[str, Any] | None,
-        scope_payload: dict[str, Any],
-    ) -> str:
-        published_at = _parse_iso_datetime(
-            effective_document_time(
-                document_type=str(row.get("document_type") or ""),
-                published_at=row.get("published_at"),
-                observed_at=row.get("observed_at"),
-                receipt_at=row.get("receipt_at"),
-                updated_at=(base_event or {}).get("occurred_at"),
-                created_at=row.get("created_at"),
-            )
-        )
+    def _cluster_key_for(self, *, row: dict[str, Any], triage: dict[str, Any]) -> str:
+        published_at = _parse_iso_datetime(self._document_published_at(row))
         date_bucket = published_at.date().isoformat() if published_at else "unknown"
-        event_type = (base_event or {}).get("event_type") or classify_event_type(
-            " ".join(filter(None, [row.get("title"), row.get("summary")]))
+        title_signature = "|".join(self._headline_tokens(str(row.get("title") or ""))[:6])
+        signature = title_signature or "|".join(
+            self._headline_tokens(" ".join(filter(None, [row.get("title"), row.get("summary")])))[:6]
         )
-        title_signature = "|".join(self._headline_tokens(str(row.get("title") or ""))[:5])
-        combined_signature = "|".join(self._headline_tokens(" ".join(filter(None, [row.get("title"), row.get("summary")])))[:5])
-        metadata = (base_event or {}).get("metadata") or {}
-        normalized_report_type = metadata.get("normalized_report_type") if isinstance(metadata, dict) else None
-        signature = title_signature or combined_signature or normalize_title(str(normalized_report_type or "")) or ""
-        company_part = "|".join(scope_payload["direct_company_names"]) or str(row.get("company_ref") or "")
+        company_part = "|".join(triage["direct_company_names"]) or "|".join(triage["direct_company_tickers"])
+        identity = signature or company_part or str(row.get("canonical_url") or "")
         seed = "|".join(
             [
-                str(event_type),
+                triage["event_type"],
                 date_bucket,
-                str(scope_payload["primary_region"]),
-                str(scope_payload["market_scope"]),
+                triage["primary_region"],
+                triage["market_scope"],
                 company_part,
-                signature or str(row.get("canonical_url") or row.get("title") or row.get("id")),
+                identity or str(row.get("provider_document_id") or row.get("id")),
             ]
         )
         return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+    def _document_published_at(self, row: dict[str, Any]) -> str | None:
+        return effective_document_time(
+            document_type=str(row.get("document_type") or ""),
+            published_at=row.get("published_at"),
+            observed_at=row.get("observed_at"),
+            receipt_at=row.get("receipt_at"),
+            updated_at=row.get("updated_at"),
+            created_at=row.get("created_at"),
+        )
+
+    def _prefer_scope(self, current: str, candidate: str) -> str:
+        order = {"kr_market": 5, "global_market": 4, "sector": 3, "company": 2, "ignore": 1}
+        return current if order.get(current, 0) >= order.get(candidate, 0) else candidate
+
+    def _prefer_region(self, current: str, candidate: str) -> str:
+        if current == "KR":
+            return current
+        return candidate or current
+
+    def _prefer_source_type(self, current: str, candidate: str) -> str:
+        return current if self._source_priority_rank(current) <= self._source_priority_rank(candidate) else candidate
+
+    def _prefer_event_type(self, current: str, candidate: str) -> str:
+        return current if current != "macro_theme" else candidate
+
+    def _prefer_event_subtype(self, current: str, candidate: str) -> str:
+        return current if current not in {"generic", "generic_disclosure"} else candidate
+
+    def _prefer_direction(self, current: str, candidate: str) -> str:
+        if current in {"positive", "negative"}:
+            return current
+        return candidate
+
+    def _prefer_horizon(self, current: str, candidate: str) -> str:
+        if current == "medium":
+            return current
+        return candidate
+
+    def _prefer_summary(self, current: str, candidate: Any) -> str:
+        text = str(candidate or "").strip()
+        if not text:
+            return current
+        return current if len(current) >= len(text) else text[:140]
 
     def _headline_tokens(self, text: str) -> list[str]:
         seen: set[str] = set()
@@ -2040,13 +1665,11 @@ class NewsProductService:
             return 2
         return 3
 
-    def _why_it_matters(self, market_scope: str, base_event: dict[str, Any] | None) -> str:
-        if base_event and base_event.get("summary") and market_scope in {"kr_market", "global_market"}:
-            return _WHY_IT_MATTERS_BY_SCOPE[market_scope]
+    def _why_it_matters(self, market_scope: str) -> str:
         return _WHY_IT_MATTERS_BY_SCOPE.get(market_scope, _WHY_IT_MATTERS_BY_SCOPE["ignore"])
 
-    def _market_impact(self, market_scope: str, base_event: dict[str, Any] | None) -> str:
-        prefix = _MARKET_IMPACT_PREFIX.get(self._impact_direction(base_event), _MARKET_IMPACT_PREFIX["neutral"])
+    def _market_impact(self, market_scope: str, impact_direction: str) -> str:
+        prefix = _MARKET_IMPACT_PREFIX.get(impact_direction, _MARKET_IMPACT_PREFIX["neutral"])
         if market_scope == "kr_market":
             return f"{prefix}가 국내 지수와 수급에 반영될 가능성이 큽니다."
         if market_scope == "global_market":
@@ -2057,16 +1680,11 @@ class NewsProductService:
             return f"{prefix}가 개별 종목에 집중될 가능성이 큽니다."
         return "시장 전체 영향은 제한적입니다."
 
-    def _one_line_summary(self, *, row: dict[str, Any], base_event: dict[str, Any] | None) -> str:
-        summary = str((base_event or {}).get("summary") or row.get("summary") or row.get("title") or "").strip()
+    def _one_line_summary(self, *, row: dict[str, Any]) -> str:
+        summary = str(row.get("summary") or row.get("title") or "").strip()
         if not summary:
             return "시장 이벤트가 감지되었습니다."
         return summary[:140]
-
-    def _fallback_title(self, base_event: dict[str, Any] | None) -> str:
-        if base_event and base_event.get("summary"):
-            return str(base_event["summary"])[:80]
-        return "시장 이벤트"
 
     def _attention_keywords(self, cluster: dict[str, Any]) -> list[str]:
         keywords = []
@@ -2074,9 +1692,7 @@ class NewsProductService:
         keywords.extend(sorted(cluster["sector_tags"]))
         keywords.extend(sorted(cluster["keyword_tags"]))
         if not keywords:
-            title_tokens = self._headline_tokens(cluster["title"])
-            keywords.extend(title_tokens[:4])
-
+            keywords.extend(self._headline_tokens(cluster["title"])[:4])
         deduped: list[str] = []
         seen: set[str] = set()
         for keyword in keywords:
@@ -2097,58 +1713,8 @@ class NewsProductService:
         return "CONFIRMING"
 
     def _publisher_identity(self, evidence: dict[str, Any]) -> str | None:
-        publisher_key = str(evidence.get("publisher_key") or "").strip()
-        if publisher_key:
-            return publisher_key
         normalized = normalize_title(str(evidence.get("publisher") or "")) or ""
         return normalized or None
-
-    def _event_subtype(self, base_event: dict[str, Any] | None) -> str:
-        metadata = (base_event or {}).get("metadata") or {}
-        if isinstance(metadata, dict):
-            candidate = str(metadata.get("event_subtype") or "").strip()
-            if candidate:
-                return candidate
-        return "generic"
-
-    def _impact_direction(self, base_event: dict[str, Any] | None) -> str:
-        metadata = (base_event or {}).get("metadata") or {}
-        if isinstance(metadata, dict):
-            candidate = str(metadata.get("impact_direction") or "").strip().lower()
-            if candidate in _MARKET_IMPACT_PREFIX:
-                return candidate
-        sentiment = str((base_event or {}).get("sentiment") or "").strip().lower()
-        if sentiment in _MARKET_IMPACT_PREFIX:
-            return sentiment
-        return "neutral"
-
-    def _impact_horizon(self, base_event: dict[str, Any] | None) -> str:
-        metadata = (base_event or {}).get("metadata") or {}
-        if isinstance(metadata, dict):
-            candidate = str(metadata.get("impact_horizon") or "").strip().lower()
-            if candidate in {"intraday", "short", "medium"}:
-                return candidate
-        return "short"
-
-    def _impact_priority_bonus(
-        self,
-        *,
-        impact_direction: str,
-        impact_horizon: str,
-        event_subtype: str,
-    ) -> float:
-        bonus = 0.0
-        if impact_direction in {"positive", "negative"}:
-            bonus += 0.03
-        elif impact_direction == "mixed":
-            bonus += 0.02
-        if impact_horizon == "short":
-            bonus += 0.02
-        elif impact_horizon == "medium":
-            bonus += 0.01
-        if event_subtype not in {"generic", "generic_disclosure", "periodic_report"}:
-            bonus += 0.01
-        return _clamp(bonus, 0.0, 0.06)
 
     def _materiality_score(
         self,
@@ -2218,6 +1784,14 @@ class NewsProductService:
             return "ONGOING"
         return "NEW"
 
+    def _company_surface_threshold(self, cluster: dict[str, Any]) -> float:
+        threshold = 0.92
+        if cluster["has_canonical_anchor"]:
+            threshold = 0.82
+            if cluster["event_subtype"] not in {"generic", "generic_disclosure", "periodic_report"}:
+                threshold = 0.76
+        return threshold
+
     def _hash_text(self, value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -2275,6 +1849,45 @@ class NewsProductService:
         if any(keyword in text for keyword in ("반도체", "ai", "엔비디아")):
             return "AI/반도체"
         return "규제"
+
+    def _feed_item_from_card(self, card: dict[str, Any]) -> dict[str, Any]:
+        provenance = card.get("provenance") or {}
+        evidence = card.get("evidence") or []
+        primary_evidence = evidence[0] if evidence else {}
+        related_sectors = [sector for sector in provenance.get("sector_tags") or [] if sector in _ALLOWED_SECTORS]
+        related_tickers = [str(ticker) for ticker in provenance.get("direct_company_tickers") or [] if str(ticker)]
+        event_type = str(provenance.get("event_type") or "")
+        event_subtype = str(provenance.get("event_subtype") or "")
+        tags = [
+            *[str(keyword) for keyword in provenance.get("keyword_tags") or [] if str(keyword)],
+            *[str(name) for name in provenance.get("direct_company_names") or [] if str(name)],
+            *related_sectors,
+        ]
+        for extra_tag in (event_type, event_subtype):
+            if extra_tag:
+                tags.append(extra_tag)
+        return {
+            "id": card["id"],
+            "type": self._legacy_news_type(card),
+            "title": card["title"],
+            "summary": card["one_line_summary"],
+            "why_it_matters": card["why_it_matters"],
+            "source": primary_evidence.get("publisher") or primary_evidence.get("provider") or "Argus",
+            "source_url": primary_evidence.get("canonical_url") or primary_evidence.get("source_url") or "",
+            "published_at": card.get("published_at") or card.get("updated_at"),
+            "credibility_score": float(card.get("trust_score") or 0.0),
+            "materiality_score": float(card.get("materiality_score") or 0.0),
+            "editorial_score": float(card.get("editorial_score") or 0.0),
+            "story_state": card.get("story_state") or "NEW",
+            "editorial_reason": card.get("editorial_reason"),
+            "ai_confidence": float(card.get("ai_confidence") or 0.0),
+            "sentiment": self._legacy_sentiment(card),
+            "importance": str(card.get("importance_label") or self._legacy_importance(card)),
+            "related_sectors": related_sectors,
+            "related_tickers": related_tickers,
+            "category": self._legacy_category(card),
+            "tags": list(dict.fromkeys(tag for tag in tags if tag)),
+        }
 
     def _latest_timestamp(self, values: list[str | None]) -> str | None:
         parsed = [value for value in values if value]

@@ -7,6 +7,11 @@ from ..news.factory import create_news_product_service
 def create_market_news_router() -> APIRouter:
     router = APIRouter(prefix="/api/news", tags=["market-news"])
 
+    @router.get("/dashboard")
+    async def dashboard() -> dict:
+        service = create_news_product_service(get_settings())
+        return service.get_dashboard()
+
     @router.get("/kr")
     async def kr_news(
         limit: int = Query(default=12, ge=1, le=50),

@@ -71,12 +71,10 @@ Argus를 계속 확장할 때는 `출처별 테이블`보다 `도메인별 테�
 ### 6) Product Surfaces
 - 목적: 프런트 화면에 바로 쓰는 카드/클러스터/커버리지 결과물 생성
 - 대표 테이블:
-  - `source_documents`
-  - `normalized_events`
-  - `event_evidence`
-  - `event_tags`
-  - `news_cards`
-  - `source_coverage`
+  - `news_batch_triage`
+  - `market_surface_candidates`
+  - `market_surface_state`
+  - `market_surface_history`
   - `market_briefings`
   - `company_reports`
 
@@ -104,7 +102,7 @@ Argus를 계속 확장할 때는 `출처별 테이블`보다 `도메인별 테�
 - `raw_documents`에 넣는다.
 - `provider_registry`에 provider 의미를 등록한다.
 - `publisher_registry`에 실제 발행 매체를 등록한다.
-- dedup과 이벤트화는 기존 파이프라인을 재사용한다.
+- 뉴스 탭 표면은 `news_batch_triage -> market_surface_candidates -> market_surface_state` 경로로 재사용한다.
 
 ### 숫자/시계열 provider를 추가할 때
 - `raw_documents`에 억지로 넣지 않는다.
@@ -119,8 +117,8 @@ Argus를 계속 확장할 때는 `출처별 테이블`보다 `도메인별 테�
 
 - `provider_registry`는 유지한다.
 - `publisher_registry`를 추가했다.
-- `raw_documents`, `events`, `source_documents`, `event_evidence`에 `publisher_key` 축을 추가했다.
-- `raw_documents`와 `source_documents`에는 `observed_at`, `published_at_source` 축을 추가했다.
+- `raw_documents`, `events`에 `publisher_key` 축을 추가했다.
+- `raw_documents`에는 `observed_at`, `published_at_source` 축을 추가했다.
 - 즉 이제 같은 언론사가 여러 provider를 통해 들어와도 `provider`와 `publisher`를 분리해서 추적할 수 있다.
 - 뉴스는 원문 발행 시각이 없어도 `observed_at`으로 시간 축이 끊기지 않게 했다.
 

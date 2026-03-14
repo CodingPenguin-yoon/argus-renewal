@@ -90,9 +90,9 @@ type ApiGlobalEventsList = {
   items: ApiGlobalEventItem[];
 };
 
-async function getGlobalEventsJson<T>(path: string): Promise<T> {
+async function getGlobalEventsJson<T>(path: string, revalidate = 30): Promise<T> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/global-events${path}`, {
-    cache: "no-store",
+    next: { revalidate },
   });
 
   if (!response.ok) {

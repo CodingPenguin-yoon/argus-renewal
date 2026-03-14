@@ -1,19 +1,22 @@
-import { AppShellHeader } from "@/krx/components/layout/app-shell";
-import { SharedMarketHeader } from "@/krx/components/layout/shared-market-header";
-import { getAppHeaderData, getSearchIndex } from "@/krx/server/data-service";
+import { Suspense } from "react";
 
-export default async function KrxLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const [searchIndex, headerData] = await Promise.all([getSearchIndex(), getAppHeaderData()]);
+import { AsyncMarketHeader } from "@/krx/components/layout/async-header";
+import { StaticShellHeader } from "@/krx/components/layout/static-shell-header";
+import { SharedMarketHeaderSkeleton } from "@/krx/components/layout/header-skeleton";
 
+export default function KrxLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <div className="market-shell market-shell-krx">
-      <AppShellHeader
-        market="krx"
-        stocks={searchIndex.stocks}
-        news={searchIndex.news}
-        headerMeta={{ phase: headerData.phase, updatedAt: headerData.updatedAt }}
-      />
-      <SharedMarketHeader data={headerData} />
+      <Suspense
+        fallback={
+          <>
+            <StaticShellHeader market="krx" />
+            <SharedMarketHeaderSkeleton />
+          </>
+        }
+      >
+        <AsyncMarketHeader />
+      </Suspense>
       <main className="min-h-[calc(100vh-88px)]">{children}</main>
     </div>
   );

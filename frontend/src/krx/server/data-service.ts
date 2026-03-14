@@ -12,16 +12,13 @@ import {
   emptyMarketNewsCoverage,
   emptyMarketNewsHeaderContext,
   getAllNews,
-  getMarketNewsCards,
-  getMarketNewsCoverage,
-  getMarketNewsHeaderContext,
+  getMarketNewsDashboard,
   getMacroNews,
   getNewsByTicker,
   getNewsDetail,
 } from "@/krx/news/server/data-service";
 
 const BACKEND_BASE_URL = env.BACKEND_BASE_URL.replace(/\/+$/, "");
-const APP_HEADER_RETRY_DELAYS_MS = [0, 150, 350];
 
 type ApiAppHeaderSupportingPoint = {
   text: string;
@@ -69,11 +66,7 @@ type ApiAppHeader = {
   breaking_news: ApiBreakingNews | null;
 };
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function keepMvpNewsScope(region: "KR" | "GLOBAL", cards: Awaited<ReturnType<typeof getMarketNewsCards>>) {
+function keepMvpNewsScope(region: "KR" | "GLOBAL", cards: MarketNewsCard[]) {
   const allowedScope = region === "KR" ? "kr_market" : "global_market";
   return cards.filter((card) => card.primaryRegion === region && card.marketScope === allowedScope);
 }
@@ -188,42 +181,32 @@ export async function getWatchlistPageData() {
 }
 
 export async function getAppHeaderData() {
-  let lastError: unknown = null;
+  try {
+    const response = await fetch(`${BACKEND_BASE_URL}/api/app/header?market=krx`, {
+      next: { revalidate: 30 },
+    });
 
-  for (const delayMs of APP_HEADER_RETRY_DELAYS_MS) {
-    if (delayMs > 0) {
-      await sleep(delayMs);
+    if (!response.ok) {
+      throw new Error(`App header request failed (${response.status})`);
     }
 
-    try {
-      const response = await fetch(`${BACKEND_BASE_URL}/api/app/header?market=krx`, {
-        cache: "no-store",
-      });
+    const payload = (await response.json()) as ApiAppHeader;
+    return mapAppHeader(payload);
+  } catch (error) {
+    console.error(
+      JSON.stringify(
+        {
+          scope: "krx_app_header_fetch",
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        },
+        null,
+        0,
+      ),
+    );
 
-      if (!response.ok) {
-        throw new Error(`App header request failed (${response.status})`);
-      }
-
-      const payload = (await response.json()) as ApiAppHeader;
-      return mapAppHeader(payload);
-    } catch (error) {
-      lastError = error;
-    }
+    return emptyAppHeader();
   }
-
-  console.error(
-    JSON.stringify(
-      {
-        scope: "krx_app_header_fetch",
-        status: "failed",
-        error: lastError instanceof Error ? lastError.message : String(lastError),
-      },
-      null,
-      0,
-    ),
-  );
-
-  return emptyAppHeader();
 }
 
 export async function getMarketSignalTabData() {
@@ -238,13 +221,8 @@ export async function getMarketSignalTabData() {
 
 export async function getNewsTabData() {
   try {
-    const [krCardsRaw, globalCardsRaw, disclosureCardsRaw, headerContext, coverage] = await Promise.all([
-      getMarketNewsCards("kr"),
-      getMarketNewsCards("global"),
-      getMarketNewsCards("disclosures"),
-      getMarketNewsHeaderContext(),
-      getMarketNewsCoverage(),
-    ]);
+    const { krCards: krCardsRaw, globalCards: globalCardsRaw, disclosureCards: disclosureCardsRaw, headerContext, coverage } =
+      await getMarketNewsDashboard();
     const krCards = sortByRankingScoreDesc(keepMvpNewsScope("KR", krCardsRaw));
     const globalCards = sortByRankingScoreDesc(keepMvpNewsScope("GLOBAL", globalCardsRaw));
     const disclosureCards = sortByRankingScoreDesc(disclosureCardsRaw).slice(0, 12);

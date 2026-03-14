@@ -24,8 +24,14 @@ function buildNewsFixture() {
         marketScope: "kr_market" as const,
         primaryRegion: "KR" as const,
         trustScore: 0.84,
+        materialityScore: 0.76,
         noveltyScore: 0.63,
         attentionScore: 0.52,
+        editorialScore: 0.81,
+        storyState: "ONGOING" as const,
+        importanceLabel: "high" as const,
+        editorialReason: "외국인 수급과 반도체 강세가 메인 시장 표면에 직접 연결됩니다.",
+        aiConfidence: 0.74,
         rankingScore: 0.88,
         evidenceCount: 3,
         crossSourceScore: 0.21,
@@ -45,8 +51,14 @@ function buildNewsFixture() {
         marketScope: "global_market" as const,
         primaryRegion: "GLOBAL" as const,
         trustScore: 0.8,
+        materialityScore: 0.69,
         noveltyScore: 0.54,
         attentionScore: 0.46,
+        editorialScore: 0.73,
+        storyState: "NEW" as const,
+        importanceLabel: "medium" as const,
+        editorialReason: "환율과 위험선호 전이에 영향을 주는 글로벌 변수입니다.",
+        aiConfidence: 0.68,
         rankingScore: 0.85,
         evidenceCount: 2,
         crossSourceScore: 0.19,
@@ -66,8 +78,14 @@ function buildNewsFixture() {
         marketScope: "company" as const,
         primaryRegion: "KR" as const,
         trustScore: 0.92,
+        materialityScore: 0.82,
         noveltyScore: 0.58,
         attentionScore: 0.49,
+        editorialScore: 0.87,
+        storyState: "DISCLOSURE_CONFIRMED" as const,
+        importanceLabel: "high" as const,
+        editorialReason: "공시 확인이 완료된 직접 이벤트입니다.",
+        aiConfidence: 0.9,
         rankingScore: 0.91,
         evidenceCount: 2,
         crossSourceScore: 0.34,
@@ -130,7 +148,8 @@ describe("krx news page route", () => {
     expect(screen.queryByRole("tab", { name: "홈" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "세부" })).not.toBeInTheDocument();
     expect(screen.getByText("오늘의 한국 증시 이벤트")).toBeInTheDocument();
-    expect(screen.getByText("한국 관련 글로벌 이벤트")).toBeInTheDocument();
+    expect(screen.getByText("글로벌·공시 브리프")).toBeInTheDocument();
+    expect(screen.getByText("글로벌 변수")).toBeInTheDocument();
     expect(screen.getByText("주요 공시")).toBeInTheDocument();
   });
 
@@ -142,7 +161,10 @@ describe("krx news page route", () => {
     });
     render(component);
 
-    expect(screen.getByRole("heading", { name: "공시" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "공시" })).toHaveAttribute("aria-selected", "true");
+    expect(
+      screen.getByText("공시 근거(DART)가 확인된 이벤트를 우선순위 순으로 제공합니다."),
+    ).toBeInTheDocument();
     expect(screen.getByText("삼성전자 공급계약 공시")).toBeInTheDocument();
     expect(screen.getByText("대표 근거")).toBeInTheDocument();
     expect(screen.getByText("DART")).toBeInTheDocument();

@@ -1,28 +1,10 @@
 import Link from "next/link";
 
 import { TopNav } from "@/krx/components/layout/top-nav";
-import { SearchBox } from "@/krx/components/search/search-box";
-import { formatKoreanDate } from "@/krx/lib/utils";
 import { marketBasePath } from "@/krx/lib/market";
-import { AppHeader, MarketCode, News, Stock } from "@/krx/types/domain";
+import { MarketCode } from "@/krx/types/domain";
 
-function phaseLabel(phase: AppHeader["phase"]) {
-  if (phase === "live") return "장중";
-  if (phase === "post-close") return "장후";
-  return "장전";
-}
-
-export function AppShellHeader({
-  market,
-  stocks,
-  news,
-  headerMeta,
-}: {
-  market: MarketCode;
-  stocks?: Stock[];
-  news?: News[];
-  headerMeta: Pick<AppHeader, "phase" | "updatedAt">;
-}) {
+export function StaticShellHeader({ market }: { market: MarketCode }) {
   return (
     <header className="sticky top-0 z-30 border-b border-amber-200/15 bg-slate-900/82 text-slate-100 backdrop-blur-md">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 py-3 md:py-4">
@@ -37,9 +19,7 @@ export function AppShellHeader({
           </div>
           <div className="flex items-center gap-2">
             <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/6 px-3 py-1.5 text-xs font-semibold text-slate-100/90 md:flex">
-              <span>{phaseLabel(headerMeta.phase)}</span>
-              <span aria-hidden>•</span>
-              <span>{headerMeta.updatedAt ? `업데이트 ${formatKoreanDate(headerMeta.updatedAt)}` : "업데이트 대기"}</span>
+              <span className="inline-block h-4 w-12 animate-pulse rounded bg-white/20" />
             </div>
             <Link
               href={`${marketBasePath(market)}/watchlist`}
@@ -49,7 +29,14 @@ export function AppShellHeader({
             </Link>
           </div>
         </div>
-        <SearchBox market={market} stocks={stocks} news={news} />
+        <div
+          aria-hidden="true"
+          className="h-11 rounded-2xl border border-amber-200/25 bg-slate-800/45 px-4"
+        >
+          <div className="flex h-full items-center">
+            <div className="h-3 w-40 animate-pulse rounded-full bg-white/15" />
+          </div>
+        </div>
         <TopNav market={market} />
       </div>
     </header>

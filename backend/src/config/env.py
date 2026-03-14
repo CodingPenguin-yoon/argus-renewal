@@ -5,7 +5,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    port: int = 4000
     frontend_origin: str = "http://localhost:3000"
     news_provider: str = "mock"
     db_path: str = "data/argus.db"
@@ -78,13 +77,6 @@ class Settings(BaseSettings):
     mk_rss_enabled: bool = False
     mk_rss_feed_urls: str = "https://www.mk.co.kr/rss/30100041/,https://www.mk.co.kr/rss/50200011/"
 
-    bigkinds_news_enabled: bool = False
-    bigkinds_base_url: str = "https://tools.kinds.or.kr"
-    bigkinds_search_path: str = "/api/news/search"
-    bigkinds_api_key: Optional[str] = None
-    bigkinds_page_size: int = 100
-    bigkinds_page_limit: int = 5
-
     naver_news_enabled: bool = False
     naver_news_base_url: str = "https://openapi.naver.com"
     naver_news_search_path: str = "/v1/search/news.json"
@@ -114,7 +106,6 @@ class Settings(BaseSettings):
     raw_ingestion_schedule_theme_keywords: Optional[str] = None
 
     event_pipeline_enabled: bool = True
-    event_pipeline_batch_size: int = 200
     event_pipeline_low_confidence_threshold: float = 0.55
     event_pipeline_include_llm: bool = True
 
@@ -175,8 +166,6 @@ class Settings(BaseSettings):
     global_events_bls_api_url: str = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
     global_events_bea_schedule_url: str = "https://www.bea.gov/news/schedule"
     global_events_bea_pce_url: str = "https://www.bea.gov/data/personal-consumption-expenditures-price-index"
-    global_events_bea_api_url: str = "https://apps.bea.gov/api/data"
-    global_events_bea_api_key: Optional[str] = None
     global_events_ecb_calendar_url: str = "https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html"
     global_events_boj_calendar_url: str = "https://www.boj.or.jp/en/mopo/mpmsche_minu/index.htm"
 

@@ -115,6 +115,14 @@ type ApiMarketNewsHeaderContext = {
   }>;
 };
 
+type ApiMarketNewsDashboard = {
+  kr_cards: ApiMarketNewsCard[];
+  global_cards: ApiMarketNewsCard[];
+  disclosure_cards: ApiMarketNewsCard[];
+  header_context: ApiMarketNewsHeaderContext;
+  coverage: ApiMarketNewsCoverage;
+};
+
 function mapNews(item: ApiNews): News {
   const base = {
     id: item.id,
@@ -235,9 +243,9 @@ function mapMarketNewsHeaderContext(payload: ApiMarketNewsHeaderContext): Market
   };
 }
 
-async function getNewsProductJson<T>(path: string): Promise<T> {
+async function getNewsProductJson<T>(path: string, revalidate = 30): Promise<T> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/news${path}`, {
-    cache: "no-store",
+    next: { revalidate },
   });
 
   if (!response.ok) {
@@ -330,4 +338,15 @@ export async function getMarketNewsCoverage() {
 export async function getMarketNewsHeaderContext() {
   const response = await getNewsProductJson<ApiMarketNewsHeaderContext>("/header-context");
   return mapMarketNewsHeaderContext(response);
+}
+
+export async function getMarketNewsDashboard() {
+  const response = await getNewsProductJson<ApiMarketNewsDashboard>("/dashboard");
+  return {
+    krCards: response.kr_cards.map(mapMarketNewsCard),
+    globalCards: response.global_cards.map(mapMarketNewsCard),
+    disclosureCards: response.disclosure_cards.map(mapMarketNewsCard),
+    headerContext: mapMarketNewsHeaderContext(response.header_context),
+    coverage: mapMarketNewsCoverage(response.coverage),
+  };
 }
