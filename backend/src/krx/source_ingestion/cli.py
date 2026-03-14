@@ -662,6 +662,26 @@ def _refresh_news_product_materialization(settings, *, force: bool) -> dict[str,
     }
 
 
+def _resolve_news_refresh_mode(settings) -> str:
+    mode = str(getattr(settings, "raw_ingestion_automation_refresh_mode", "smart") or "smart").strip().lower()
+    if mode in {"smart", "force", "skip"}:
+        return mode
+    return "smart"
+
+
+def _build_news_refresh_payload(settings) -> dict[str, Any]:
+    mode = _resolve_news_refresh_mode(settings)
+    if mode == "skip":
+        return {"status": "SKIPPED", "mode": mode}
+
+    force = mode == "force"
+    payload = _refresh_news_product_materialization(settings, force=force)
+    return {
+        **payload,
+        "mode": mode,
+    }
+
+
 def _run_news_automation(*, now: datetime | None = None) -> None:
     settings = get_settings()
     decision = resolve_news_automation_cadence(
@@ -674,6 +694,7 @@ def _run_news_automation(*, now: datetime | None = None) -> None:
         market_open_interval_minutes=settings.raw_ingestion_automation_market_open_interval_minutes,
         post_close_interval_minutes=settings.raw_ingestion_automation_post_close_interval_minutes,
         off_hours_interval_minutes=settings.raw_ingestion_automation_off_hours_interval_minutes,
+        holiday_dates=getattr(settings, "raw_ingestion_automation_holiday_dates", None),
     )
     if not decision.should_run:
         _print_json(
@@ -721,7 +742,7 @@ def _run_news_automation(*, now: datetime | None = None) -> None:
         )
         raise SystemExit(1)
 
-    refresh_payload = _refresh_news_product_materialization(settings, force=True)
+    refresh_payload = _build_news_refresh_payload(settings)
     _print_json(
         {
             "status": "SUCCESS",

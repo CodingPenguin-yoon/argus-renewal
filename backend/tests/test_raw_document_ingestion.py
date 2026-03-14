@@ -1531,6 +1531,42 @@ def test_resolve_news_automation_cadence_off_hours() -> None:
     assert decision.next_due_at.isoformat() == "2026-03-14T21:10:00+09:00"
 
 
+def test_resolve_news_automation_cadence_holiday_override() -> None:
+    decision = resolve_news_automation_cadence(
+        now=datetime(2026, 3, 16, 0, 1, tzinfo=timezone.utc),
+        timezone_name="Asia/Seoul",
+        market_open_time="09:00",
+        market_close_time="15:30",
+        post_close_end_time="18:00",
+        weekdays="0,1,2,3,4",
+        market_open_interval_minutes=1,
+        post_close_interval_minutes=5,
+        off_hours_interval_minutes=10,
+        holiday_dates="2026-03-16",
+    )
+
+    assert decision.phase == OFF_HOURS_PHASE
+    assert decision.cadence_minutes == 10
+    assert decision.should_run is False
+    assert decision.next_due_at.isoformat() == "2026-03-16T09:10:00+09:00"
+
+
+def test_resolve_news_automation_cadence_rejects_invalid_holiday_date() -> None:
+    with pytest.raises(ValueError):
+        resolve_news_automation_cadence(
+            now=datetime(2026, 3, 16, 0, 1, tzinfo=timezone.utc),
+            timezone_name="Asia/Seoul",
+            market_open_time="09:00",
+            market_close_time="15:30",
+            post_close_end_time="18:00",
+            weekdays="0,1,2,3,4",
+            market_open_interval_minutes=1,
+            post_close_interval_minutes=5,
+            off_hours_interval_minutes=10,
+            holiday_dates="not-a-date",
+        )
+
+
 def test_run_news_automation_skips_when_tick_is_not_due(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[dict[str, object]] = []
     settings = SimpleNamespace(
@@ -1542,6 +1578,8 @@ def test_run_news_automation_skips_when_tick_is_not_due(monkeypatch: pytest.Monk
         raw_ingestion_automation_market_open_interval_minutes=1,
         raw_ingestion_automation_post_close_interval_minutes=5,
         raw_ingestion_automation_off_hours_interval_minutes=10,
+        raw_ingestion_automation_holiday_dates=None,
+        raw_ingestion_automation_refresh_mode="smart",
     )
 
     monkeypatch.setattr(ingestion_cli, "get_settings", lambda: settings)
@@ -1588,6 +1626,8 @@ def test_run_news_automation_runs_sync_normalize_and_refresh_when_due(monkeypatc
         raw_ingestion_automation_market_open_interval_minutes=1,
         raw_ingestion_automation_post_close_interval_minutes=5,
         raw_ingestion_automation_off_hours_interval_minutes=10,
+        raw_ingestion_automation_holiday_dates=None,
+        raw_ingestion_automation_refresh_mode="smart",
     )
 
     monkeypatch.setattr(ingestion_cli, "get_settings", lambda: settings)
@@ -1622,7 +1662,7 @@ def test_run_news_automation_runs_sync_normalize_and_refresh_when_due(monkeypatc
             "normalize",
             {"settings": settings, "limit": 200, "include_llm": None},
         ),
-        ("refresh", {"settings": settings, "force": True}),
+        ("refresh", {"settings": settings, "force": False}),
     ]
     assert captured == [
         {
@@ -1633,6 +1673,83 @@ def test_run_news_automation_runs_sync_normalize_and_refresh_when_due(monkeypatc
             "executed_at": "2026-03-16T09:01:00+09:00",
             "sync": {"failed_count": 0, "run_count": 2},
             "normalize": {"status": "SUCCESS", "processed_count": 3},
-            "refresh": {"status": "SUCCESS", "force": True},
+            "refresh": {"status": "SUCCESS", "force": False, "mode": "smart"},
         }
     ]
+
+
+def test_run_news_automation_can_skip_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, object]] = []
+    settings = SimpleNamespace(
+        raw_ingestion_automation_timezone="Asia/Seoul",
+        raw_ingestion_automation_weekdays="0,1,2,3,4",
+        raw_ingestion_automation_market_open_time="09:00",
+        raw_ingestion_automation_market_close_time="15:30",
+        raw_ingestion_automation_post_close_end_time="18:00",
+        raw_ingestion_automation_market_open_interval_minutes=1,
+        raw_ingestion_automation_post_close_interval_minutes=5,
+        raw_ingestion_automation_off_hours_interval_minutes=10,
+        raw_ingestion_automation_holiday_dates=None,
+        raw_ingestion_automation_refresh_mode="skip",
+    )
+
+    monkeypatch.setattr(ingestion_cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(ingestion_cli, "_build_sync_scheduled_payload", lambda _settings: {"failed_count": 0})
+    monkeypatch.setattr(
+        ingestion_cli,
+        "_build_normalize_events_payload",
+        lambda *_args, **_kwargs: {"status": "SUCCESS", "processed_count": 0},
+    )
+    monkeypatch.setattr(
+        ingestion_cli,
+        "_refresh_news_product_materialization",
+        lambda *_args, **_kwargs: pytest.fail("refresh should not run when mode=skip"),
+    )
+    monkeypatch.setattr(ingestion_cli, "_print_json", lambda payload: captured.append(payload))
+
+    ingestion_cli._run_news_automation(now=datetime(2026, 3, 16, 0, 1, tzinfo=timezone.utc))
+
+    assert captured[0]["refresh"] == {"status": "SKIPPED", "mode": "skip"}
+
+
+def test_run_news_automation_runs_on_holiday_due_tick_with_off_hours_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+    calls: list[str] = []
+    settings = SimpleNamespace(
+        raw_ingestion_automation_timezone="Asia/Seoul",
+        raw_ingestion_automation_weekdays="0,1,2,3,4",
+        raw_ingestion_automation_market_open_time="09:00",
+        raw_ingestion_automation_market_close_time="15:30",
+        raw_ingestion_automation_post_close_end_time="18:00",
+        raw_ingestion_automation_market_open_interval_minutes=1,
+        raw_ingestion_automation_post_close_interval_minutes=5,
+        raw_ingestion_automation_off_hours_interval_minutes=10,
+        raw_ingestion_automation_holiday_dates="2026-03-16",
+        raw_ingestion_automation_refresh_mode="smart",
+    )
+
+    monkeypatch.setattr(ingestion_cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        ingestion_cli,
+        "_build_sync_scheduled_payload",
+        lambda _settings: calls.append("sync") or {"failed_count": 0},
+    )
+    monkeypatch.setattr(
+        ingestion_cli,
+        "_build_normalize_events_payload",
+        lambda *_args, **_kwargs: calls.append("normalize") or {"status": "SUCCESS", "processed_count": 0},
+    )
+    monkeypatch.setattr(
+        ingestion_cli,
+        "_refresh_news_product_materialization",
+        lambda *_args, **_kwargs: calls.append("refresh") or {"status": "SUCCESS", "force": False},
+    )
+    monkeypatch.setattr(ingestion_cli, "_print_json", lambda payload: captured.append(payload))
+
+    ingestion_cli._run_news_automation(now=datetime(2026, 3, 16, 0, 10, tzinfo=timezone.utc))
+
+    assert calls == ["sync", "normalize", "refresh"]
+    assert captured[0]["phase"] == "OFF_HOURS"
+    assert captured[0]["cadence_minutes"] == 10

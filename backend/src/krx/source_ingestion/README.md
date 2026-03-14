@@ -105,6 +105,16 @@ KRX 뉴스/공시 소스 수집 레이어입니다.
 - `RAW_INGESTION_SCHEDULE_COMPANY_IDS` (comma separated IDs)
 - `RAW_INGESTION_SCHEDULE_COMPANY_NAMES` (comma separated names)
 - `RAW_INGESTION_SCHEDULE_THEME_KEYWORDS` (comma separated keywords)
+- `RAW_INGESTION_AUTOMATION_TIMEZONE`
+- `RAW_INGESTION_AUTOMATION_WEEKDAYS`
+- `RAW_INGESTION_AUTOMATION_MARKET_OPEN_TIME`
+- `RAW_INGESTION_AUTOMATION_MARKET_CLOSE_TIME`
+- `RAW_INGESTION_AUTOMATION_POST_CLOSE_END_TIME`
+- `RAW_INGESTION_AUTOMATION_MARKET_OPEN_INTERVAL_MINUTES`
+- `RAW_INGESTION_AUTOMATION_POST_CLOSE_INTERVAL_MINUTES`
+- `RAW_INGESTION_AUTOMATION_OFF_HOURS_INTERVAL_MINUTES`
+- `RAW_INGESTION_AUTOMATION_HOLIDAY_DATES` (comma separated `YYYY-MM-DD`, KST 기준 휴장일 override)
+- `RAW_INGESTION_AUTOMATION_REFRESH_MODE` (`smart|force|skip`)
 
 ### Event Pipeline
 - `EVENT_PIPELINE_ENABLED`
@@ -180,7 +190,12 @@ python3 -m src.krx.source_ingestion.cli import-company-financial-snapshots --com
 - 1분 cron tick에서 호출하는 canonical wrapper command다.
 - `RAW_INGESTION_AUTOMATION_*` 환경변수로 KRX 세션 phase와 cadence를 계산한다.
 - 장중(09:00~15:30, Mon-Fri)은 매 분 실행, 장 마감 후(15:30~18:00)는 5분 cadence, 그 외 시간/주말은 10분 cadence로 내부 skip 또는 실행을 결정한다.
-- due tick이면 `sync-scheduled`와 같은 raw sync 범위를 실행한 뒤, event pipeline이 enabled일 때 정규화를 돌리고, 마지막에 news product materialization refresh를 강제로 수행한다.
+- `RAW_INGESTION_AUTOMATION_HOLIDAY_DATES`에 오늘 날짜가 있으면 장중 시간이어도 closed-market으로 취급하고 off-hours cadence를 사용한다.
+- due tick이면 `sync-scheduled`와 같은 raw sync 범위를 실행한 뒤, event pipeline이 enabled일 때 정규화를 돌리고, 마지막에 news product materialization refresh를 수행한다.
+- refresh는 `RAW_INGESTION_AUTOMATION_REFRESH_MODE`로 제어한다.
+  - `smart`: 새 source가 있거나 TTL이 지났을 때만 refresh
+  - `force`: 매 due tick마다 강제 refresh
+  - `skip`: 자동 refresh를 생략
 - due가 아니면 `SKIPPED_CADENCE` JSON만 출력하고 종료한다.
 
 read-only probe 동작:

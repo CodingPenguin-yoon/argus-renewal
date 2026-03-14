@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 
@@ -31,15 +31,20 @@ def resolve_news_automation_cadence(
     market_open_interval_minutes: int,
     post_close_interval_minutes: int,
     off_hours_interval_minutes: int,
+    holiday_dates: str | None = None,
 ) -> NewsAutomationCadenceDecision:
     timezone = ZoneInfo(timezone_name)
     local_now = now.astimezone(timezone) if now.tzinfo else now.replace(tzinfo=timezone)
     active_weekdays = _parse_weekdays(weekdays)
+    configured_holidays = _parse_holiday_dates(holiday_dates)
     open_at = _parse_time(market_open_time)
     close_at = _parse_time(market_close_time)
     post_close_end_at = _parse_time(post_close_end_time)
 
-    if local_now.weekday() in active_weekdays and open_at <= local_now.time() < close_at:
+    if local_now.date() in configured_holidays:
+        phase = OFF_HOURS_PHASE
+        cadence_minutes = off_hours_interval_minutes
+    elif local_now.weekday() in active_weekdays and open_at <= local_now.time() < close_at:
         phase = MARKET_OPEN_PHASE
         cadence_minutes = market_open_interval_minutes
     elif local_now.weekday() in active_weekdays and close_at <= local_now.time() < post_close_end_at:
@@ -72,3 +77,15 @@ def _parse_time(value: str) -> time:
 def _parse_weekdays(value: str) -> set[int]:
     items = {int(item.strip()) for item in value.split(",") if item.strip()}
     return items or {0, 1, 2, 3, 4}
+
+
+def _parse_holiday_dates(value: str | None) -> set[date]:
+    if value is None:
+        return set()
+    parsed: set[date] = set()
+    for item in value.split(","):
+        stripped = item.strip()
+        if not stripped:
+            continue
+        parsed.add(date.fromisoformat(stripped))
+    return parsed

@@ -112,6 +112,8 @@ class Settings(BaseSettings):
     raw_ingestion_automation_market_open_interval_minutes: int = 1
     raw_ingestion_automation_post_close_interval_minutes: int = 5
     raw_ingestion_automation_off_hours_interval_minutes: int = 10
+    raw_ingestion_automation_holiday_dates: Optional[str] = None
+    raw_ingestion_automation_refresh_mode: str = "smart"
 
     event_pipeline_enabled: bool = True
     event_pipeline_low_confidence_threshold: float = 0.55
