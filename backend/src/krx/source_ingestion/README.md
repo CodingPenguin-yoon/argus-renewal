@@ -156,6 +156,7 @@ python3 -m src.krx.source_ingestion.cli probe-news-provider --provider NAVER_NEW
 python3 -m src.krx.source_ingestion.cli probe-trend-provider --provider NAVER_DATALAB --group "반도체=반도체,삼성전자" --sample-limit 10
 python3 -m src.krx.source_ingestion.cli backfill --start-date 2026-03-01 --end-date 2026-03-09 --provider-scope all --company-id 1 --keyword "금리"
 python3 -m src.krx.source_ingestion.cli sync-scheduled
+python3 -m src.krx.source_ingestion.cli run-news-automation
 python3 -m src.krx.source_ingestion.cli normalize-events --limit 200
 python3 -m src.krx.source_ingestion.cli normalize-events --limit 200 --no-llm
 python3 -m src.krx.source_ingestion.cli list-event-review-queue --limit 100 --status PENDING
@@ -174,6 +175,13 @@ python3 -m src.krx.source_ingestion.cli import-company-financial-snapshots --com
 - provider CSV 설정이 있으면 legacy boolean보다 우선해서 해당 provider만 실행
 - run 중 하나라도 `FAILED`면 프로세스 exit code를 `1`로 종료 (cron/alert 연동용)
 - `SKIPPED_DISABLED`(credential/flag 미설정)는 실패로 간주하지 않음
+
+`run-news-automation` 동작:
+- 1분 cron tick에서 호출하는 canonical wrapper command다.
+- `RAW_INGESTION_AUTOMATION_*` 환경변수로 KRX 세션 phase와 cadence를 계산한다.
+- 장중(09:00~15:30, Mon-Fri)은 매 분 실행, 장 마감 후(15:30~18:00)는 5분 cadence, 그 외 시간/주말은 10분 cadence로 내부 skip 또는 실행을 결정한다.
+- due tick이면 `sync-scheduled`와 같은 raw sync 범위를 실행한 뒤, event pipeline이 enabled일 때 정규화를 돌리고, 마지막에 news product materialization refresh를 강제로 수행한다.
+- due가 아니면 `SKIPPED_CADENCE` JSON만 출력하고 종료한다.
 
 read-only probe 동작:
 - `probe-news-provider`는 `MK_RSS`, `NAVER_NEWS`를 직접 호출하고 DB에는 아무것도 쓰지 않는다.
@@ -194,7 +202,7 @@ publisher backfill:
 - MK RSS theme sync: 15~30분 간격 incremental
 - BigKinds/Naver theme sync: 30분 간격 incremental
 - BigKinds/Naver company sync: 30분 간격 incremental
-- 통합 배치: cron에서 `sync-scheduled`를 10~30분 간격 호출
+- 통합 배치: cron에서 `run-news-automation`을 1분 간격 호출하고, command 내부에서 세션별 cadence로 실제 실행 빈도를 낮춘다.
 - backfill: 필요 시 수동 실행
 
 예시 crontab:

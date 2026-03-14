@@ -18,11 +18,14 @@ from .factory import (
     create_raw_document_ingestion_service,
 )
 from .providers import TrendKeywordGroup
+from .schedule import resolve_news_automation_cadence
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+
+DEFAULT_NEWS_AUTOMATION_NORMALIZE_LIMIT = 200
 
 
 def _print_json(payload: dict[str, Any]) -> None:
@@ -530,10 +533,8 @@ def _backfill(
     )
 
 
-def _sync_scheduled() -> None:
-    settings = get_settings()
+def _build_sync_scheduled_payload(settings) -> dict[str, Any]:
     service = create_raw_document_ingestion_service(settings)
-
     days = max(1, settings.raw_ingestion_schedule_days)
     disclosure_providers = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_disclosure_providers", None))
     company_news_providers = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_company_news_providers", None))
@@ -576,24 +577,27 @@ def _sync_scheduled() -> None:
     disabled_runs = [result for result in results if result.status == "SKIPPED_DISABLED"]
     success_runs = [result for result in results if result.status == "SUCCESS"]
 
-    _print_json(
-        {
-            "runs": [_as_result_payload(result) for result in results],
-            "run_count": len(results),
-            "schedule_days": days,
-            "disclosure_providers": disclosure_providers,
-            "company_news_providers": company_news_providers,
-            "theme_news_providers": theme_news_providers,
-            "company_ids": company_ids,
-            "company_names": company_names,
-            "theme_keywords": theme_keywords,
-            "success_count": len(success_runs),
-            "disabled_count": len(disabled_runs),
-            "failed_count": len(failed_runs),
-        }
-    )
+    return {
+        "runs": [_as_result_payload(result) for result in results],
+        "run_count": len(results),
+        "schedule_days": days,
+        "disclosure_providers": disclosure_providers,
+        "company_news_providers": company_news_providers,
+        "theme_news_providers": theme_news_providers,
+        "company_ids": company_ids,
+        "company_names": company_names,
+        "theme_keywords": theme_keywords,
+        "success_count": len(success_runs),
+        "disabled_count": len(disabled_runs),
+        "failed_count": len(failed_runs),
+    }
 
-    if failed_runs:
+
+def _sync_scheduled() -> None:
+    payload = _build_sync_scheduled_payload(get_settings())
+    _print_json(payload)
+
+    if payload["failed_count"]:
         raise SystemExit(1)
 
 
@@ -615,22 +619,18 @@ def _sync_global_events(*, start_date: date | None, end_date: date | None) -> No
         raise SystemExit(1)
 
 
-def _normalize_events(*, limit: int, include_llm: bool | None) -> None:
-    settings = get_settings()
+def _build_normalize_events_payload(settings, *, limit: int, include_llm: bool | None) -> dict[str, Any]:
     if not settings.event_pipeline_enabled:
-        _print_json(
-            {
-                "status": "SKIPPED_DISABLED",
-                "reason": "event_pipeline_feature_flag_disabled",
-                "run_id": None,
-                "processed_count": 0,
-                "created_event_count": 0,
-                "updated_event_count": 0,
-                "review_enqueued_count": 0,
-                "failed_count": 0,
-            }
-        )
-        return
+        return {
+            "status": "SKIPPED_DISABLED",
+            "reason": "event_pipeline_feature_flag_disabled",
+            "run_id": None,
+            "processed_count": 0,
+            "created_event_count": 0,
+            "updated_event_count": 0,
+            "review_enqueued_count": 0,
+            "failed_count": 0,
+        }
 
     service = create_event_normalization_service(settings)
     effective_include_llm = settings.event_pipeline_include_llm if include_llm is None else include_llm
@@ -638,11 +638,100 @@ def _normalize_events(*, limit: int, include_llm: bool | None) -> None:
         limit=limit,
         include_llm=effective_include_llm,
     )
+    return {
+        **_as_event_result_payload(result),
+        "include_llm": effective_include_llm,
+        "low_confidence_threshold": settings.event_pipeline_low_confidence_threshold,
+    }
+
+
+def _normalize_events(*, limit: int, include_llm: bool | None) -> None:
+    payload = _build_normalize_events_payload(get_settings(), limit=limit, include_llm=include_llm)
+    _print_json(payload)
+
+
+def _refresh_news_product_materialization(settings, *, force: bool) -> dict[str, Any]:
+    service = create_news_product_service(settings)
+    service.refresh_materialized(force=force)
+    coverage = service.get_coverage()
+    return {
+        "status": "SUCCESS",
+        "force": force,
+        "coverage_state": coverage.get("state"),
+        "coverage_updated_at": coverage.get("updated_at"),
+    }
+
+
+def _run_news_automation(*, now: datetime | None = None) -> None:
+    settings = get_settings()
+    decision = resolve_news_automation_cadence(
+        now=now or datetime.now(timezone.utc),
+        timezone_name=settings.raw_ingestion_automation_timezone,
+        market_open_time=settings.raw_ingestion_automation_market_open_time,
+        market_close_time=settings.raw_ingestion_automation_market_close_time,
+        post_close_end_time=settings.raw_ingestion_automation_post_close_end_time,
+        weekdays=settings.raw_ingestion_automation_weekdays,
+        market_open_interval_minutes=settings.raw_ingestion_automation_market_open_interval_minutes,
+        post_close_interval_minutes=settings.raw_ingestion_automation_post_close_interval_minutes,
+        off_hours_interval_minutes=settings.raw_ingestion_automation_off_hours_interval_minutes,
+    )
+    if not decision.should_run:
+        _print_json(
+            {
+                "status": "SKIPPED_CADENCE",
+                "phase": decision.phase,
+                "cadence_minutes": decision.cadence_minutes,
+                "timezone": decision.timezone_name,
+                "evaluated_at": decision.local_now.isoformat(),
+                "next_due_at": decision.next_due_at.isoformat(),
+            }
+        )
+        return
+
+    sync_payload = _build_sync_scheduled_payload(settings)
+    if sync_payload["failed_count"]:
+        _print_json(
+            {
+                "status": "FAILED",
+                "phase": decision.phase,
+                "cadence_minutes": decision.cadence_minutes,
+                "timezone": decision.timezone_name,
+                "executed_at": decision.local_now.isoformat(),
+                "sync": sync_payload,
+            }
+        )
+        raise SystemExit(1)
+
+    normalize_payload = _build_normalize_events_payload(
+        settings,
+        limit=DEFAULT_NEWS_AUTOMATION_NORMALIZE_LIMIT,
+        include_llm=None,
+    )
+    if normalize_payload.get("status") == "FAILED" or normalize_payload.get("failed_count"):
+        _print_json(
+            {
+                "status": "FAILED",
+                "phase": decision.phase,
+                "cadence_minutes": decision.cadence_minutes,
+                "timezone": decision.timezone_name,
+                "executed_at": decision.local_now.isoformat(),
+                "sync": sync_payload,
+                "normalize": normalize_payload,
+            }
+        )
+        raise SystemExit(1)
+
+    refresh_payload = _refresh_news_product_materialization(settings, force=True)
     _print_json(
         {
-            **_as_event_result_payload(result),
-            "include_llm": effective_include_llm,
-            "low_confidence_threshold": settings.event_pipeline_low_confidence_threshold,
+            "status": "SUCCESS",
+            "phase": decision.phase,
+            "cadence_minutes": decision.cadence_minutes,
+            "timezone": decision.timezone_name,
+            "executed_at": decision.local_now.isoformat(),
+            "sync": sync_payload,
+            "normalize": normalize_payload,
+            "refresh": refresh_payload,
         }
     )
 
@@ -1145,6 +1234,10 @@ def build_parser() -> argparse.ArgumentParser:
         "sync-scheduled",
         help="Run default scheduled incremental sync using RAW_INGESTION_SCHEDULE_* env values",
     )
+    subparsers.add_parser(
+        "run-news-automation",
+        help="Run session-aware news automation using scheduler cadence env values",
+    )
 
     global_events_parser = subparsers.add_parser(
         "sync-global-events",
@@ -1458,6 +1551,10 @@ def main() -> None:
 
     if args.command == "sync-scheduled":
         _sync_scheduled()
+        return
+
+    if args.command == "run-news-automation":
+        _run_news_automation()
         return
 
     if args.command == "sync-global-events":

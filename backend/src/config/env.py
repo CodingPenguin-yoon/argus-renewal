@@ -104,6 +104,14 @@ class Settings(BaseSettings):
     raw_ingestion_schedule_company_ids: Optional[str] = None
     raw_ingestion_schedule_company_names: Optional[str] = None
     raw_ingestion_schedule_theme_keywords: Optional[str] = None
+    raw_ingestion_automation_timezone: str = "Asia/Seoul"
+    raw_ingestion_automation_weekdays: str = "0,1,2,3,4"
+    raw_ingestion_automation_market_open_time: str = "09:00"
+    raw_ingestion_automation_market_close_time: str = "15:30"
+    raw_ingestion_automation_post_close_end_time: str = "18:00"
+    raw_ingestion_automation_market_open_interval_minutes: int = 1
+    raw_ingestion_automation_post_close_interval_minutes: int = 5
+    raw_ingestion_automation_off_hours_interval_minutes: int = 10
 
     event_pipeline_enabled: bool = True
     event_pipeline_low_confidence_threshold: float = 0.55

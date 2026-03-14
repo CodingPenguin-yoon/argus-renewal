@@ -23,6 +23,14 @@
 - `NAVER_NEWS_ENABLED`
 - `NAVER_NEWS_CLIENT_ID`
 - `NAVER_NEWS_CLIENT_SECRET`
+- `RAW_INGESTION_AUTOMATION_TIMEZONE`
+- `RAW_INGESTION_AUTOMATION_WEEKDAYS`
+- `RAW_INGESTION_AUTOMATION_MARKET_OPEN_TIME`
+- `RAW_INGESTION_AUTOMATION_MARKET_CLOSE_TIME`
+- `RAW_INGESTION_AUTOMATION_POST_CLOSE_END_TIME`
+- `RAW_INGESTION_AUTOMATION_MARKET_OPEN_INTERVAL_MINUTES`
+- `RAW_INGESTION_AUTOMATION_POST_CLOSE_INTERVAL_MINUTES`
+- `RAW_INGESTION_AUTOMATION_OFF_HOURS_INTERVAL_MINUTES`
 
 ### 신규 attention/ranking
 - `NAVER_DATALAB_ENABLED`
@@ -115,6 +123,12 @@ pytest -q tests/test_market_news_product.py tests/test_api.py
 cd ../frontend
 pnpm vitest run src/app/krx/news/page.test.tsx
 ```
+
+## 운영 스케줄 방향
+- canonical cron entry는 `python3 -m src.krx.source_ingestion.cli run-news-automation` 를 1분 간격으로 호출합니다.
+- command 내부가 `Asia/Seoul` 기준 KRX session phase를 계산해 장중은 1분 cadence, 장 종료 후 18:00 전까지는 5분 cadence, 그 외 시간과 주말은 10분 cadence로 실제 실행 여부를 결정합니다.
+- due tick이면 raw sync(`sync-scheduled`와 동일 범위) 이후 event normalization, news product materialization refresh까지 한 번에 수행합니다.
+- due가 아니면 `SKIPPED_CADENCE` JSON만 남기고 종료합니다.
 
 ## API
 - `GET /api/news/dashboard`

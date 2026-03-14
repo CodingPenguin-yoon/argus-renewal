@@ -24,6 +24,12 @@ from src.krx.source_ingestion.providers.dart_provider import DartDisclosureProvi
 from src.krx.source_ingestion.providers.mk_rss_provider import MkRssNewsProvider
 from src.krx.source_ingestion.providers.naver_datalab_provider import TrendKeywordGroup, TrendScore, TrendScoreBatch
 from src.krx.source_ingestion.providers.naver_news_provider import NaverNewsProvider
+from src.krx.source_ingestion.schedule import (
+    MARKET_OPEN_PHASE,
+    OFF_HOURS_PHASE,
+    POST_CLOSE_PHASE,
+    resolve_news_automation_cadence,
+)
 from src.krx.source_ingestion.service import RawDocumentIngestionService
 
 
@@ -1076,6 +1082,12 @@ def test_cli_parser_supports_sync_scheduled_command() -> None:
     assert args.command == "sync-scheduled"
 
 
+def test_cli_parser_supports_run_news_automation_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["run-news-automation"])
+    assert args.command == "run-news-automation"
+
+
 def test_cli_parser_supports_backfill_publishers_command() -> None:
     parser = build_parser()
     args = parser.parse_args(["backfill-publishers", "--limit", "25", "--all"])
@@ -1460,4 +1472,167 @@ def test_sync_scheduled_uses_configured_provider_filters(monkeypatch: pytest.Mon
                 "providers": ["CUSTOM_RSS", "NAVER_NEWS"],
             },
         ),
+    ]
+
+
+def test_resolve_news_automation_cadence_market_open() -> None:
+    decision = resolve_news_automation_cadence(
+        now=datetime(2026, 3, 16, 0, 1, tzinfo=timezone.utc),
+        timezone_name="Asia/Seoul",
+        market_open_time="09:00",
+        market_close_time="15:30",
+        post_close_end_time="18:00",
+        weekdays="0,1,2,3,4",
+        market_open_interval_minutes=1,
+        post_close_interval_minutes=5,
+        off_hours_interval_minutes=10,
+    )
+
+    assert decision.phase == MARKET_OPEN_PHASE
+    assert decision.cadence_minutes == 1
+    assert decision.should_run is True
+
+
+def test_resolve_news_automation_cadence_post_close() -> None:
+    decision = resolve_news_automation_cadence(
+        now=datetime(2026, 3, 16, 6, 32, tzinfo=timezone.utc),
+        timezone_name="Asia/Seoul",
+        market_open_time="09:00",
+        market_close_time="15:30",
+        post_close_end_time="18:00",
+        weekdays="0,1,2,3,4",
+        market_open_interval_minutes=1,
+        post_close_interval_minutes=5,
+        off_hours_interval_minutes=10,
+    )
+
+    assert decision.phase == POST_CLOSE_PHASE
+    assert decision.cadence_minutes == 5
+    assert decision.should_run is False
+    assert decision.next_due_at.isoformat() == "2026-03-16T15:35:00+09:00"
+
+
+def test_resolve_news_automation_cadence_off_hours() -> None:
+    decision = resolve_news_automation_cadence(
+        now=datetime(2026, 3, 14, 12, 4, tzinfo=timezone.utc),
+        timezone_name="Asia/Seoul",
+        market_open_time="09:00",
+        market_close_time="15:30",
+        post_close_end_time="18:00",
+        weekdays="0,1,2,3,4",
+        market_open_interval_minutes=1,
+        post_close_interval_minutes=5,
+        off_hours_interval_minutes=10,
+    )
+
+    assert decision.phase == OFF_HOURS_PHASE
+    assert decision.cadence_minutes == 10
+    assert decision.should_run is False
+    assert decision.next_due_at.isoformat() == "2026-03-14T21:10:00+09:00"
+
+
+def test_run_news_automation_skips_when_tick_is_not_due(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, object]] = []
+    settings = SimpleNamespace(
+        raw_ingestion_automation_timezone="Asia/Seoul",
+        raw_ingestion_automation_weekdays="0,1,2,3,4",
+        raw_ingestion_automation_market_open_time="09:00",
+        raw_ingestion_automation_market_close_time="15:30",
+        raw_ingestion_automation_post_close_end_time="18:00",
+        raw_ingestion_automation_market_open_interval_minutes=1,
+        raw_ingestion_automation_post_close_interval_minutes=5,
+        raw_ingestion_automation_off_hours_interval_minutes=10,
+    )
+
+    monkeypatch.setattr(ingestion_cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        ingestion_cli,
+        "_build_sync_scheduled_payload",
+        lambda _settings: pytest.fail("sync should not run on skipped cadence"),
+    )
+    monkeypatch.setattr(
+        ingestion_cli,
+        "_build_normalize_events_payload",
+        lambda *_args, **_kwargs: pytest.fail("normalize should not run on skipped cadence"),
+    )
+    monkeypatch.setattr(
+        ingestion_cli,
+        "_refresh_news_product_materialization",
+        lambda *_args, **_kwargs: pytest.fail("refresh should not run on skipped cadence"),
+    )
+    monkeypatch.setattr(ingestion_cli, "_print_json", lambda payload: captured.append(payload))
+
+    ingestion_cli._run_news_automation(now=datetime(2026, 3, 16, 6, 32, tzinfo=timezone.utc))
+
+    assert captured == [
+        {
+            "status": "SKIPPED_CADENCE",
+            "phase": "POST_CLOSE",
+            "cadence_minutes": 5,
+            "timezone": "Asia/Seoul",
+            "evaluated_at": "2026-03-16T15:32:00+09:00",
+            "next_due_at": "2026-03-16T15:35:00+09:00",
+        }
+    ]
+
+
+def test_run_news_automation_runs_sync_normalize_and_refresh_when_due(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, object]] = []
+    calls: list[tuple[str, dict[str, object]]] = []
+    settings = SimpleNamespace(
+        raw_ingestion_automation_timezone="Asia/Seoul",
+        raw_ingestion_automation_weekdays="0,1,2,3,4",
+        raw_ingestion_automation_market_open_time="09:00",
+        raw_ingestion_automation_market_close_time="15:30",
+        raw_ingestion_automation_post_close_end_time="18:00",
+        raw_ingestion_automation_market_open_interval_minutes=1,
+        raw_ingestion_automation_post_close_interval_minutes=5,
+        raw_ingestion_automation_off_hours_interval_minutes=10,
+    )
+
+    monkeypatch.setattr(ingestion_cli, "get_settings", lambda: settings)
+
+    def _fake_sync_payload(passed_settings):
+        calls.append(("sync", {"settings": passed_settings}))
+        return {"failed_count": 0, "run_count": 2}
+
+    def _fake_normalize_payload(passed_settings, *, limit: int, include_llm: bool | None):
+        calls.append(
+            (
+                "normalize",
+                {"settings": passed_settings, "limit": limit, "include_llm": include_llm},
+            )
+        )
+        return {"status": "SUCCESS", "processed_count": 3}
+
+    def _fake_refresh(passed_settings, *, force: bool):
+        calls.append(("refresh", {"settings": passed_settings, "force": force}))
+        return {"status": "SUCCESS", "force": force}
+
+    monkeypatch.setattr(ingestion_cli, "_build_sync_scheduled_payload", _fake_sync_payload)
+    monkeypatch.setattr(ingestion_cli, "_build_normalize_events_payload", _fake_normalize_payload)
+    monkeypatch.setattr(ingestion_cli, "_refresh_news_product_materialization", _fake_refresh)
+    monkeypatch.setattr(ingestion_cli, "_print_json", lambda payload: captured.append(payload))
+
+    ingestion_cli._run_news_automation(now=datetime(2026, 3, 16, 0, 1, tzinfo=timezone.utc))
+
+    assert calls == [
+        ("sync", {"settings": settings}),
+        (
+            "normalize",
+            {"settings": settings, "limit": 200, "include_llm": None},
+        ),
+        ("refresh", {"settings": settings, "force": True}),
+    ]
+    assert captured == [
+        {
+            "status": "SUCCESS",
+            "phase": "MARKET_OPEN",
+            "cadence_minutes": 1,
+            "timezone": "Asia/Seoul",
+            "executed_at": "2026-03-16T09:01:00+09:00",
+            "sync": {"failed_count": 0, "run_count": 2},
+            "normalize": {"status": "SUCCESS", "processed_count": 3},
+            "refresh": {"status": "SUCCESS", "force": True},
+        }
     ]
