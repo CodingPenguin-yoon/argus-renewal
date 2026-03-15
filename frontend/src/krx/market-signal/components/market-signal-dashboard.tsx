@@ -344,6 +344,23 @@ function DerivativesTabPanel({
   const explanationText = derivativesSummary.explanationText.trim()
     ? derivativesSummary.explanationText
     : `${dateLabel(derivativesSummary.date)} 파생 지표 기준으로 ${directionalBiasLabel(derivativesSummary.directionalBias)}로 해석했습니다.`;
+  const hasPreOpenSession = derivativesSummary.preOpenFutures.changeRate !== null;
+  const hasNightSession = derivativesSummary.nightFutures.changeRate !== null;
+  const sessionMetricLabel = hasPreOpenSession
+    ? "개장 전 선물 변동률"
+    : hasNightSession
+      ? "야간선물 변동률"
+      : "내재변동성";
+  const sessionMetricValue = hasPreOpenSession
+    ? formatSignedPercent(derivativesSummary.preOpenFutures.changeRate, 2)
+    : hasNightSession
+      ? formatSignedPercent(derivativesSummary.nightFutures.changeRate, 2)
+      : formatNumber(derivativesSummary.impliedVolatility, 2);
+  const sessionMetricDetail = hasPreOpenSession
+    ? "개장 전 세션 선물 움직임"
+    : hasNightSession
+      ? "야간 세션 선물 움직임"
+      : `내재변동성 변화율 ${formatSignedPercent(derivativesSummary.impliedVolatilityChange, 2)}`;
 
   const componentLines = derivativesSummary.components
     .map((component) => component.explanationKo?.trim())
@@ -376,17 +393,9 @@ function DerivativesTabPanel({
             detail="선물 순매수/순매도 강도"
           />
           <DerivativesMetricCard
-            title={derivativesSummary.nightFutures.changeRate !== null ? "야간선물 변동률" : "내재변동성"}
-            value={
-              derivativesSummary.nightFutures.changeRate !== null
-                ? formatSignedPercent(derivativesSummary.nightFutures.changeRate, 2)
-                : formatNumber(derivativesSummary.impliedVolatility, 2)
-            }
-            detail={
-              derivativesSummary.nightFutures.changeRate !== null
-                ? "야간 세션 선물 움직임"
-                : `내재변동성 변화율 ${formatSignedPercent(derivativesSummary.impliedVolatilityChange, 2)}`
-            }
+            title={sessionMetricLabel}
+            value={sessionMetricValue}
+            detail={sessionMetricDetail}
           />
         </div>
       </section>
@@ -437,7 +446,7 @@ function DerivativesTabPanel({
           <DetailMetric label="Call OI" value={formatNumber(derivativesSummary.callOpenInterest, 0)} />
           <DetailMetric label="Put OI" value={formatNumber(derivativesSummary.putOpenInterest, 0)} />
           <DetailMetric label="외국인 선물 포지션" value={formatLargeNumber(derivativesSummary.foreignFuturesNetPosition)} />
-          <DetailMetric label="야간선물 변동률" value={formatSignedPercent(derivativesSummary.nightFutures.changeRate, 2)} />
+          <DetailMetric label={sessionMetricLabel} value={sessionMetricValue} />
           <DetailMetric label="내재변동성" value={formatNumber(derivativesSummary.impliedVolatility, 2)} />
           <DetailMetric label="내재변동성 변화율" value={formatSignedPercent(derivativesSummary.impliedVolatilityChange, 2)} />
         </dl>

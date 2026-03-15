@@ -69,6 +69,17 @@ type ApiDerivativesSummary = {
   }> | null;
   last_updated_at: string | null;
   missing_fields: string[];
+  pre_open_futures: {
+    signal: "gap_up" | "gap_down" | "flat" | null;
+    change_rate: number | null;
+    price: number | null;
+    price_change: number | null;
+    instrument_code: string | null;
+    instrument_name: string | null;
+    snapshot_time: string | null;
+    source_name: string | null;
+    source_url: string | null;
+  };
   night_futures: {
     signal: "gap_up" | "gap_down" | "flat" | null;
     change_rate: number | null;
@@ -187,6 +198,17 @@ function mapSummary(item: ApiDerivativesSummary): DerivativesSummary {
     components: (item.components ?? []).map(mapComponent),
     lastUpdatedAt: item.last_updated_at,
     missingFields: item.missing_fields,
+    preOpenFutures: {
+      signal: item.pre_open_futures.signal,
+      changeRate: item.pre_open_futures.change_rate,
+      price: item.pre_open_futures.price,
+      priceChange: item.pre_open_futures.price_change,
+      instrumentCode: item.pre_open_futures.instrument_code,
+      instrumentName: item.pre_open_futures.instrument_name,
+      snapshotTime: item.pre_open_futures.snapshot_time,
+      sourceName: item.pre_open_futures.source_name,
+      sourceUrl: item.pre_open_futures.source_url,
+    },
     nightFutures: {
       signal: item.night_futures.signal,
       changeRate: item.night_futures.change_rate,
@@ -250,7 +272,7 @@ export function emptyDerivativesSummary(): DerivativesSummary {
       tradeDate: null,
       coverageRatio: 0,
       state: "missing",
-      label: "소스 0/5",
+      label: "소스 0/6",
       sourceNames: [],
       sections: [],
     },
@@ -276,6 +298,17 @@ export function emptyDerivativesSummary(): DerivativesSummary {
     components: [],
     lastUpdatedAt: null,
     missingFields: [],
+    preOpenFutures: {
+      signal: null,
+      changeRate: null,
+      price: null,
+      priceChange: null,
+      instrumentCode: null,
+      instrumentName: null,
+      snapshotTime: null,
+      sourceName: null,
+      sourceUrl: null,
+    },
     nightFutures: {
       signal: null,
       changeRate: null,

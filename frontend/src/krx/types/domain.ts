@@ -499,6 +499,18 @@ export type DerivativesComponent = {
   dataAvailable: boolean;
 };
 
+export type DerivativesSessionSnapshot = {
+  signal: DerivativesNightSignal | null;
+  changeRate: number | null;
+  price: number | null;
+  priceChange: number | null;
+  instrumentCode: string | null;
+  instrumentName: string | null;
+  snapshotTime: string | null;
+  sourceName: string | null;
+  sourceUrl: string | null;
+};
+
 export type DerivativesSummary = {
   requestedDate: string | null;
   date: string | null;
@@ -527,17 +539,8 @@ export type DerivativesSummary = {
   components: DerivativesComponent[];
   lastUpdatedAt: string | null;
   missingFields: string[];
-  nightFutures: {
-    signal: DerivativesNightSignal | null;
-    changeRate: number | null;
-    price: number | null;
-    priceChange: number | null;
-    instrumentCode: string | null;
-    instrumentName: string | null;
-    snapshotTime: string | null;
-    sourceName: string | null;
-    sourceUrl: string | null;
-  };
+  preOpenFutures: DerivativesSessionSnapshot;
+  nightFutures: DerivativesSessionSnapshot;
 };
 
 export type DerivativesTrendItem = {

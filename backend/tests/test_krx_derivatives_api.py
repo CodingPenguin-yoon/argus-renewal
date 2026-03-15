@@ -129,6 +129,53 @@ def _insert_night_snapshot_row(
         )
 
 
+def _insert_pre_open_snapshot_row(
+    db_path: str,
+    *,
+    trade_date_iso: str,
+    change_rate: float,
+) -> None:
+    now = utcnow_iso()
+    with get_connection(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO market_intraday_snapshots (
+                trade_date,
+                snapshot_time,
+                session_type,
+                source_name,
+                instrument_code,
+                instrument_name,
+                price,
+                price_change,
+                change_rate,
+                volume,
+                open_interest,
+                put_call_ratio,
+                implied_volatility,
+                additional_metrics_json,
+                source_url,
+                source_record_id,
+                raw_payload_json,
+                run_id,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, 'PRE_OPEN', 'KIS_DOMESTIC_DERIVATIVES', '101S3000', 'KOSPI200 선물', 351.2, 0.9, ?, 15000, NULL, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                trade_date_iso,
+                f"{trade_date_iso}T08:40:00Z",
+                change_rate,
+                json.dumps({}, ensure_ascii=False),
+                "https://kis.mock/pre-open",
+                f"pre-open-{trade_date_iso}",
+                json.dumps({"trade_date": trade_date_iso}, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+
+
 def _insert_market_briefing_row(
     db_path: str,
     *,
@@ -273,6 +320,7 @@ def test_summary_endpoint_with_full_data(tmp_path: Path, monkeypatch) -> None:
                 ],
             },
         )
+        _insert_pre_open_snapshot_row(db_path, trade_date_iso="2026-03-09", change_rate=0.34)
         _insert_night_snapshot_row(db_path, trade_date_iso="2026-03-09", change_rate=0.61)
         _insert_market_briefing_row(
             db_path,
@@ -297,9 +345,12 @@ def test_summary_endpoint_with_full_data(tmp_path: Path, monkeypatch) -> None:
         assert item["detail_level"] == 3
         assert item["briefing_source"] == "market_briefings"
         assert item["directional_bias"] == "bullish"
+        assert item["pre_open_futures"]["signal"] == "gap_up"
+        assert item["pre_open_futures"]["source_name"] == "KIS_DOMESTIC_DERIVATIVES"
         assert item["night_futures"]["signal"] == "gap_up"
         assert "call_notional" not in item["missing_fields"]
-        assert len(item["source_coverage"]["sections"]) >= 4
+        assert len(item["source_coverage"]["sections"]) >= 5
+        assert "KIS_DOMESTIC_DERIVATIVES" in item["source_coverage"]["source_names"]
     finally:
         get_settings.cache_clear()
 
@@ -327,6 +378,7 @@ def test_summary_endpoint_with_partial_data(tmp_path: Path, monkeypatch) -> None
         assert item["date"] == "2026-03-09"
         assert item["briefing_source"] == "rule_based"
         assert item["detail_level"] == 1
+        assert item["pre_open_futures"]["signal"] is None
         assert item["night_futures"]["signal"] is None
         assert "call_notional" in item["missing_fields"]
         assert "foreign_futures_net_position" in item["missing_fields"]

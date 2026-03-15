@@ -103,6 +103,9 @@ class DerivativesDashboardService:
                 if resolved_date
                 else None
             )
+            pre_open_snapshot = (
+                self._select_pre_open_snapshot_row(connection, trade_date=resolved_date) if resolved_date else None
+            )
             night_snapshot = (
                 self._select_night_snapshot_row(connection, trade_date=resolved_date) if resolved_date else None
             )
@@ -167,6 +170,7 @@ class DerivativesDashboardService:
         }
 
         foreign_futures_net_position = investor_flows["futures_foreign_net_buy"]
+        pre_open_change_rate = self._extract_float_metric(pre_open_snapshot, ("change_rate", "price_change"))
         night_change_rate = self._extract_float_metric(night_snapshot, ("change_rate", "price_change"))
 
         pcr_change = _pct_change(pcr, pcr_previous)
@@ -239,6 +243,7 @@ class DerivativesDashboardService:
         source_coverage = self._build_source_coverage(
             trade_date=resolved_date,
             derivatives_row=derivatives_row,
+            pre_open_snapshot=pre_open_snapshot,
             night_snapshot=night_snapshot,
             briefing=briefing,
             participant_summary=participant_summary,
@@ -283,6 +288,11 @@ class DerivativesDashboardService:
                 "derivatives_summary_night_snapshot_missing",
                 extra={"requested_date": requested_date, "resolved_date": resolved_date},
             )
+        if pre_open_snapshot is None:
+            logger.info(
+                "derivatives_summary_pre_open_snapshot_missing",
+                extra={"requested_date": requested_date, "resolved_date": resolved_date},
+            )
 
         return {
             "requested_date": requested_date,
@@ -300,6 +310,17 @@ class DerivativesDashboardService:
             "oi_change": oi_change,
             "investor_flows": investor_flows,
             "foreign_futures_net_position": foreign_futures_net_position,
+            "pre_open_futures": {
+                "signal": self._night_signal(pre_open_change_rate),
+                "change_rate": pre_open_change_rate,
+                "price": self._extract_float_metric(pre_open_snapshot, ("price",)),
+                "price_change": self._extract_float_metric(pre_open_snapshot, ("price_change",)),
+                "instrument_code": self._extract_text_metric(pre_open_snapshot, ("instrument_code",)),
+                "instrument_name": self._extract_text_metric(pre_open_snapshot, ("instrument_name",)),
+                "snapshot_time": pre_open_snapshot.get("snapshot_time") if pre_open_snapshot else None,
+                "source_name": pre_open_snapshot.get("source_name") if pre_open_snapshot else None,
+                "source_url": pre_open_snapshot.get("source_url") if pre_open_snapshot else None,
+            },
             "night_futures": {
                 "signal": self._night_signal(night_change_rate),
                 "change_rate": night_change_rate,
@@ -323,7 +344,12 @@ class DerivativesDashboardService:
             "expiry_or_contract_summary": expiry_or_contract_summary,
             "detail_level": detail_level,
             "components": components if components else rule_based.components,
-            "last_updated_at": self._latest_timestamp(derivatives_row, night_snapshot, briefing),
+            "last_updated_at": self._latest_timestamp(
+                derivatives_row,
+                pre_open_snapshot,
+                night_snapshot,
+                briefing,
+            ),
             "missing_fields": missing_fields,
         }
 
@@ -581,6 +607,30 @@ class DerivativesDashboardService:
                 CASE
                     WHEN source_name = 'KIS_NIGHT_FUTURES' THEN 0
                     ELSE 1
+                END,
+                snapshot_time DESC,
+                id DESC
+            LIMIT 1
+            """,
+            (trade_date,),
+        ).fetchone()
+        return self._deserialize_snapshot_row(row)
+
+    def _select_pre_open_snapshot_row(self, connection, *, trade_date: str) -> dict[str, Any] | None:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM market_intraday_snapshots
+            WHERE trade_date = ? AND session_type = 'PRE_OPEN'
+            ORDER BY
+                CASE
+                    WHEN source_name = 'KIS_DOMESTIC_DERIVATIVES' THEN 0
+                    ELSE 1
+                END,
+                CASE
+                    WHEN instrument_name LIKE '%KOSPI200%' THEN 0
+                    WHEN instrument_code LIKE '101%' THEN 1
+                    ELSE 2
                 END,
                 snapshot_time DESC,
                 id DESC
@@ -974,6 +1024,7 @@ class DerivativesDashboardService:
         *,
         trade_date: str | None,
         derivatives_row: dict[str, Any] | None,
+        pre_open_snapshot: dict[str, Any] | None,
         night_snapshot: dict[str, Any] | None,
         briefing: dict[str, Any] | None,
         participant_summary: Any,
@@ -993,6 +1044,13 @@ class DerivativesDashboardService:
                 "status": "available" if self._has_value(participant_summary) else "missing",
                 "source_name": derivatives_row.get("source_name") if derivatives_row else None,
                 "updated_at": derivatives_row.get("updated_at") if derivatives_row else None,
+            },
+            {
+                "key": "pre_open_futures",
+                "label": "개장 전 선물 스냅샷",
+                "status": "available" if pre_open_snapshot else "missing",
+                "source_name": pre_open_snapshot.get("source_name") if pre_open_snapshot else None,
+                "updated_at": pre_open_snapshot.get("updated_at") if pre_open_snapshot else None,
             },
             {
                 "key": "night_futures",

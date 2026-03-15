@@ -154,8 +154,8 @@ function buildMarketSignalFixture() {
     tradeDate: "2026-03-09",
     state: "partial",
     coverageRatio: 0.8,
-    label: "소스 4/5",
-    sourceNames: ["KRX_DERIVATIVES_REFERENCE", "KIS_NIGHT_FUTURES"],
+    label: "소스 5/6",
+    sourceNames: ["KRX_DERIVATIVES_REFERENCE", "KIS_DOMESTIC_DERIVATIVES", "KIS_NIGHT_FUTURES"],
     sections: [],
   };
   derivativesSummary.pcr = 0.91;
@@ -164,6 +164,7 @@ function buildMarketSignalFixture() {
   derivativesSummary.putOpenInterest = 480000;
   derivativesSummary.oiChange = 3.2;
   derivativesSummary.foreignFuturesNetPosition = 1800;
+  derivativesSummary.preOpenFutures.changeRate = 0.34;
   derivativesSummary.nightFutures.changeRate = 0.61;
   derivativesSummary.impliedVolatility = 17.4;
   derivativesSummary.impliedVolatilityChange = -2.1;
@@ -228,6 +229,8 @@ describe("krx market signal page route", () => {
     expect(screen.getByText("추이 차트")).toBeInTheDocument();
     expect(screen.getByText("세부 지표")).toBeInTheDocument();
     expect(screen.getByText("해설")).toBeInTheDocument();
+    expect(screen.getAllByText("개장 전 선물 변동률").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("KIS 국내 파생")).toBeInTheDocument();
     expect(screen.getByText("KIS 야간선물")).toBeInTheDocument();
     expect(screen.queryByText("오늘 시장 결론")).not.toBeInTheDocument();
   });

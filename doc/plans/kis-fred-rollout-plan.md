@@ -45,6 +45,10 @@
 - summary에 필요한 최소 필드부터 연결
 - 기존 파생 요약과 provenance 연결
 
+진행 메모:
+- 완료: `pre_open_futures` contract 추가로 `KIS_DOMESTIC_DERIVATIVES` snapshot을 derivatives summary에 노출
+- 남음: market-wide summary 필드를 `derivatives_daily_metrics`로 적재하고 precedence 정책 고정
+
 완료 기준:
 - `시장 신호`의 파생 요약이 KIS source로 재구성 가능
 
