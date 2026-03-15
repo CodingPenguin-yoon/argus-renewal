@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 from datetime import date, datetime, timezone
 import logging
 from typing import Any
+import zipfile
 
 import httpx
 
@@ -27,6 +29,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_KIS_DOMESTIC_DERIVATIVES_TR_ID = "FHMIF10000000"
 DEFAULT_KIS_DOMESTIC_DERIVATIVES_MARKET_DIV_CODE = "F"
+AUTO_KIS_DOMESTIC_DERIVATIVES_INPUT_ISCD = "AUTO_KOSPI200_FRONT"
+KIS_DOMESTIC_DERIVATIVES_MASTER_URL = "https://new.real.download.dws.co.kr/common/master/fo_idx_code_mts.mst.zip"
+KIS_DOMESTIC_DERIVATIVES_MASTER_ENTRY_NAME = "fo_idx_code_mts.mst"
+KIS_DOMESTIC_DERIVATIVES_FRONT_MONTH_CODE = "1"
+KIS_DOMESTIC_DERIVATIVES_KOSPI200_UNDERLYING = "KOSPI200"
+KIS_DOMESTIC_DERIVATIVES_FUTURES_PRODUCT_TYPE = "1"
 
 
 class KisDomesticDerivativesService:
@@ -180,6 +188,8 @@ class KisDomesticDerivativesService:
             rendered[key] = value.replace("{trade_date}", trade_date.isoformat())
         if not self._query_param_value("FID_COND_MRKT_DIV_CODE", params=rendered):
             rendered["FID_COND_MRKT_DIV_CODE"] = DEFAULT_KIS_DOMESTIC_DERIVATIVES_MARKET_DIV_CODE
+        if self._query_param_value("FID_INPUT_ISCD", params=rendered) == AUTO_KIS_DOMESTIC_DERIVATIVES_INPUT_ISCD:
+            rendered["FID_INPUT_ISCD"] = self._resolve_auto_input_iscd()
         return rendered
 
     def _query_param_value(
@@ -200,6 +210,36 @@ class KisDomesticDerivativesService:
 
     def _normalize_query_param_key(self, value: str) -> str:
         return "".join(ch for ch in value.lower().strip() if ch not in {"_", "-", " "})
+
+    def _resolve_auto_input_iscd(self) -> str:
+        payload = self._download_master_archive()
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            raw = archive.read(KIS_DOMESTIC_DERIVATIVES_MASTER_ENTRY_NAME)
+        rows = raw.decode("cp949", errors="ignore").splitlines()
+        for row in rows:
+            parts = [part.strip() for part in row.split("|")]
+            if len(parts) < 9:
+                continue
+            product_type, short_code = parts[0], parts[1]
+            maturity_division_code, underlying_name = parts[6], parts[8]
+            if product_type != KIS_DOMESTIC_DERIVATIVES_FUTURES_PRODUCT_TYPE:
+                continue
+            if maturity_division_code != KIS_DOMESTIC_DERIVATIVES_FRONT_MONTH_CODE:
+                continue
+            if underlying_name != KIS_DOMESTIC_DERIVATIVES_KOSPI200_UNDERLYING:
+                continue
+            if short_code:
+                return short_code
+        raise ValueError("auto_kospi200_front_symbol_not_found")
+
+    def _download_master_archive(self) -> bytes:
+        if self._http_client is not None:
+            response = self._http_client.get(KIS_DOMESTIC_DERIVATIVES_MASTER_URL, timeout=self.timeout_seconds)
+        else:
+            with httpx.Client() as client:
+                response = client.get(KIS_DOMESTIC_DERIVATIVES_MASTER_URL, timeout=self.timeout_seconds)
+        response.raise_for_status()
+        return response.content
 
     def _extract_rows(self, *, payload: Any, trade_date: date) -> list[dict[str, Any]]:
         if isinstance(payload, dict):

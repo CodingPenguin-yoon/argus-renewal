@@ -38,6 +38,7 @@ KRX 해석형 MVP를 위한 모노레포입니다.
 - `시장 신호 > 파생상품` 탭은 이제 `pcr_change / oi_change / implied_volatility_change`의 현재값/전일값 source 조합을 화면에서 직접 보여줍니다.
 - `KisDomesticDerivativesService`는 이제 한국투자 공식 `inquire-price` 응답 형태인 `output1/output2/output3` object payload도 읽습니다. 다만 `derivatives_daily_metrics` summary row는 market-wide 성격의 필드가 실제 payload에 있을 때만 함께 적재됩니다.
 - live KIS 호출은 기존 `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON` 계약을 그대로 사용하며, 여기에는 `FID_INPUT_ISCD`가 반드시 있어야 합니다. `FID_COND_MRKT_DIV_CODE`가 비어 있으면 provider가 기본값 `F`를 채웁니다.
+- `FID_INPUT_ISCD`에 `AUTO_KOSPI200_FRONT` sentinel을 넣으면, provider가 한국투자 공식 지수선물 master 파일 `fo_idx_code_mts.mst.zip`를 읽어 최근월 KOSPI200 선물 short code를 자동으로 해석합니다. 명시적 short code를 넣으면 그 값이 그대로 우선합니다.
 - 로컬 기본값은 `FRED_PROVIDER=disabled`라서 외부 key 없이 그대로 실행됩니다. 실제 연동 전에는 `file` fixture로 먼저 검증할 수 있습니다.
 
 ## 뉴스 자동화 요약

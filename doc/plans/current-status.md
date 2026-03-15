@@ -22,12 +22,13 @@
 - `시장 신호 > 파생상품` 탭은 이제 이 `comparisons` provenance를 직접 노출해, mixed-source 비교와 동일 source 비교를 화면에서 구분해 보여줍니다.
 - `KisDomesticDerivativesService`는 공식 KIS `inquire-price` 응답 형태인 `output1/output2/output3` object payload를 직접 읽고, snapshot row와 nested summary candidate를 함께 해석할 수 있습니다.
 - live KIS 경로는 이제 `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON` 안에 `FID_INPUT_ISCD`가 없으면 비활성 처리되고, `FID_COND_MRKT_DIV_CODE`가 없으면 기본값 `F`를 사용합니다.
+- `FID_INPUT_ISCD=AUTO_KOSPI200_FRONT` sentinel을 넣으면 한국투자 공식 지수선물 master 파일 `fo_idx_code_mts.mst.zip`를 읽어 최근월 KOSPI200 선물 short code를 자동 결정합니다.
 
 ## In Progress
-- KIS domestic ingest는 시작됐고, 다음은 실제 최근월물 symbol을 어떤 기준으로 넣을지 자동화하는 단계입니다.
+- KIS domestic ingest는 시작됐고, 최근월 KOSPI200 선물 symbol은 공식 master 파일 기반 sentinel로 자동화됐습니다.
 
 ## Next
-1. KIS derivatives adapter 최근월물 symbol 자동 결정 전략 연결
+1. 필요 시 KIS sentinel 범위를 KOSPI200 외 다른 기초자산이나 옵션 계약으로 확장
 2. 필요 시 FRED reference 지표를 `DGS2`, `SOFR`까지 확장
 
 ## Risks

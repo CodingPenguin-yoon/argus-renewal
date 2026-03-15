@@ -52,7 +52,8 @@
 - 완료: 공식 KIS `inquire-price` 응답 형태인 `output1/output2/output3` object payload support
 - 완료: mixed-source delta provenance UI를 시장 신호 파생 탭에 노출
 - 완료: live KIS query contract를 `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON` + `FID_INPUT_ISCD 필수 / FID_COND_MRKT_DIV_CODE 기본값 F`로 고정
-- 남음: 최근월물 `FID_INPUT_ISCD` 자동 결정 전략 연결
+- 완료: `AUTO_KOSPI200_FRONT` sentinel이 공식 한국투자 지수선물 master 파일 `fo_idx_code_mts.mst.zip`를 읽어 최근월 KOSPI200 선물 short code를 자동 결정
+- 남음: 다른 기초자산/옵션 계약까지 sentinel 자동 해석 전략 확장 여부 결정
 
 완료 기준:
 - `시장 신호`의 파생 요약이 KIS source로 재구성 가능

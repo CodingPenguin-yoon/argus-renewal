@@ -21,6 +21,7 @@
 - 파생 탭은 이 `comparisons`를 mixed-source/동일 source badge와 설명 문장으로 직접 표면화합니다.
 - `KisDomesticDerivativesService`는 공식 KIS `inquire-price` 응답의 `output1/output2/output3` object payload를 지원하며, snapshot row와 nested summary candidate를 같은 payload에서 읽을 수 있습니다.
 - live KIS 호출은 `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON` 계약을 사용하고, `FID_INPUT_ISCD`가 없으면 API 모드가 비활성 처리됩니다. `FID_COND_MRKT_DIV_CODE`는 비어 있으면 `F`로 보정합니다.
+- `FID_INPUT_ISCD`에 `AUTO_KOSPI200_FRONT` sentinel을 주면 공식 한국투자 지수선물 master 파일 `fo_idx_code_mts.mst.zip`를 읽어 최근월 KOSPI200 선물 short code를 자동 해석합니다.
 - 상단 GNB는 안정 탭만 적극 prefetch하고 `시장 뉴스`는 제외합니다.
 - 실제 사용자 표면 경로를 `/krx/dashboard`, `/krx/insights`, `/krx/macro-calendar`로 정리했고, 기존 경로는 redirect로 호환합니다.
 - `doc/`에는 `troubleshooting/` 폴더를 추가해 오늘 변경의 배경과 이유를 쉬운 문서로 남겼습니다.
@@ -42,8 +43,9 @@
   - `시장 뉴스` 클릭 후에는 뉴스 RSC와 탭별 리소스가 새로 요청됨
 
 ## 남은 일
-- 현재 남은 구현은 최근월물 `FID_INPUT_ISCD`를 어떻게 자동 결정할지에 대한 symbol 전략 연결입니다.
+- 현재 기본 자동화는 최근월 KOSPI200 선물 sentinel까지만 지원합니다.
 - 이후 추가 고도화 후보:
+  - 다른 기초자산/옵션 계약까지 자동 해석 범위 확장
   - prefetch 계측 자동화
   - 게이지 계산식 세분화
   - redirect 이후 canonical metadata 정교화

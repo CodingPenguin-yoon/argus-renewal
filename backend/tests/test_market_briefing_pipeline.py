@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import io
 import json
 from pathlib import Path
+import zipfile
 
 from src.krx.company_master.db import get_connection
 from src.krx.source_ingestion.briefing_service import MarketBriefingInputService
 from src.krx.source_ingestion.providers import (
+    AUTO_KIS_DOMESTIC_DERIVATIVES_INPUT_ISCD,
     KisDomesticDerivativesService,
     KisMarketBreadthService,
     KisNightFuturesService,
@@ -17,6 +20,13 @@ from src.krx.source_ingestion.providers import (
 def _write_json(path: Path, payload: object) -> str:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return str(path)
+
+
+def _build_master_zip(*rows: str) -> bytes:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, mode="w") as archive:
+        archive.writestr("fo_idx_code_mts.mst", "\n".join(rows) + "\n")
+    return payload.getvalue()
 
 
 def _make_disabled_breadth() -> KisMarketBreadthService:
@@ -490,6 +500,51 @@ def test_kis_domestic_api_defaults_market_div_code_to_f() -> None:
     assert service.is_enabled() == (True, None)
     assert service._render_query_params(trade_date=date(2026, 3, 9)) == {
         "fid_input_iscd": "101W09",
+        "FID_COND_MRKT_DIV_CODE": "F",
+    }
+
+
+def test_kis_domestic_api_auto_symbol_resolves_front_month_from_master(monkeypatch) -> None:
+    service = KisDomesticDerivativesService(
+        provider="api",
+        file_path=None,
+        base_url="https://openapi.koreainvestment.com:9443",
+        endpoint_path="/uapi/domestic-futureoption/v1/quotations/inquire-price",
+        app_key="app-key",
+        app_secret="app-secret",
+        access_token="access-token",
+        query_params_json=json.dumps({"FID_INPUT_ISCD": AUTO_KIS_DOMESTIC_DERIVATIVES_INPUT_ISCD}),
+    )
+    master_zip = _build_master_zip(
+        "1|A01606|KR4A01660005|F 202606| |00000.00|1|2001|KOSPI200",
+        "1|A01609|KR4A01690002|F 202609| |00000.00|2|2001|KOSPI200",
+    )
+    monkeypatch.setattr(service, "_download_master_archive", lambda: master_zip)
+
+    assert service.is_enabled() == (True, None)
+    assert service._render_query_params(trade_date=date(2026, 3, 9)) == {
+        "FID_INPUT_ISCD": "A01606",
+        "FID_COND_MRKT_DIV_CODE": "F",
+    }
+
+
+def test_kis_domestic_api_explicit_symbol_beats_auto_resolution(monkeypatch) -> None:
+    service = KisDomesticDerivativesService(
+        provider="api",
+        file_path=None,
+        base_url="https://openapi.koreainvestment.com:9443",
+        endpoint_path="/uapi/domestic-futureoption/v1/quotations/inquire-price",
+        app_key="app-key",
+        app_secret="app-secret",
+        access_token="access-token",
+        query_params_json=json.dumps({"FID_INPUT_ISCD": "A01609"}),
+    )
+
+    monkeypatch.setattr(service, "_download_master_archive", lambda: (_ for _ in ()).throw(AssertionError("should not download master")))
+
+    assert service.is_enabled() == (True, None)
+    assert service._render_query_params(trade_date=date(2026, 3, 9)) == {
+        "FID_INPUT_ISCD": "A01609",
         "FID_COND_MRKT_DIV_CODE": "F",
     }
 
