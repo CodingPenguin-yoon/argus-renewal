@@ -1,6 +1,4 @@
-import { GlobalEventsDashboard } from "@/krx/global-events/components/global-events-dashboard";
-import { normalizeGlobalEventsTab } from "@/krx/global-events/lib/tabs";
-import { getGlobalEventsTabData } from "@/krx/server/data-service";
+import { redirect } from "next/navigation";
 
 export default async function KrxGlobalEventsPage({
   searchParams,
@@ -8,8 +6,11 @@ export default async function KrxGlobalEventsPage({
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 } = {}) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
-  const activeTab = normalizeGlobalEventsTab(resolvedSearchParams.tab);
-  const data = await getGlobalEventsTabData();
-
-  return <GlobalEventsDashboard {...data} activeTab={activeTab} />;
+  const params = new URLSearchParams();
+  const tab = Array.isArray(resolvedSearchParams.tab) ? resolvedSearchParams.tab[0] : resolvedSearchParams.tab;
+  if (tab) {
+    params.set("tab", tab);
+  }
+  const query = params.toString();
+  redirect(query ? `/krx/macro-calendar?${query}` : "/krx/macro-calendar");
 }

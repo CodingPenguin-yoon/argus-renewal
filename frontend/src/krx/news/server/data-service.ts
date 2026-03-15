@@ -1,15 +1,17 @@
 import {
   MarketNewsCard,
+  MarketNewsBriefing,
   MarketNewsCoverage,
   MarketNewsHeaderContext,
   MacroNews,
   News,
+  NewsTabData,
   Sector,
   StockNews,
 } from "@/krx/types/domain";
 
 import { env } from "@/krx/lib/env";
-import { ApiItemResponse, ApiListResponse, getKrxJson, getKrxJsonOrNull } from "@/krx/server/client";
+import { ApiItemResponse, ApiListResponse, getKrxJson, getKrxJsonOrNull, KrxFetchOptions } from "@/krx/server/client";
 
 const BACKEND_BASE_URL = env.BACKEND_BASE_URL.replace(/\/+$/, "");
 
@@ -115,10 +117,34 @@ type ApiMarketNewsHeaderContext = {
   }>;
 };
 
+type ApiMarketNewsBriefingLink = {
+  card_id: string | null;
+  title: string;
+  summary: string | null;
+  market_scope: ApiMarketNewsCard["market_scope"] | null;
+  primary_region: ApiMarketNewsCard["primary_region"] | null;
+  published_at: string | null;
+  source_url: string | null;
+  source_label: string | null;
+};
+
+type ApiMarketNewsBriefing = {
+  headline: string;
+  summary: string;
+  key_points: string[];
+  linked_headlines: ApiMarketNewsBriefingLink[];
+  updated_at: string | null;
+  generation_method: "llm" | "rule_based";
+  ai_confidence: number;
+  ai_provider: string | null;
+  ai_model: string | null;
+};
+
 type ApiMarketNewsDashboard = {
   kr_cards: ApiMarketNewsCard[];
   global_cards: ApiMarketNewsCard[];
   disclosure_cards: ApiMarketNewsCard[];
+  briefing: ApiMarketNewsBriefing;
   header_context: ApiMarketNewsHeaderContext;
   coverage: ApiMarketNewsCoverage;
 };
@@ -243,6 +269,29 @@ function mapMarketNewsHeaderContext(payload: ApiMarketNewsHeaderContext): Market
   };
 }
 
+function mapMarketNewsBriefing(payload: ApiMarketNewsBriefing): MarketNewsBriefing {
+  return {
+    headline: payload.headline,
+    summary: payload.summary,
+    keyPoints: payload.key_points,
+    linkedHeadlines: payload.linked_headlines.map((item) => ({
+      cardId: item.card_id,
+      title: item.title,
+      summary: item.summary,
+      marketScope: item.market_scope,
+      primaryRegion: item.primary_region,
+      publishedAt: item.published_at,
+      sourceUrl: item.source_url,
+      sourceLabel: item.source_label,
+    })),
+    updatedAt: payload.updated_at,
+    generationMethod: payload.generation_method,
+    aiConfidence: payload.ai_confidence,
+    aiProvider: payload.ai_provider,
+    aiModel: payload.ai_model,
+  };
+}
+
 async function getNewsProductJson<T>(path: string, revalidate = 30): Promise<T> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/news${path}`, {
     next: { revalidate },
@@ -255,14 +304,14 @@ async function getNewsProductJson<T>(path: string, revalidate = 30): Promise<T> 
   return response.json() as Promise<T>;
 }
 
-export async function getAllNews() {
+export async function getAllNews(): Promise<News[]> {
   const response = await getKrxJson<ApiListResponse<ApiNews>>("/news");
   return response.items.map(mapNews);
 }
 
-export async function getMacroNews() {
-  const response = await getKrxJson<ApiListResponse<ApiNews>>("/news/macro");
-  return response.items.map(mapNews);
+export async function getMacroNews(options?: KrxFetchOptions): Promise<MacroNews[]> {
+  const response = await getKrxJson<ApiListResponse<ApiNews>>("/news/macro", options);
+  return response.items.map((item) => mapNews(item) as MacroNews);
 }
 
 export async function getNewsByTicker(ticker: string) {
@@ -325,8 +374,23 @@ export function emptyMarketNewsHeaderContext(): MarketNewsHeaderContext {
   };
 }
 
-export async function getMarketNewsCards(region: "kr" | "global" | "disclosures") {
-  const response = await getNewsProductJson<ApiListResponse<ApiMarketNewsCard>>(`/${region}`);
+export function emptyMarketNewsBriefing(): MarketNewsBriefing {
+  return {
+    headline: "실시간 시장 브리핑 준비 중",
+    summary: "표시 가능한 시장 이벤트가 아직 준비되지 않았습니다. 새 뉴스가 들어오면 이 영역에서 핵심 흐름을 요약합니다.",
+    keyPoints: [],
+    linkedHeadlines: [],
+    updatedAt: null,
+    generationMethod: "rule_based",
+    aiConfidence: 0,
+    aiProvider: null,
+    aiModel: null,
+  };
+}
+
+export async function getMarketNewsCards(region: "kr" | "global" | "disclosures", limit?: number) {
+  const query = typeof limit === "number" ? `?limit=${encodeURIComponent(String(limit))}` : "";
+  const response = await getNewsProductJson<ApiListResponse<ApiMarketNewsCard>>(`/${region}${query}`);
   return response.items.map(mapMarketNewsCard);
 }
 
@@ -340,12 +404,13 @@ export async function getMarketNewsHeaderContext() {
   return mapMarketNewsHeaderContext(response);
 }
 
-export async function getMarketNewsDashboard() {
+export async function getMarketNewsDashboard(): Promise<NewsTabData> {
   const response = await getNewsProductJson<ApiMarketNewsDashboard>("/dashboard");
   return {
     krCards: response.kr_cards.map(mapMarketNewsCard),
     globalCards: response.global_cards.map(mapMarketNewsCard),
     disclosureCards: response.disclosure_cards.map(mapMarketNewsCard),
+    briefing: mapMarketNewsBriefing(response.briefing),
     headerContext: mapMarketNewsHeaderContext(response.header_context),
     coverage: mapMarketNewsCoverage(response.coverage),
   };

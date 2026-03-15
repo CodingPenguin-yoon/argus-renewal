@@ -20,7 +20,7 @@
 - 주요 파일: `frontend/src/krx/server/data-service.ts`, `frontend/src/krx/server/client.ts`, `frontend/src/krx/*/server/data-service.ts`, `backend/src/main.py`, `backend/src/krx/router.py`
 - 이유: 프런트가 여러 API 응답을 합쳐 렌더링하고 일부 실패는 빈 데이터 fallback으로 삼켜집니다.
 - 흔한 실패 형태: 페이지는 열리는데 내용이 비어 있음, 특정 탭만 비정상, 응답 필드명이 바뀌어 조용히 누락
-- 먼저 볼 테스트: `frontend/src/app/krx/layout.test.tsx`, `frontend/src/app/krx/page.test.tsx`, `frontend/src/app/krx/news/page.test.tsx`, `frontend/src/app/krx/global-events/page.test.tsx`, `backend/tests/test_api.py`
+- 먼저 볼 테스트: `frontend/src/app/krx/layout.test.tsx`, `frontend/src/app/krx/page.test.tsx`, `frontend/src/app/krx/news/page.test.tsx`, `frontend/src/app/krx/macro-calendar/page.test.tsx`, `backend/tests/test_api.py`
 
 ## 3. 높은 우선순위: 공통 KRX 레이아웃과 헤더 경로
 - 주요 파일: `frontend/src/app/krx/layout.tsx`, `frontend/src/krx/server/data-service.ts`, `backend/src/krx/app_header/router.py`
@@ -40,14 +40,14 @@
 - 흔한 실패 형태: 로컬에서는 되는데 CI나 운영에서 안 됨, 일부 기능만 비활성화, 외부 공급자만 실패, admin 경로만 401
 - 먼저 볼 테스트: `backend/tests/test_api.py`
 
-## 6. 중간 우선순위: 시장 신호와 글로벌 이벤트 대형 서비스
+## 6. 중간 우선순위: 시장 신호와 매크로 캘린더 대형 서비스
 - 주요 파일: `backend/src/krx/market_signal/service.py`, `backend/src/krx/global_events/service.py`, `backend/src/krx/news/service.py`
 - 이유: 각 서비스가 1000줄 이상으로 크고, 계산 로직과 데이터 조합 책임이 큽니다.
 - 흔한 실패 형태: 커버리지 계산 불일치, 날짜 기준 오작동, 규칙 기반 해석과 LLM 기반 해석 차이, 일부 카드만 깨짐
 - 먼저 볼 테스트: `backend/tests/test_krx_market_signal_api.py`, `backend/tests/test_global_events.py`, `backend/tests/test_market_news_product.py`
 
 ## 7. 보조 우선순위: 문서와 검증 스크립트의 신뢰도
-- 주요 파일: `doc/PROJECT_STRUCTURE.md`, `scripts/check-market-boundaries.sh`
+- 주요 파일: `doc/architecture/project-structure.md`, `scripts/check-market-boundaries.sh`
 - 이유: 구조 문서가 코드보다 뒤처지면 잘못된 전제를 만들고, boundary check 스크립트는 현재 실질 검증을 하지 않습니다.
 - 흔한 실패 형태: 잘못된 파일을 수정함, 리뷰 범위를 잘못 잡음, lint가 통과해도 아키텍처 규칙 위반을 놓침
 - 먼저 할 일: 실제 구조 문서 최신화, 경계 스크립트 강화 필요 여부 판단

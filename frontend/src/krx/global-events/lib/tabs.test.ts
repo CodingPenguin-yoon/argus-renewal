@@ -13,10 +13,10 @@ describe("global events tabs helpers", () => {
   });
 
   it("builds stable deep-link hrefs", () => {
-    expect(globalEventsTabHref("summary")).toBe("/krx/global-events");
-    expect(globalEventsTabHref("highlights")).toBe("/krx/global-events?tab=highlights");
-    expect(globalEventsTabHref("next-24h")).toBe("/krx/global-events?tab=next-24h");
-    expect(globalEventsTabHref("week")).toBe("/krx/global-events?tab=week");
-    expect(globalEventsTabHref("earnings")).toBe("/krx/global-events?tab=earnings");
+    expect(globalEventsTabHref("summary")).toBe("/krx/macro-calendar");
+    expect(globalEventsTabHref("highlights")).toBe("/krx/macro-calendar?tab=highlights");
+    expect(globalEventsTabHref("next-24h")).toBe("/krx/macro-calendar?tab=next-24h");
+    expect(globalEventsTabHref("week")).toBe("/krx/macro-calendar?tab=week");
+    expect(globalEventsTabHref("earnings")).toBe("/krx/macro-calendar?tab=earnings");
   });
 });

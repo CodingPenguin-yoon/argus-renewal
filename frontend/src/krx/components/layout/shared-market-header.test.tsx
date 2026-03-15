@@ -41,12 +41,11 @@ function makeHeader(overrides: Partial<AppHeader> = {}): AppHeader {
 }
 
 describe("shared market header", () => {
-  it("renders the shared interpretation header", () => {
+  it("renders the shared compact status header", () => {
     render(<SharedMarketHeader data={makeHeader()} />);
 
-    expect(screen.getByText("오늘의 시장 톤")).toBeInTheDocument();
-    expect(screen.getByText(/외국인 선물 포지션이 상방 우위를 가리키며/)).toBeInTheDocument();
-    expect(screen.getByText("소스 커버리지")).toBeInTheDocument();
+    expect(screen.getByText("실시간 상태")).toBeInTheDocument();
+    expect(screen.queryByText("오늘의 시장 톤")).not.toBeInTheDocument();
     expect(screen.getByText("모든 핵심 소스가 반영되었습니다.")).toBeInTheDocument();
   });
 
@@ -76,27 +75,30 @@ describe("shared market header", () => {
 
     expect(screen.getByText("속보")).toBeInTheDocument();
     expect(screen.getByText("미 CPI 예상 상회")).toBeInTheDocument();
-    expect(screen.getByText("연결 탭: 뉴스")).toBeInTheDocument();
+    expect(screen.getByText("연결 탭: 시장 뉴스")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "관련 탭 보기" })).toHaveAttribute("href", "/krx/news");
   });
 
-  it("shows only the first three supporting points", () => {
+  it("shows source coverage chips in compact mode", () => {
     render(
       <SharedMarketHeader
         data={makeHeader({
-          supportingPoints: [
-            { text: "근거 1", sourceKey: "a", sourceLabel: "A", sourceUrl: null },
-            { text: "근거 2", sourceKey: "b", sourceLabel: "B", sourceUrl: null },
-            { text: "근거 3", sourceKey: "c", sourceLabel: "C", sourceUrl: null },
-            { text: "근거 4", sourceKey: "d", sourceLabel: "D", sourceUrl: null },
-          ],
+          sourceCoverage: {
+            state: "full",
+            coverageRatio: 1,
+            availableSources: 3,
+            expectedSources: 3,
+            summary: "모든 핵심 소스가 반영되었습니다.",
+            items: [
+              { key: "a", label: "뉴스", status: "available", sourceName: null, sourceUrl: null, updatedAt: null },
+              { key: "b", label: "파생", status: "partial", sourceName: null, sourceUrl: null, updatedAt: null },
+            ],
+          },
         })}
       />,
     );
 
-    expect(screen.getByText("근거 1")).toBeInTheDocument();
-    expect(screen.getByText("근거 2")).toBeInTheDocument();
-    expect(screen.getByText("근거 3")).toBeInTheDocument();
-    expect(screen.queryByText("근거 4")).not.toBeInTheDocument();
+    expect(screen.getByText("뉴스 · 정상")).toBeInTheDocument();
+    expect(screen.getByText("파생 · 부분")).toBeInTheDocument();
   });
 });

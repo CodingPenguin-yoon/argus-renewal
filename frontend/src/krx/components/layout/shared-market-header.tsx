@@ -24,84 +24,52 @@ function coverageStatusLabel(status: AppHeader["sourceCoverage"]["items"][number
 }
 
 function relatedTabLabel(relatedTabLink: string) {
-  if (relatedTabLink.includes("/global-events")) return "글로벌 이벤트";
-  if (relatedTabLink.includes("/news")) return "뉴스";
+  if (relatedTabLink.includes("/macro-calendar") || relatedTabLink.includes("/global-events")) return "매크로 캘린더";
+  if (relatedTabLink.includes("/news")) return "시장 뉴스";
+  if (relatedTabLink.includes("/insights") || relatedTabLink.includes("/macro")) return "AI 인사이트";
   return "시장 신호";
 }
 
 export function SharedMarketHeader({ data }: { data: AppHeader }) {
-  const hasToneLine = data.marketToneLine.trim().length > 0;
-
   return (
     <div className="mx-auto w-full max-w-6xl px-4 pt-6 md:pt-8">
-      {hasToneLine ? (
-        <section
-          aria-labelledby="market-tone-title"
-          className="relative overflow-hidden rounded-[28px] border border-amber-200/18 bg-gradient-to-br from-slate-950 via-slate-900 to-stone-900 p-6 text-slate-100 shadow-xl"
-        >
-          <div className="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-amber-200/10 blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-16 -left-10 h-44 w-44 rounded-full bg-white/6 blur-3xl" />
-
-          <div className="relative flex flex-col gap-5">
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-              <div className="max-w-3xl">
-                <p className="text-xs font-semibold tracking-[0.18em] text-amber-100/90">MARKET INTERPRETATION</p>
-                <h1 id="market-tone-title" className="mt-2 text-2xl font-black tracking-tight text-slate-50 md:text-3xl">
-                  오늘의 시장 톤
-                </h1>
-                <p className="mt-3 text-sm leading-7 text-slate-200/92 md:text-base">{data.marketToneLine}</p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 xl:max-w-sm xl:justify-end">
-                <Badge variant="high">{phaseLabel(data.phase)}</Badge>
-                <Badge variant={coverageVariant(data.sourceCoverage.state)}>
-                  소스 {data.sourceCoverage.availableSources}/{data.sourceCoverage.expectedSources}
-                </Badge>
-                {data.updatedAt ? <Badge>업데이트 {formatKoreanDate(data.updatedAt)}</Badge> : <Badge variant="low">업데이트 대기</Badge>}
-              </div>
-            </div>
-
-            {data.supportingPoints.length ? (
-              <div className="flex flex-wrap gap-2" data-testid="supporting-points">
-                {data.supportingPoints.slice(0, 3).map((point) => (
-                  <span
-                    key={`${point.sourceKey}-${point.text}`}
-                    title={point.sourceLabel}
-                    className="inline-flex rounded-full border border-white/10 bg-white/7 px-3 py-1.5 text-sm text-slate-100/92 backdrop-blur"
-                  >
-                    {point.text}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-
-            <div
-              className="rounded-2xl border border-white/12 bg-white/6 px-4 py-3 text-sm text-slate-200/90"
-              data-testid="source-coverage"
-            >
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">소스 커버리지</p>
-              <p className="mt-1">{data.sourceCoverage.summary}</p>
-              {data.sourceCoverage.items.length ? (
-                <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                  {data.sourceCoverage.items.map((item) => (
-                    <span
-                      key={item.key}
-                      className="rounded-full border border-white/15 bg-white/8 px-2.5 py-1 text-slate-100/90"
-                    >
-                      {item.label} · {coverageStatusLabel(item.status)}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+      <section
+        aria-labelledby="market-status-title"
+        className="rounded-[28px] border border-slate-200/80 bg-white/92 p-4 shadow-[0_18px_48px_-32px_rgba(15,23,42,0.35)]"
+      >
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-xs font-semibold tracking-[0.18em] text-slate-500">MARKET STATUS</p>
+            <h1 id="market-status-title" className="mt-2 text-lg font-black tracking-tight text-slate-950 md:text-xl">
+              실시간 상태
+            </h1>
+            <p className="mt-2 text-sm leading-6 text-slate-600">{data.sourceCoverage.summary}</p>
           </div>
-        </section>
-      ) : (
-        <EmptyState
-          title="공통 헤더 데이터를 준비 중입니다"
-          description="시장 톤과 속보 정보는 소스 연결이 완료되면 자동으로 표시됩니다."
-        />
-      )}
+
+          <div className="flex flex-wrap items-center gap-2 md:justify-end">
+            <Badge variant="high">{phaseLabel(data.phase)}</Badge>
+            <Badge variant={coverageVariant(data.sourceCoverage.state)}>
+              소스 {data.sourceCoverage.availableSources}/{data.sourceCoverage.expectedSources}
+            </Badge>
+            {data.updatedAt ? <Badge>업데이트 {formatKoreanDate(data.updatedAt)}</Badge> : <Badge variant="low">업데이트 대기</Badge>}
+          </div>
+        </div>
+
+        {data.sourceCoverage.items.length ? (
+          <div className="mt-4 flex flex-wrap gap-2 text-xs" data-testid="source-coverage">
+            {data.sourceCoverage.items.map((item) => (
+              <span key={item.key} className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">
+                {item.label} · {coverageStatusLabel(item.status)}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="공통 헤더 데이터를 준비 중입니다"
+            description="장 상태와 속보 정보는 소스 연결이 완료되면 자동으로 표시됩니다."
+          />
+        )}
+      </section>
 
       {data.breakingNews ? (
         <section className="mt-4 rounded-2xl border border-amber-300/30 bg-amber-50/90 px-4 py-3 text-slate-900 shadow-sm">

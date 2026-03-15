@@ -8,6 +8,25 @@ vi.mock("@/krx/server/data-service", () => ({
   getNewsTabData: vi.fn(),
 }));
 
+vi.mock("@/krx/news/components/news-tab-live-dashboard", () => ({
+  NewsTabLiveDashboard: ({
+    activeTab,
+    initialData,
+  }: {
+    activeTab: string;
+    initialData: ReturnType<typeof buildNewsFixture>;
+  }) => (
+    <div>
+      <p data-testid="active-tab">{activeTab}</p>
+      <p>{initialData.headerContext.summaryLine}</p>
+      <p>{initialData.briefing.headline}</p>
+      <p>{initialData.krCards[0]?.title}</p>
+      <p>{initialData.globalCards[0]?.title}</p>
+      <p>{initialData.disclosureCards[0]?.title}</p>
+    </div>
+  ),
+}));
+
 afterEach(() => {
   cleanup();
 });
@@ -107,6 +126,28 @@ function buildNewsFixture() {
         provenance: {},
       },
     ],
+    briefing: {
+      headline: "지금 시장 브리핑",
+      summary: "국내 수급 회복과 글로벌 금리 변수를 함께 반영하는 구간입니다.",
+      keyPoints: ["외국인 순매수 강화", "환율 변수 재확인", "핵심 공시 체크 필요"],
+      linkedHeadlines: [
+        {
+          cardId: "kr-card-1",
+          title: "외국인 순매수 확대로 반도체 대형주 강세",
+          summary: "장 초반 외국인 수급이 유입되며 지수 상방 시도가 강화됐습니다.",
+          marketScope: "kr_market" as const,
+          primaryRegion: "KR" as const,
+          publishedAt: "2026-03-10T01:35:00Z",
+          sourceUrl: "https://example.com/kr-briefing",
+          sourceLabel: "매일경제",
+        },
+      ],
+      updatedAt: "2026-03-10T02:05:00Z",
+      generationMethod: "llm" as const,
+      aiConfidence: 0.81,
+      aiProvider: "stub_editorial_ai",
+      aiModel: "stub-model",
+    },
     headerContext: {
       updatedAt: "2026-03-10T02:05:00Z",
       summaryLine: "국내 수급 회복, 글로벌 금리 변수, 핵심 공시를 함께 점검해야 하는 구간입니다.",
@@ -141,16 +182,12 @@ describe("krx news page route", () => {
     const component = await KrxNewsPage();
     render(component);
 
-    expect(screen.getByRole("tab", { name: "종합" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "한국 증시" })).toHaveAttribute("href", "/krx/news?tab=kr");
-    expect(screen.getByRole("tab", { name: "글로벌 증시" })).toHaveAttribute("href", "/krx/news?tab=global");
-    expect(screen.getByRole("tab", { name: "공시" })).toHaveAttribute("href", "/krx/news?tab=disclosures");
-    expect(screen.queryByRole("tab", { name: "홈" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "세부" })).not.toBeInTheDocument();
-    expect(screen.getByText("오늘의 한국 증시 이벤트")).toBeInTheDocument();
-    expect(screen.getByText("글로벌·공시 브리프")).toBeInTheDocument();
-    expect(screen.getByText("글로벌 변수")).toBeInTheDocument();
-    expect(screen.getByText("주요 공시")).toBeInTheDocument();
+    expect(screen.getByTestId("active-tab")).toHaveTextContent("summary");
+    expect(screen.getByText("국내 수급 회복, 글로벌 금리 변수, 핵심 공시를 함께 점검해야 하는 구간입니다.")).toBeInTheDocument();
+    expect(screen.getByText("지금 시장 브리핑")).toBeInTheDocument();
+    expect(screen.getByText("외국인 순매수 확대로 반도체 대형주 강세")).toBeInTheDocument();
+    expect(screen.getByText("연준 위원 발언으로 달러 강세 재확인")).toBeInTheDocument();
+    expect(screen.getByText("삼성전자 공급계약 공시")).toBeInTheDocument();
   });
 
   it("supports direct deep-link navigation to 뉴스 > 공시", async () => {
@@ -161,12 +198,7 @@ describe("krx news page route", () => {
     });
     render(component);
 
-    expect(screen.getByRole("tab", { name: "공시" })).toHaveAttribute("aria-selected", "true");
-    expect(
-      screen.getByText("공시 근거(DART)가 확인된 이벤트를 우선순위 순으로 제공합니다."),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("active-tab")).toHaveTextContent("disclosures");
     expect(screen.getByText("삼성전자 공급계약 공시")).toBeInTheDocument();
-    expect(screen.getByText("대표 근거")).toBeInTheDocument();
-    expect(screen.getByText("DART")).toBeInTheDocument();
   });
 });

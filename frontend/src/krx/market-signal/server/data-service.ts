@@ -5,7 +5,7 @@ import {
   MarketSignalSummary,
   MarketSignalTrendBadge,
 } from "@/krx/types/domain";
-import { ApiItemResponse, getKrxJson } from "@/krx/server/client";
+import { ApiItemResponse, getKrxJson, KRX_SHORT_REVALIDATE_SECONDS } from "@/krx/server/client";
 
 type ApiMarketSignalTrendBadge = {
   label: string;
@@ -237,6 +237,7 @@ export async function getMarketSignalSummary(date?: string): Promise<MarketSigna
   try {
     const response = await getKrxJson<ApiItemResponse<ApiMarketSignalSummary>>(
       `/market-signal/summary${suffix}`,
+      { revalidate: KRX_SHORT_REVALIDATE_SECONDS },
     );
     return mapSummary(response.item);
   } catch {

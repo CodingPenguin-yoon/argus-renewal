@@ -66,7 +66,7 @@ python3 -m src.krx.source_ingestion.cli collect-briefing-eod --trade-date 2026-0
 # 야간선물 스냅샷 수집
 python3 -m src.krx.source_ingestion.cli collect-briefing-night --trade-date 2026-03-09
 
-# 수동 파생 참조 입력(템플릿: doc/krx_derivatives_reference_manual_template.csv)
+# 수동 파생 참조 입력(템플릿: doc/reference/krx-derivatives-reference-manual-template.csv)
 python3 -m src.krx.source_ingestion.cli import-briefing-krx-reference \
   --trade-date 2026-03-09 \
   --input ./data/krx_derivatives_2026-03-09.csv
@@ -98,3 +98,13 @@ curl "http://localhost:4000/api/krx/admin/briefing-inputs/market-intraday-snapsh
 - 옵션 체인/스트라이크 히트맵은 원천 데이터가 `additional_metrics_json`에 없으면 표시하지 않음
 - `call_notional`, `put_notional`은 원천에 없으면 `null` + `missing_fields`로 노출
 - 차트는 현재 최근 20세션(기본 `preset=20d`) 기반
+
+## 향후 원천 소스 전략
+- 현재 문서는 기존 파생 집계 구조를 설명합니다.
+- 다음 라운드부터는 파생 source를 한국투자 Open API(KIS) 기준으로 옮기는 방향을 우선 적용합니다.
+- 이유:
+  - 파생 데이터는 장기적으로 호가/체결/주문과 연결될 수 있어야 함
+  - reference source보다 실제 거래 연계 가능성이 더 중요함
+- 이 변경은 아직 구현 전입니다.
+- 기준 문서: `../../reference/kis-fred-integration-contract.md`
+- 실행 계획: `../../plans/kis-fred-rollout-plan.md`

@@ -1,24 +1,36 @@
 import { env } from "@/krx/lib/env";
 import { getGlobalEventsDashboardData } from "@/krx/global-events/server/data-service";
+import { KRX_SHORT_REVALIDATE_SECONDS } from "@/krx/server/client";
 import {
   getDerivativesInvestorFlow,
   getDerivativesSummary,
   getDerivativesTrends,
 } from "@/krx/derivatives/server/data-service";
 import { getMarketSignalSummary } from "@/krx/market-signal/server/data-service";
-import { AppHeader, MarketNewsCard } from "@/krx/types/domain";
+import {
+  AppHeader,
+  MacroNews,
+  MacroReferenceCard,
+  MacroTabData,
+  MarketNewsCard,
+  NewsTabData,
+  OverviewTabData,
+} from "@/krx/types/domain";
 import { getAllStocks, getStockByTicker } from "@/krx/market/server/data-service";
 import {
+  emptyMarketNewsBriefing,
   emptyMarketNewsCoverage,
   emptyMarketNewsHeaderContext,
   getAllNews,
   getMarketNewsDashboard,
+  getMarketNewsCards,
   getMacroNews,
   getNewsByTicker,
   getNewsDetail,
 } from "@/krx/news/server/data-service";
 
 const BACKEND_BASE_URL = env.BACKEND_BASE_URL.replace(/\/+$/, "");
+const KR_NEWS_TAB_ACCUMULATION_LIMIT = 50;
 
 type ApiAppHeaderSupportingPoint = {
   text: string;
@@ -80,6 +92,53 @@ function sortByRankingScoreDesc(cards: MarketNewsCard[]) {
     const bTime = b.updatedAt ?? b.publishedAt ?? "";
     return bTime.localeCompare(aTime);
   });
+}
+
+function sortByRecencyDesc(cards: MarketNewsCard[]) {
+  return [...cards].sort((a, b) => {
+    const aTime = a.updatedAt ?? a.publishedAt ?? "";
+    const bTime = b.updatedAt ?? b.publishedAt ?? "";
+    if (bTime !== aTime) {
+      return bTime.localeCompare(aTime);
+    }
+    return b.rankingScore - a.rankingScore;
+  });
+}
+
+function firstNonEmpty(...values: Array<string | null | undefined>) {
+  return values.find((value) => typeof value === "string" && value.trim().length > 0) ?? "";
+}
+
+function pickLatestIso(...values: Array<string | null | undefined>) {
+  const items = values.filter((value): value is string => Boolean(value));
+  if (items.length === 0) return null;
+  return items.sort((a, b) => b.localeCompare(a))[0];
+}
+
+function toneFromSentiment(sentiment: "positive" | "neutral" | "negative"): MacroReferenceCard["tone"] {
+  return sentiment;
+}
+
+function buildMacroReferenceCards(macroNews: MacroNews[]) {
+  const latestByCategory = (category: string) =>
+    macroNews.find((item) => item.category === category) ?? null;
+
+  return [
+    latestByCategory("환율"),
+    latestByCategory("유가/에너지"),
+    latestByCategory("금리"),
+    latestByCategory("전쟁/지정학"),
+  ]
+    .filter((item): item is NonNullable<ReturnType<typeof latestByCategory>> => Boolean(item))
+    .map((item) => ({
+      key: item.category,
+      label: item.category === "유가/에너지" ? "WTI·에너지" : item.category,
+      summary: firstNonEmpty(item.whyItMatters, item.summary),
+      sourceLabel: item.source,
+      sourceUrl: item.sourceUrl,
+      updatedAt: item.publishedAt,
+      tone: toneFromSentiment(item.sentiment),
+    }));
 }
 
 function mapAppHeader(api: ApiAppHeader): AppHeader {
@@ -219,11 +278,16 @@ export async function getMarketSignalTabData() {
   return { summary, derivativesSummary, derivativesTrends, derivativesInvestorFlow };
 }
 
-export async function getNewsTabData() {
+export async function getNewsTabData(): Promise<NewsTabData> {
   try {
-    const { krCards: krCardsRaw, globalCards: globalCardsRaw, disclosureCards: disclosureCardsRaw, headerContext, coverage } =
-      await getMarketNewsDashboard();
-    const krCards = sortByRankingScoreDesc(keepMvpNewsScope("KR", krCardsRaw));
+    const [
+      { globalCards: globalCardsRaw, disclosureCards: disclosureCardsRaw, briefing, headerContext, coverage },
+      krCardsAccumulatedRaw,
+    ] = await Promise.all([
+      getMarketNewsDashboard(),
+      getMarketNewsCards("kr", KR_NEWS_TAB_ACCUMULATION_LIMIT),
+    ]);
+    const krCards = sortByRecencyDesc(keepMvpNewsScope("KR", krCardsAccumulatedRaw));
     const globalCards = sortByRankingScoreDesc(keepMvpNewsScope("GLOBAL", globalCardsRaw));
     const disclosureCards = sortByRankingScoreDesc(disclosureCardsRaw).slice(0, 12);
 
@@ -231,6 +295,7 @@ export async function getNewsTabData() {
       krCards,
       globalCards,
       disclosureCards,
+      briefing,
       headerContext,
       coverage,
     };
@@ -251,6 +316,7 @@ export async function getNewsTabData() {
       krCards: [],
       globalCards: [],
       disclosureCards: [],
+      briefing: emptyMarketNewsBriefing(),
       headerContext: emptyMarketNewsHeaderContext(),
       coverage: emptyMarketNewsCoverage(),
     };
@@ -259,4 +325,128 @@ export async function getNewsTabData() {
 
 export async function getGlobalEventsTabData() {
   return getGlobalEventsDashboardData();
+}
+
+export async function getOverviewTabData(): Promise<OverviewTabData> {
+  const [marketSignal, newsTab, globalEvents, macroNews] = await Promise.all([
+    getMarketSignalTabData(),
+    getNewsTabData(),
+    getGlobalEventsTabData(),
+    getMacroNews({ revalidate: KRX_SHORT_REVALIDATE_SECONDS }),
+  ]);
+  const macroWidgets = buildMacroReferenceCards(macroNews).slice(0, 3);
+
+  const marketCard = marketSignal.summary.cards[0];
+  const globalHighlight = globalEvents.highlights[0];
+  const gatewayPanels = [
+    {
+      key: "market-signal" as const,
+      title: "시장 신호",
+      href: "/krx",
+      summary: firstNonEmpty(marketSignal.summary.explanationText, marketCard?.interpretationLine),
+      metricLabel: "신뢰도",
+      metricValue: marketSignal.summary.confidenceBucket.toUpperCase(),
+      updatedAt: marketSignal.summary.lastUpdatedAt,
+    },
+    {
+      key: "news" as const,
+      title: "시장 뉴스",
+      href: "/krx/news",
+      summary: firstNonEmpty(newsTab.headerContext.summaryLine, newsTab.briefing.summary),
+      metricLabel: "핵심 카드",
+      metricValue: `${newsTab.krCards.length + newsTab.globalCards.length + newsTab.disclosureCards.length}건`,
+      updatedAt: pickLatestIso(newsTab.headerContext.updatedAt, newsTab.briefing.updatedAt),
+    },
+    {
+      key: "global-events" as const,
+      title: "매크로 캘린더",
+      href: "/krx/macro-calendar",
+      summary: firstNonEmpty(globalHighlight?.whyItMattersKo, globalEvents.coverage.summary),
+      metricLabel: "하이라이트",
+      metricValue: `${globalEvents.highlights.length}건`,
+      updatedAt: pickLatestIso(globalHighlight?.updatedAt, globalEvents.coverage.updatedAt),
+    },
+  ];
+  const keyTakeaways = [
+    ...newsTab.briefing.keyPoints,
+    ...gatewayPanels.map((item) => item.summary),
+    globalHighlight?.whyItMattersKo ?? "",
+  ]
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item, index, array) => array.indexOf(item) === index)
+    .slice(0, 5);
+
+  return {
+    marketToneLine: firstNonEmpty(
+      marketSignal.summary.interpretationLine,
+      newsTab.headerContext.summaryLine,
+      newsTab.briefing.headline,
+    ),
+    keyTakeaways,
+    reportHeadline: firstNonEmpty(newsTab.briefing.headline, "오늘의 종합 리포트"),
+    reportSummary: firstNonEmpty(
+      newsTab.briefing.summary,
+      marketSignal.summary.explanationText,
+      newsTab.headerContext.summaryLine,
+    ),
+    reportUpdatedAt: pickLatestIso(
+      newsTab.briefing.updatedAt,
+      marketSignal.summary.lastUpdatedAt,
+      globalHighlight?.updatedAt,
+    ),
+    reportLinks: newsTab.briefing.linkedHeadlines.slice(0, 4).map((item) => ({
+      title: item.title,
+      href: item.sourceUrl,
+      sourceLabel: item.sourceLabel,
+      publishedAt: item.publishedAt,
+    })),
+    macroWidgets,
+    gatewayPanels,
+    globalHighlights: globalEvents.highlights.slice(0, 3),
+  };
+}
+
+export async function getMacroTabData(): Promise<MacroTabData> {
+  const [macroNews, globalEvents, derivativesSummary, derivativesTrends, derivativesInvestorFlow] =
+    await Promise.all([
+      getMacroNews({ revalidate: KRX_SHORT_REVALIDATE_SECONDS }),
+      getGlobalEventsTabData(),
+      getDerivativesSummary(),
+      getDerivativesTrends("20d"),
+      getDerivativesInvestorFlow("20d"),
+    ]);
+  const referenceCards: MacroReferenceCard[] = buildMacroReferenceCards(macroNews).map((item) => ({
+    ...item,
+    label: item.key,
+  }));
+
+  referenceCards.push({
+    key: "derivatives",
+    label: "파생 시그널",
+    summary: firstNonEmpty(derivativesSummary.explanationText, "파생 요약이 아직 준비되지 않았습니다."),
+    sourceLabel: derivativesSummary.sourceCoverage.label,
+    sourceUrl: null,
+    updatedAt: derivativesSummary.lastUpdatedAt,
+    tone:
+      derivativesSummary.directionalBias === "bullish"
+        ? "positive"
+        : derivativesSummary.directionalBias === "bearish"
+          ? "negative"
+          : "neutral",
+  });
+
+  return {
+    referenceCards,
+    macroNews: macroNews.slice(0, 8),
+    globalHighlights: globalEvents.highlights.slice(0, 4),
+    derivativesSummary,
+    derivativesTrends,
+    derivativesInvestorFlow,
+    updatedAt: pickLatestIso(
+      macroNews[0]?.publishedAt,
+      globalEvents.coverage.updatedAt,
+      derivativesSummary.lastUpdatedAt,
+    ),
+  };
 }

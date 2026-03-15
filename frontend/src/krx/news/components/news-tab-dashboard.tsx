@@ -1,14 +1,19 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/krx/components/ui/empty-state";
-import { SectionHeader } from "@/krx/components/ui/section-header";
-import { newsTabHref, NEWS_TAB_OPTIONS, NewsTabKey } from "@/krx/news/lib/tabs";
-import { MarketNewsCardView } from "@/krx/news/components/market-news-card";
 import { formatKoreanDate } from "@/krx/lib/utils";
-import { MarketNewsCard, MarketNewsCoverage, MarketNewsHeaderContext } from "@/krx/types/domain";
+import { MarketNewsCardView } from "@/krx/news/components/market-news-card";
+import { newsTabHref, NEWS_TAB_OPTIONS, NewsTabKey } from "@/krx/news/lib/tabs";
+import {
+  MarketNewsBriefing,
+  MarketNewsCard,
+  MarketNewsCoverage,
+  MarketNewsHeaderContext,
+} from "@/krx/types/domain";
 
 function formatMaybeDate(value: string | null) {
   if (!value) return "업데이트 정보 없음";
@@ -21,6 +26,85 @@ function formatMaybeDate(value: string | null) {
 
 function formatCoverageRatio(value: number) {
   return `${Math.round(value * 100)}%`;
+}
+
+function marketScopeLabel(scope: MarketNewsCard["marketScope"] | null) {
+  switch (scope) {
+    case "kr_market":
+      return "한국 증시";
+    case "global_market":
+      return "글로벌 변수";
+    case "company":
+      return "공시/종목";
+    case "sector":
+      return "업종/테마";
+    default:
+      return "시장 표면";
+  }
+}
+
+function safeExternalHref(value: string | null) {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function dedupeBriefingPoints(items: string[]) {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const text = item.trim();
+    if (!text) continue;
+    const normalized = text.replace(/\s+/g, " ").toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(text);
+  }
+  return deduped;
+}
+
+function dedupeBriefingLinks(items: MarketNewsBriefing["linkedHeadlines"]) {
+  const deduped: MarketNewsBriefing["linkedHeadlines"] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const key = [item.sourceUrl ?? "", item.cardId ?? "", item.title.trim().toLowerCase()].find(Boolean) ?? item.title.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
+function buildReportParagraphs(summary: string) {
+  const normalized = summary.replace(/\r\n/g, "\n").trim();
+  const explicitParagraphs = normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  if (explicitParagraphs.length > 1) {
+    return explicitParagraphs;
+  }
+
+  const sentences = normalized
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  if (sentences.length <= 2) {
+    return sentences.length ? [sentences.join(" ")] : [];
+  }
+
+  const paragraphs: string[] = [];
+  for (let index = 0; index < sentences.length; index += 2) {
+    paragraphs.push(sentences.slice(index, index + 2).join(" "));
+  }
+  return paragraphs;
 }
 
 function SourceStatusChip({ status }: { status: MarketNewsCoverage["items"][number]["status"] }) {
@@ -41,6 +125,7 @@ function CardSection({
   actionHref,
   actionLabel,
   limit,
+  footer,
 }: {
   title: string;
   description: string;
@@ -50,6 +135,7 @@ function CardSection({
   actionHref?: string;
   actionLabel?: string;
   limit?: number;
+  footer?: ReactNode;
 }) {
   const visibleCards = typeof limit === "number" ? cards.slice(0, limit) : cards;
 
@@ -61,22 +147,25 @@ function CardSection({
             <CardTitle className="text-xl font-bold tracking-tight">{title}</CardTitle>
             <CardDescription className="text-sm leading-relaxed">{description}</CardDescription>
           </div>
-          {actionHref && actionLabel && (
+          {actionHref && actionLabel ? (
             <Link
               href={actionHref}
               className="inline-flex shrink-0 items-center rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground"
             >
               {actionLabel}
             </Link>
-          )}
+          ) : null}
         </div>
       </CardHeader>
       <CardContent>
         {visibleCards.length ? (
-          <div className="grid gap-4">
-            {visibleCards.map((card) => (
-              <MarketNewsCardView key={card.id} card={card} />
-            ))}
+          <div className="space-y-4">
+            <div className="grid gap-4">
+              {visibleCards.map((card) => (
+                <MarketNewsCardView key={card.id} card={card} />
+              ))}
+            </div>
+            {footer}
           </div>
         ) : (
           <EmptyState title={emptyTitle} description={emptyDescription} />
@@ -86,148 +175,171 @@ function CardSection({
   );
 }
 
-function SummaryLeadStory({
-  card,
-  tone,
-}: Readonly<{
-  card: MarketNewsCard;
-  tone: "primary" | "secondary";
-}>) {
+function SummaryBriefingBoard({ briefing }: Readonly<{ briefing: MarketNewsBriefing }>) {
+  const summaryParagraphs = buildReportParagraphs(briefing.summary);
+  const keyPoints = dedupeBriefingPoints(briefing.keyPoints);
+  const linkedHeadlines = dedupeBriefingLinks(briefing.linkedHeadlines);
+  const uniqueSources = Array.from(
+    new Set(linkedHeadlines.map((item) => item.sourceLabel).filter((label): label is string => Boolean(label))),
+  );
+
   return (
-    <Card className={tone === "primary" ? "border-border/50 bg-gradient-to-br from-card to-accent/10 shadow-lg" : "border-border/40 bg-muted/50"}>
-      <CardContent className={tone === "primary" ? "p-5" : "p-4"}>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline" className="h-6 px-2.5 text-[10px] font-bold uppercase tracking-[0.15em]">
-            {card.primaryRegion === "KR" ? "KR" : "GLOBAL"}
-          </Badge>
-          <Badge variant="secondary" className="h-6 px-2.5 text-[10px] font-semibold">
-            {card.marketScope === "kr_market"
-              ? "한국 증시"
-              : card.marketScope === "global_market"
-                ? "글로벌 변수"
-                : card.marketScope === "company"
-                  ? "공시 중심"
-                  : "시장 표면"}
-          </Badge>
-          <Badge variant="muted" className="h-6 px-2.5 text-[10px] font-medium">
-            {formatMaybeDate(card.updatedAt ?? card.publishedAt)}
-          </Badge>
-        </div>
-        <h3 className="mt-4 text-lg font-bold leading-snug tracking-tight text-foreground">{card.title}</h3>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{card.oneLineSummary}</p>
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <div className="rounded-xl bg-muted/50 p-4 ring-1 ring-border/50">
-            <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">Why Important</p>
-            <p className="mt-2 text-sm leading-relaxed text-foreground/90">{card.whyItMatters}</p>
+    <Card className="border-border/50 bg-card/95 shadow-lg backdrop-blur-sm">
+      <CardHeader className="pb-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1.5">
+            <Badge variant="outline" className="h-5 w-fit px-2 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+              실시간 종합 리포트
+            </Badge>
+            <CardTitle className="text-xl font-bold tracking-tight">종합 시장 리포트</CardTitle>
+            <CardDescription className="text-sm leading-relaxed">
+              새 중요 뉴스가 반영될 때마다 종합 탭 기준으로 핵심 흐름을 서술형 리포트로 다시 정리합니다.
+            </CardDescription>
           </div>
-          <div className="rounded-xl bg-muted/50 p-4 ring-1 ring-border/50">
-            <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">Market Impact</p>
-            <p className="mt-2 text-sm leading-relaxed text-foreground/90">{card.marketImpact}</p>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="secondary" className="h-6 px-2.5 font-medium">
+              {briefing.generationMethod === "llm" ? "AI 브리핑" : "규칙 기반 브리핑"}
+            </Badge>
+            <Badge variant="outline" className="h-6 px-2.5 font-medium text-muted-foreground">
+              {formatMaybeDate(briefing.updatedAt)}
+            </Badge>
           </div>
         </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Badge variant="outline" className="h-6 px-2.5 font-medium">랭킹 {card.rankingScore.toFixed(2)}</Badge>
-          <Badge variant="outline" className="h-6 px-2.5 font-medium">근거 {card.evidenceCount}건</Badge>
-          <Badge variant="default" className="h-6 px-2.5 font-semibold">{card.importanceLabel.toUpperCase()}</Badge>
+      </CardHeader>
+      <CardContent className="pt-2">
+        <article className="mx-auto max-w-4xl space-y-8">
+          <header className="border-b border-border/40 pb-6">
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-muted-foreground">오늘의 결론</p>
+            <h3 className="mt-3 text-3xl font-black leading-tight tracking-tight text-foreground sm:text-4xl">{briefing.headline}</h3>
+            <div className="mt-4 flex flex-wrap gap-2 text-xs text-muted-foreground">
+              <span>{formatMaybeDate(briefing.updatedAt)}</span>
+              <span>·</span>
+              <span>{briefing.generationMethod === "llm" ? "AI가 상위 흐름을 서술형 리포트로 정리" : "현재 카드 기준 자동 리포트"}</span>
+              <span>·</span>
+              <span>근거 {linkedHeadlines.length}건</span>
+              {uniqueSources.length ? (
+                <>
+                  <span>·</span>
+                  <span>{uniqueSources.join(" · ")}</span>
+                </>
+              ) : null}
+            </div>
+          </header>
+
+          <section className="space-y-4">
+            <h4 className="text-sm font-bold uppercase tracking-[0.18em] text-muted-foreground">시장 해설</h4>
+            <div className="space-y-5">
+              {(summaryParagraphs.length ? summaryParagraphs : [briefing.summary]).map((paragraph, index) => (
+                <p key={`${index}-${paragraph}`} className="text-[15px] leading-8 text-foreground/90 sm:text-base sm:leading-8">
+                  {paragraph}
+                </p>
+              ))}
+            </div>
+          </section>
+
+          {keyPoints.length ? (
+            <section className="space-y-4 border-t border-border/40 pt-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h4 className="text-sm font-bold uppercase tracking-[0.18em] text-muted-foreground">오늘 체크할 변수</h4>
+                {briefing.aiProvider ? (
+                  <Badge variant="outline" className="h-6 px-2.5 font-medium text-muted-foreground">
+                    {briefing.aiProvider}
+                    {briefing.aiModel ? ` · ${briefing.aiModel}` : ""}
+                  </Badge>
+                ) : null}
+              </div>
+              <ol className="space-y-3">
+                {keyPoints.map((point, index) => (
+                  <li key={`${index}-${point}`} className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-3">
+                    <span className="mt-0.5 flex size-7 items-center justify-center rounded-full bg-primary/12 text-sm font-bold text-primary">
+                      {index + 1}
+                    </span>
+                    <span className="text-sm leading-7 text-foreground/90">{point}</span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          ) : null}
+
+          <section className="space-y-4 border-t border-border/40 pt-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-bold uppercase tracking-[0.18em] text-muted-foreground">참고 기사와 공시</h4>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  아래 원문은 종합 리포트가 근거로 삼은 기사와 공시입니다. 전체 사건을 나열하기보다, 지금 해석에 직접 연결되는 항목만 남깁니다.
+                </p>
+              </div>
+              <Badge variant="outline" className="h-6 px-2.5 font-medium">
+                {linkedHeadlines.length}건
+              </Badge>
+            </div>
+            <div className="space-y-4">
+              {linkedHeadlines.length ? (
+                linkedHeadlines.map((item, index) => {
+                  const safeHref = safeExternalHref(item.sourceUrl);
+                  return (
+                    <article key={`${index}-${item.cardId ?? item.title}-${item.sourceUrl ?? "no-url"}`} className="border-l-2 border-border pl-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="secondary" className="h-5 px-2 text-[10px] font-semibold">
+                          {marketScopeLabel(item.marketScope)}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">{item.primaryRegion ?? "KR"}</span>
+                        <span className="text-xs text-muted-foreground">{formatMaybeDate(item.publishedAt)}</span>
+                        {item.sourceLabel ? <span className="text-xs text-muted-foreground">{item.sourceLabel}</span> : null}
+                      </div>
+                      {safeHref ? (
+                        <a
+                          href={safeHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 block text-base font-semibold leading-7 text-foreground underline-offset-4 hover:text-primary hover:underline"
+                        >
+                          {item.title}
+                        </a>
+                      ) : (
+                        <p className="mt-2 text-base font-semibold leading-7 text-foreground">{item.title}</p>
+                      )}
+                      {item.summary ? <p className="mt-2 text-sm leading-7 text-muted-foreground">{item.summary}</p> : null}
+                    </article>
+                  );
+                })
+              ) : (
+                <EmptyState title="링크할 핵심 뉴스가 없습니다" description="대표 기사와 공시가 준비되면 이 영역이 자동으로 갱신됩니다." />
+              )}
+            </div>
+          </section>
+        </article>
+
+        <div className="mt-8 rounded-2xl border border-border/50 bg-card/60 p-5 ring-1 ring-border/30">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h4 className="text-sm font-bold tracking-tight text-foreground">리포트 메모</h4>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                이 리포트는 상위 뉴스 카드와 공시를 묶어 현재 해석에 필요한 맥락만 다시 서술합니다.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="rounded-xl border border-border/50 bg-card px-4 py-3">
+              <p className="text-xs text-muted-foreground">브리핑 방식</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {briefing.generationMethod === "llm" ? "장문 서술형 AI 리포트" : "규칙 기반 서술형 리포트"}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border/50 bg-card px-4 py-3">
+              <p className="text-xs text-muted-foreground">현재 근거 범위</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{linkedHeadlines.length}건의 기사·공시를 참조 중</p>
+            </div>
+            <div className="rounded-xl border border-border/50 bg-card px-4 py-3">
+              <p className="text-xs text-muted-foreground">주요 소스</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {uniqueSources.length ? uniqueSources.join(" · ") : "표시 가능한 소스 정보 없음"}
+              </p>
+            </div>
+          </div>
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function SummaryMiniStoryList({
-  cards,
-}: Readonly<{
-  cards: MarketNewsCard[];
-}>) {
-  if (!cards.length) {
-    return null;
-  }
-
-  return (
-    <div className="grid gap-3 md:grid-cols-2">
-      {cards.map((card) => (
-        <Card key={card.id} className="border-border/40 bg-card/90 transition-all hover:shadow-md">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between gap-3">
-              <Badge variant="outline" className="h-5 px-2 text-[10px] font-bold uppercase tracking-[0.15em]">
-                {card.primaryRegion}
-              </Badge>
-              <span className="text-[10px] font-medium text-muted-foreground">{formatMaybeDate(card.updatedAt ?? card.publishedAt)}</span>
-            </div>
-            <h4 className="mt-3 text-sm font-semibold leading-snug text-foreground">{card.title}</h4>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{card.oneLineSummary}</p>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
-function SummaryDigestGroup({
-  title,
-  caption,
-  cards,
-  actionHref,
-  actionLabel,
-}: Readonly<{
-  title: string;
-  caption: string;
-  cards: MarketNewsCard[];
-  actionHref: string;
-  actionLabel: string;
-}>) {
-  const leadCard = cards[0];
-  const moreCards = cards.slice(1, 3);
-
-  return (
-    <div className="rounded-2xl border border-border/50 bg-card/60 p-4 ring-1 ring-border/30 backdrop-blur-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <Badge variant="outline" className="mb-2 h-5 px-2 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
-            {caption}
-          </Badge>
-          <h3 className="text-lg font-bold tracking-tight text-foreground">{title}</h3>
-        </div>
-        <Link
-          href={actionHref}
-          className="inline-flex shrink-0 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground"
-        >
-          {actionLabel}
-        </Link>
-      </div>
-
-      {leadCard ? (
-        <div className="mt-4 space-y-3">
-          <article className="rounded-xl bg-muted/60 p-4 ring-1 ring-border/40">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="muted" className="h-5 px-2 text-[10px] font-medium">
-                {formatMaybeDate(leadCard.updatedAt ?? leadCard.publishedAt)}
-              </Badge>
-              <Badge variant="outline" className="h-5 px-2 text-[10px] font-medium">
-                근거 {leadCard.evidenceCount}건
-              </Badge>
-            </div>
-            <h4 className="mt-2 text-base font-semibold leading-snug text-foreground">{leadCard.title}</h4>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{leadCard.oneLineSummary}</p>
-          </article>
-
-          {moreCards.length ? (
-            <div className="grid gap-2">
-              {moreCards.map((card) => (
-                <article key={card.id} className="rounded-lg border border-border/50 bg-card px-4 py-3 transition-colors hover:bg-muted/30">
-                  <p className="text-sm font-medium leading-relaxed text-foreground/90">{card.title}</p>
-                </article>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <div className="mt-4">
-          <EmptyState title={`${title} 카드가 없습니다`} description="최신 데이터가 준비되면 이 영역에 표시됩니다." />
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -254,7 +366,9 @@ function SurfaceSnapshotContent({ coverage }: Readonly<{ coverage: MarketNewsCov
         <Badge variant="secondary" className="h-6 px-2.5 font-medium">
           사용 가능 소스 {coverage.availableSources}/{coverage.expectedSources}
         </Badge>
-        <Badge variant="outline" className="h-6 px-2.5 font-medium text-muted-foreground">백엔드 갱신 추적 중</Badge>
+        <Badge variant="outline" className="h-6 px-2.5 font-medium text-muted-foreground">
+          백엔드 갱신 추적 중
+        </Badge>
       </div>
     </div>
   );
@@ -264,7 +378,10 @@ function ColumnPulseContent({ headerContext }: Readonly<{ headerContext: MarketN
   return (
     <div className="space-y-3">
       {headerContext.columns.map((column) => (
-        <div key={column.key} className="rounded-xl border border-border/50 bg-muted/40 p-4 ring-1 ring-border/30 transition-colors hover:bg-muted/60">
+        <div
+          key={column.key}
+          className="rounded-xl border border-border/50 bg-muted/40 p-4 ring-1 ring-border/30 transition-colors hover:bg-muted/60"
+        >
           <div className="flex items-center justify-between gap-3">
             <div>
               <Badge variant="outline" className="mb-2 h-5 px-2 text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">
@@ -272,9 +389,13 @@ function ColumnPulseContent({ headerContext }: Readonly<{ headerContext: MarketN
               </Badge>
               <p className="text-base font-semibold tracking-tight text-foreground">{column.leadTitle ?? "선두 카드 없음"}</p>
             </div>
-            <Badge variant="secondary" className="h-6 px-2.5 font-semibold">{column.count}건</Badge>
+            <Badge variant="secondary" className="h-6 px-2.5 font-semibold">
+              {column.count}건
+            </Badge>
           </div>
-          <p className="mt-2 text-xs text-muted-foreground">{column.leadScope ? `대표 범위: ${column.leadScope}` : "대표 범위 정보 없음"}</p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {column.leadScope ? `대표 범위: ${column.leadScope}` : "대표 범위 정보 없음"}
+          </p>
         </div>
       ))}
     </div>
@@ -284,13 +405,18 @@ function ColumnPulseContent({ headerContext }: Readonly<{ headerContext: MarketN
 function SourceCoverageContent({ coverage }: Readonly<{ coverage: MarketNewsCoverage }>) {
   return coverage.items.length ? (
     coverage.items.map((item) => (
-      <div key={item.provider} className="flex items-start justify-between gap-3 rounded-xl border border-border/50 bg-card p-4 ring-1 ring-border/30 transition-colors hover:bg-muted/20">
+      <div
+        key={item.provider}
+        className="flex items-start justify-between gap-3 rounded-xl border border-border/50 bg-card p-4 ring-1 ring-border/30 transition-colors hover:bg-muted/20"
+      >
         <div>
           <p className="text-sm font-semibold text-foreground">{item.provider}</p>
           <p className="mt-1.5 text-xs text-muted-foreground">
             문서 {item.documentCount}건 · 이벤트 {item.eventCount}건 · 근거 {item.evidenceCount}건
           </p>
-          <p className="mt-1.5 text-xs text-muted-foreground">{item.lastSyncedAt ? `최근 동기화 ${formatMaybeDate(item.lastSyncedAt)}` : "최근 동기화 정보 없음"}</p>
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            {item.lastSyncedAt ? `최근 동기화 ${formatMaybeDate(item.lastSyncedAt)}` : "최근 동기화 정보 없음"}
+          </p>
         </div>
         <SourceStatusChip status={item.status} />
       </div>
@@ -326,22 +452,37 @@ export function NewsTabDashboard({
   krCards,
   globalCards,
   disclosureCards,
+  briefing,
   headerContext,
   coverage,
   activeTab,
+  krPage,
+  krPageSize,
+  krPageCount,
+  onKrPagePrevious,
+  onKrPageNext,
 }: {
   krCards: MarketNewsCard[];
   globalCards: MarketNewsCard[];
   disclosureCards: MarketNewsCard[];
+  briefing: MarketNewsBriefing;
   headerContext: MarketNewsHeaderContext;
   coverage: MarketNewsCoverage;
   activeTab: NewsTabKey;
+  krPage: number;
+  krPageSize: number;
+  krPageCount: number;
+  onKrPagePrevious: () => void;
+  onKrPageNext: () => void;
 }) {
+  const krPageStart = krCards.length ? krPage * krPageSize + 1 : 0;
+  const krPageEnd = Math.min((krPage + 1) * krPageSize, krCards.length);
+  const pagedKrCards = krCards.slice(krPage * krPageSize, krPage * krPageSize + krPageSize);
   const activeSummary =
     activeTab === "summary"
-      ? "실시간으로 다시 정렬된 메인 카드"
+      ? "실시간 브리핑이 가장 중요한 흐름과 근거 링크를 계속 다시 정리합니다."
       : activeTab === "kr"
-        ? "국내 시장 직접 영향 카드"
+        ? "국내 시장 직접 영향 뉴스를 시간순으로 누적한 피드"
         : activeTab === "global"
           ? "한국 시장에 전이되는 글로벌 변수"
           : "공시로 확인된 이벤트 중심 카드";
@@ -355,7 +496,7 @@ export function NewsTabDashboard({
               <Badge variant="outline" className="h-5 px-2 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground">
                 Event-First Market News
               </Badge>
-              <CardTitle className="text-3xl font-black tracking-tight">뉴스</CardTitle>
+              <CardTitle className="text-3xl font-black tracking-tight">시장 뉴스</CardTitle>
               <CardDescription className="max-w-2xl text-base leading-relaxed text-foreground/80">
                 {headerContext.summaryLine}
               </CardDescription>
@@ -377,8 +518,12 @@ export function NewsTabDashboard({
               <span className="size-1.5 rounded-full bg-chart-4" />
               공시 {disclosureCards.length}건
             </Badge>
-            <Badge variant="outline" className="h-7 px-3 font-medium">{coverage.summary}</Badge>
-            <Badge variant="outline" className="h-7 px-3 font-medium text-muted-foreground">{formatMaybeDate(coverage.updatedAt)}</Badge>
+            <Badge variant="outline" className="h-7 px-3 font-medium">
+              {coverage.summary}
+            </Badge>
+            <Badge variant="outline" className="h-7 px-3 font-medium text-muted-foreground">
+              {formatMaybeDate(coverage.updatedAt)}
+            </Badge>
           </div>
           <nav className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="뉴스 세부 탭" data-testid="news-subtabs">
             {NEWS_TAB_OPTIONS.map((option) => {
@@ -404,128 +549,87 @@ export function NewsTabDashboard({
       </Card>
 
       {activeTab === "summary" ? (
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.18fr)_minmax(360px,0.82fr)]">
-          <Card className="border-border/50 bg-gradient-to-br from-card to-muted/20 shadow-lg backdrop-blur-sm">
-            <CardHeader>
-              <div className="flex items-start justify-between gap-4">
-                <div className="space-y-1.5">
-                  <CardTitle className="text-xl font-bold tracking-tight">오늘의 한국 증시 이벤트</CardTitle>
-                  <CardDescription className="text-sm leading-relaxed">
-                    국내 시장에 직접 이어지는 카드만 한 번에 읽히도록 메인보드로 정리했습니다.
-                  </CardDescription>
-                </div>
-                <Link
-                  href={newsTabHref("kr")}
-                  className="inline-flex shrink-0 items-center rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground"
-                >
-                  한국 증시 전체
-                </Link>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {krCards.length ? (
-                <div className="space-y-4">
-                  <SummaryLeadStory card={krCards[0]} tone="primary" />
-                  <SummaryMiniStoryList cards={krCards.slice(1, 3)} />
-                </div>
-              ) : (
-                <EmptyState
-                  title="한국 증시 이벤트가 아직 없습니다"
-                  description="최신 데이터가 준비되면 이 영역에 표시됩니다."
-                />
-              )}
-            </CardContent>
-          </Card>
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+          <SummaryBriefingBoard briefing={briefing} />
 
-          <Card className="border-border/50 bg-card/90 shadow-lg backdrop-blur-sm">
-            <CardHeader>
-              <CardTitle className="text-xl font-bold tracking-tight">글로벌·공시 브리프</CardTitle>
-              <CardDescription className="text-sm leading-relaxed">
-                글로벌 변수, 공시, 시장 표면 상태를 한 박스에서 비교하도록 합쳤습니다.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4">
-              <SummaryDigestGroup
-                title="글로벌 변수"
-                caption="Global Pulse"
-                cards={globalCards}
-                actionHref={newsTabHref("global")}
-                actionLabel="글로벌 증시 전체"
-              />
-              <SummaryDigestGroup
-                title="주요 공시"
-                caption="Disclosure Focus"
-                cards={disclosureCards}
-                actionHref={newsTabHref("disclosures")}
-                actionLabel="공시 전체"
-              />
-              <div className="grid gap-4">
-                <div className="rounded-xl border border-border/50 bg-card/60 p-4 ring-1 ring-border/30 backdrop-blur-sm">
-                  <Badge variant="outline" className="mb-2 h-5 px-2 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
-                    Surface Snapshot
-                  </Badge>
-                  <h3 className="text-lg font-bold tracking-tight text-foreground">시장 표면 상태</h3>
-                  <div className="mt-4">
-                    <SurfaceSnapshotContent coverage={coverage} />
-                  </div>
-                </div>
-                <div className="rounded-xl border border-border/50 bg-card/60 p-4 ring-1 ring-border/30 backdrop-blur-sm">
-                  <Badge variant="outline" className="mb-2 h-5 px-2 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
-                    Column Pulse
-                  </Badge>
-                  <h3 className="text-lg font-bold tracking-tight text-foreground">현재 컬럼 리드</h3>
-                  <div className="mt-4">
-                    <ColumnPulseContent headerContext={headerContext} />
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <aside className="space-y-5 xl:sticky xl:top-6 xl:self-start">
+            <RailSection title="시장 표면 상태" eyebrow="표면 스냅샷">
+              <SurfaceSnapshotContent coverage={coverage} />
+            </RailSection>
+
+            <RailSection title="현재 컬럼 리드" eyebrow="컬럼 흐름">
+              <ColumnPulseContent headerContext={headerContext} />
+            </RailSection>
+
+            <RailSection title="소스 반영 상태" eyebrow="소스 커버리지">
+              <SourceCoverageContent coverage={coverage} />
+            </RailSection>
+          </aside>
         </section>
       ) : (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.9fr)]">
           <div className="space-y-5">
             {activeTab === "kr" ? (
-            <CardSection
-              title="한국 증시"
-              description="지수, 수급, 업종 파급으로 바로 연결되는 이슈만 남겼습니다."
-              cards={krCards}
-              emptyTitle="한국 증시 카드가 없습니다"
-              emptyDescription="아직 동기화된 데이터가 없습니다. 최신 데이터가 준비되면 이 영역에 표시됩니다."
-            />
+              <CardSection
+                title="한국 증시"
+                description="한국 증시에 직접 연결되는 카드를 최신 시각 순으로 누적하고, 5개씩 넘겨 보도록 구성했습니다."
+                cards={pagedKrCards}
+                emptyTitle="한국 증시 카드가 없습니다"
+                emptyDescription="아직 동기화된 데이터가 없습니다. 최신 데이터가 준비되면 이 영역에 표시됩니다."
+                footer={
+                  krCards.length > krPageSize ? (
+                    <div className="flex flex-col gap-3 border-t border-border/50 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-xs text-muted-foreground">
+                        {krPageStart}-{krPageEnd} / {krCards.length}건
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={onKrPagePrevious} disabled={krPage <= 0}>
+                          이전 5개
+                        </Button>
+                        <Badge variant="outline" className="h-7 px-3 font-medium">
+                          {krPage + 1} / {krPageCount}
+                        </Badge>
+                        <Button variant="outline" size="sm" onClick={onKrPageNext} disabled={krPage >= krPageCount - 1}>
+                          다음 5개
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null
+                }
+              />
             ) : null}
 
             {activeTab === "global" ? (
-            <CardSection
-              title="글로벌 증시"
-              description="한국 시장에 전이될 글로벌 변수만 별도 클러스터로 정렬했습니다."
-              cards={globalCards}
-              emptyTitle="글로벌 증시 카드가 없습니다"
-              emptyDescription="아직 동기화된 데이터가 없습니다. 최신 데이터가 준비되면 이 영역에 표시됩니다."
-            />
+              <CardSection
+                title="글로벌 증시"
+                description="한국 시장에 전이될 글로벌 변수만 별도 클러스터로 정렬했습니다."
+                cards={globalCards}
+                emptyTitle="글로벌 증시 카드가 없습니다"
+                emptyDescription="아직 동기화된 데이터가 없습니다. 최신 데이터가 준비되면 이 영역에 표시됩니다."
+              />
             ) : null}
 
             {activeTab === "disclosures" ? (
-            <CardSection
-              title="공시"
-              description="공시 근거(DART)가 확인된 이벤트를 우선순위 순으로 제공합니다."
-              cards={disclosureCards}
-              emptyTitle="표시 가능한 공시가 없습니다"
-              emptyDescription="현재 표시 가능한 공시가 없습니다. 최신 데이터가 준비되면 이 영역에 표시됩니다."
-            />
+              <CardSection
+                title="공시"
+                description="공시 근거(DART)가 확인된 이벤트를 우선순위 순으로 제공합니다."
+                cards={disclosureCards}
+                emptyTitle="표시 가능한 공시가 없습니다"
+                emptyDescription="현재 표시 가능한 공시가 없습니다. 최신 데이터가 준비되면 이 영역에 표시됩니다."
+              />
             ) : null}
           </div>
 
           <aside className="space-y-5 xl:sticky xl:top-6 xl:self-start">
-            <RailSection title="시장 표면 상태" eyebrow="Surface Snapshot">
+            <RailSection title="시장 표면 상태" eyebrow="표면 스냅샷">
               <SurfaceSnapshotContent coverage={coverage} />
             </RailSection>
 
-            <RailSection title="현재 컬럼 리드" eyebrow="Column Pulse">
+            <RailSection title="현재 컬럼 리드" eyebrow="컬럼 흐름">
               <ColumnPulseContent headerContext={headerContext} />
             </RailSection>
 
-            <RailSection title="소스 반영 상태" eyebrow="Source Coverage">
+            <RailSection title="소스 반영 상태" eyebrow="소스 커버리지">
               <SourceCoverageContent coverage={coverage} />
             </RailSection>
           </aside>

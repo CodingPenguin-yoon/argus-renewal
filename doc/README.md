@@ -1,36 +1,82 @@
 # Documentation Index
 
-이 디렉터리는 현재 코드 기준 문서와 운영 런북을 함께 모아둔 곳입니다.
+`doc/`는 `architecture`, `domains`, `plans`, `reference`, `troubleshooting` 다섯 축으로 정리합니다.
 
-## 읽는 순서
-1. `architecture/current-system-map.md`
-2. `architecture/domain-oriented-data-model.md`
-3. `PROJECT_STRUCTURE.md`
-4. `analysis/risk-priority.md`
-5. 작업 대상에 맞는 런북
-6. Codex 운영이 필요하면 `codex_multi_agent_prompts.md`
+## 먼저 읽을 문서
+1. `architecture/README.md`
+2. `architecture/implementation-status.md`
+3. `architecture/system-map.md`
+4. `architecture/project-structure.md`
+5. `architecture/krx-mvp-ia.md`
+6. 작업 대상 도메인의 `domains/` 문서
+7. 변경 배경을 쉬운 말로 보려면 `troubleshooting/README.md`
 
-## 현재 구조 문서
-- `architecture/current-system-map.md`: 실제 런타임 진입점, 주요 실행 경로, 프런트와 백엔드 연결 지점
-- `architecture/domain-oriented-data-model.md`: 도메인/프로바이더/퍼블리셔 축 기준 데이터 모델과 현재 product surface materialization 방향
-- `architecture/provider-flexibility-design.md`: provider 추가/교체를 전제로 한 뉴스/공시 파이프라인 유연화 설계안
-- `architecture/krx_market_news_rebuild_plan.md`: 국장 중심 뉴스/공시 가공 레이어 재설계안과 AI 도입 원칙
-- `PROJECT_STRUCTURE.md`: 현재 리포지토리의 디렉터리 구조와 역할 요약
-- `analysis/risk-priority.md`: 문제 가능성이 높은 영역을 우선순위로 정리한 점검 가이드
+## 폴더 구조
+- `architecture/`
+  - 현재 코드베이스 기준 사실 문서
+  - 구현 상태, 시스템 맵, 프로젝트 구조, IA 정책을 여기서 먼저 확인합니다.
+- `domains/`
+  - 특정 도메인을 깊게 파는 문서와 도메인별 운영 메모를 함께 둡니다.
+- `plans/`
+  - 남은 작업, 해결 로그, 과거 계획과 레거시 가이드를 둡니다.
+- `reference/`
+  - 데이터 모델, provider 설계, 리스크, 템플릿, Codex 참고자료를 둡니다.
+- `troubleshooting/`
+  - 비전공자도 읽을 수 있는 작업 설명과 점검 가이드를 둡니다.
 
-## 제품 및 운영 런북
-- `krx_mvp_ia_runbook.md`: KRX MVP 정보 구조와 탭 정책
-- `krx_news_tab_runbook.md`: 뉴스 탭 운영 메모
-- `krx_global_events_tab_runbook.md`: 글로벌 이벤트 탭 운영 메모
-- `krx_derivatives_tab_runbook.md`: 파생상품 탭 운영 메모
-- `krx_company_master_runbook.md`: 회사 마스터 및 매핑 운영 메모
-- `krx_3axis_api_implementation_plan.md`: 3축 API 구현 계획
-- `krx_derivatives_reference_manual_template.csv`: 파생상품 기준 데이터 수기 템플릿
+## 아키텍처 문서
+- `architecture/README.md`
+- `architecture/implementation-status.md`
+- `architecture/system-map.md`
+- `architecture/project-structure.md`
+- `architecture/krx-mvp-ia.md`
 
-## Codex 운영
-- `codex_multi_agent_prompts.md`: parent session에서 바로 붙여 넣는 멀티 에이전트 프롬프트 모음
+## 도메인 심화 문서
+- `domains/news/README.md`
+- `domains/news/source-map.md`
+- `domains/news/pipeline.md`
+- `domains/news/ingestion-automation.md`
+- `domains/news/materialization.md`
+- `domains/news/api-layers.md`
+- `domains/news/frontend-surface.md`
+- `domains/news/database-tables.md`
+- `domains/news/file-reference.md`
+- `domains/news/rebuild-summary.md`
 
-## 문서 원칙
-- 구조 판단은 오래된 설명보다 실제 코드와 테스트를 우선한다.
-- 문서가 코드와 어긋나면 `architecture/current-system-map.md`와 `PROJECT_STRUCTURE.md`를 먼저 갱신한다.
-- 운영 리스크는 `analysis/risk-priority.md`에 누적한다.
+## 도메인 문서
+- `domains/news/README.md`
+- `domains/news/runbook.md`
+- `domains/macro-calendar/runbook.md`
+- `domains/derivatives/runbook.md`
+- `domains/company-master/runbook.md`
+
+## 계획 및 추적 문서
+- `plans/README.md`
+- `plans/current-status.md`
+- `plans/open-items.md`
+- `plans/kis-fred-rollout-plan.md`
+- `plans/resolved-log.md`
+- `plans/archive/`
+- `plans/legacy-guides/`
+- `plans/logs/`
+
+## 참고 자료
+- `reference/domain-oriented-data-model.md`
+- `reference/provider-flexibility-design.md`
+- `reference/kis-fred-integration-contract.md`
+- `reference/risk-priority.md`
+- `reference/codex-multi-agent-prompts.md`
+- `reference/krx-derivatives-reference-manual-template.csv`
+
+## 쉬운 설명 문서
+- `troubleshooting/README.md`
+- `troubleshooting/navigation-and-ia.md`
+- `troubleshooting/performance-and-prefetch.md`
+- `troubleshooting/dashboard-and-insights.md`
+- `troubleshooting/routing-and-links.md`
+- `troubleshooting/docs-and-history.md`
+
+## 유지 규칙
+- 현재 구조가 바뀌면 `architecture/system-map.md`와 `architecture/project-structure.md`를 같이 갱신합니다.
+- 작업을 시작하거나 닫을 때는 `plans/current-status.md`, `plans/open-items.md`, `plans/resolved-log.md` 중 필요한 문서를 같이 갱신합니다.
+- 현재 기준 문서와 과거 계획 문서를 섞지 않습니다. 현재 사실은 `architecture/`와 `domains/`에, 과거 기록은 `plans/archive/`와 `plans/legacy-guides/`에 둡니다.

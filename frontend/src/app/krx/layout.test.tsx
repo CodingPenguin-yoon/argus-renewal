@@ -13,7 +13,7 @@ vi.mock("@/krx/components/layout/async-header", () => ({
         </nav>
       </header>
       <section>
-        <h1>오늘의 시장 톤</h1>
+        <h1>실시간 상태</h1>
       </section>
     </>
   ),
@@ -30,7 +30,7 @@ describe("krx layout", () => {
 
     expect(screen.getByRole("link", { name: "시장 신호" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "관심종목" })).toBeInTheDocument();
-    expect(screen.getByText("오늘의 시장 톤")).toBeInTheDocument();
+    expect(screen.getByText("실시간 상태")).toBeInTheDocument();
     expect(screen.getByText("route body")).toBeInTheDocument();
   });
 });

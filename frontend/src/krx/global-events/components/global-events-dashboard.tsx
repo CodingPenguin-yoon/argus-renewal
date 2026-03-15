@@ -246,8 +246,8 @@ export function GlobalEventsDashboard({
         <div className="pointer-events-none absolute -left-16 top-0 h-36 w-36 rounded-full bg-sky-300/18 blur-3xl" />
         <div className="pointer-events-none absolute right-0 top-6 h-32 w-32 rounded-full bg-amber-300/20 blur-3xl" />
         <SectionHeader
-          title="글로벌 이벤트"
-          description="한국 증시에 파급력이 큰 해외 촉매를 이벤트 단위로 압축했습니다."
+          title="매크로 캘린더"
+          description="한국 증시에 파급력이 큰 해외 촉매와 발표 일정을 이벤트 단위로 압축했습니다."
           action={<Badge variant={coverageVariant(coverage.state)}>{coverage.summary}</Badge>}
         />
         <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-slate-600" data-testid="global-events-coverage">
@@ -261,7 +261,7 @@ export function GlobalEventsDashboard({
             </Badge>
           ))}
         </div>
-        <nav className="mb-4 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="글로벌 이벤트 세부 탭" data-testid="global-events-subtabs">
+        <nav className="mb-4 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="매크로 캘린더 세부 탭" data-testid="global-events-subtabs">
           {tabOptions.map((option) => {
             const active = option.key === resolvedActiveTab;
             return (

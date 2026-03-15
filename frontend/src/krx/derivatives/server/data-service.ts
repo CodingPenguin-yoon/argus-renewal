@@ -1,4 +1,4 @@
-import { ApiItemResponse, getKrxJson } from "@/krx/server/client";
+import { ApiItemResponse, getKrxJson, KRX_SHORT_REVALIDATE_SECONDS } from "@/krx/server/client";
 import {
   DerivativesComponent,
   DerivativesConfidenceBucket,
@@ -311,7 +311,9 @@ export function emptyDerivativesInvestorFlow(): DerivativesInvestorFlow {
 export async function getDerivativesSummary(date?: string): Promise<DerivativesSummary> {
   const suffix = date ? `?date=${encodeURIComponent(date)}` : "";
   try {
-    const response = await getKrxJson<ApiItemResponse<ApiDerivativesSummary>>(`/derivatives/summary${suffix}`);
+    const response = await getKrxJson<ApiItemResponse<ApiDerivativesSummary>>(`/derivatives/summary${suffix}`, {
+      revalidate: KRX_SHORT_REVALIDATE_SECONDS,
+    });
     return mapSummary(response.item);
   } catch {
     return emptyDerivativesSummary();
@@ -327,7 +329,9 @@ export async function getDerivativesTrends(
     params.set("date", date);
   }
   try {
-    const response = await getKrxJson<ApiDerivativesTrends>(`/derivatives/trends?${params.toString()}`);
+    const response = await getKrxJson<ApiDerivativesTrends>(`/derivatives/trends?${params.toString()}`, {
+      revalidate: KRX_SHORT_REVALIDATE_SECONDS,
+    });
     return mapTrends(response);
   } catch {
     return emptyDerivativesTrends();
@@ -343,7 +347,9 @@ export async function getDerivativesInvestorFlow(
     params.set("date", date);
   }
   try {
-    const response = await getKrxJson<ApiDerivativesInvestorFlow>(`/derivatives/investor-flow?${params.toString()}`);
+    const response = await getKrxJson<ApiDerivativesInvestorFlow>(`/derivatives/investor-flow?${params.toString()}`, {
+      revalidate: KRX_SHORT_REVALIDATE_SECONDS,
+    });
     return mapInvestorFlow(response);
   } catch {
     return emptyDerivativesInvestorFlow();

@@ -17,7 +17,6 @@ Argus를 계속 확장할 때는 `출처별 테이블`보다 `도메인별 테�
 즉 `provider`와 `publisher`는 같은 값이 아닐 수 있습니다.
 
 ## 추천 원칙
-
 1. 테이블은 `domain` 기준으로 나눈다.
 2. `provider`는 registry와 컬럼으로 관리한다.
 3. `publisher`는 registry와 컬럼으로 관리한다.
@@ -78,17 +77,34 @@ Argus를 계속 확장할 때는 `출처별 테이블`보다 `도메인별 테�
   - `market_briefings`
   - `company_reports`
 
-## 어떤 경우에 새 테이블을 만들까
+## Product Surfaces에서 뉴스 탭이 쓰는 경로
+- 입력:
+  - `raw_documents`
+  - optional `event_extractions`
+  - Naver Datalab score
+- 1차 판단:
+  - `news_batch_triage`
+  - 기본은 deterministic
+  - `NEWS_PRODUCT_BATCH_TRIAGE_*`를 켜면 짧은 뉴스 묶음을 1회 batch AI로 업그레이드
+- 후보 생성:
+  - `market_surface_candidates`
+  - 뉴스와 핵심 공시를 같은 표면 후보 형식으로 정렬
+- 2차 비교:
+  - current surface와 top 후보를 compare하는 editorial pass
+  - 결과는 candidate payload와 state metadata에 반영
+- 최종 상태:
+  - `market_surface_state`
+  - `market_surface_history`
 
+## 어떤 경우에 새 테이블을 만들까
 새 provider가 들어온다는 이유만으로 새 테이블을 만들지 않습니다.
 
 아래 둘 중 하나일 때만 새 도메인 테이블을 검토합니다.
-
 - 입력 구조와 조회 방식이 기존 도메인과 거의 안 겹칠 때
 - 보관 정책, 인덱스 전략, 갱신 주기가 기존 도메인과 완전히 다를 때
 
 예시:
-- `매일경제 RSS`, `NAVER_NEWS`, `BIGKINDS`:
+- `MK_RSS`, `NAVER_NEWS`, `BIGKINDS`:
   - 같은 `Document Intelligence` 도메인에 넣는 것이 맞음
 - `NAVER_DATALAB`:
   - 문서가 아니라 추세 수치이므로 `Market Data Signals` 계열이 맞음
@@ -102,7 +118,7 @@ Argus를 계속 확장할 때는 `출처별 테이블`보다 `도메인별 테�
 - `raw_documents`에 넣는다.
 - `provider_registry`에 provider 의미를 등록한다.
 - `publisher_registry`에 실제 발행 매체를 등록한다.
-- 뉴스 탭 표면은 `news_batch_triage -> market_surface_candidates -> market_surface_state` 경로로 재사용한다.
+- 뉴스 탭 표면은 `news_batch_triage -> market_surface_candidates -> market_surface_state` 경로를 재사용한다.
 
 ### 숫자/시계열 provider를 추가할 때
 - `raw_documents`에 억지로 넣지 않는다.
@@ -114,17 +130,13 @@ Argus를 계속 확장할 때는 `출처별 테이블`보다 `도메인별 테�
 - 기존 도메인 데이터를 조합해서 화면 전용 결과물을 만든다.
 
 ## 이번 단계에서 반영한 내용
-
 - `provider_registry`는 유지한다.
 - `publisher_registry`를 추가했다.
 - `raw_documents`, `events`에 `publisher_key` 축을 추가했다.
-- `raw_documents`에는 `observed_at`, `published_at_source` 축을 추가했다.
-- 즉 이제 같은 언론사가 여러 provider를 통해 들어와도 `provider`와 `publisher`를 분리해서 추적할 수 있다.
-- 뉴스는 원문 발행 시각이 없어도 `observed_at`으로 시간 축이 끊기지 않게 했다.
+- 뉴스 탭 표면은 `news_batch_triage`를 source-of-truth로 읽는다.
+- 2차 AI는 `current surface vs top candidates` compare pass로 축소됐다.
 
 ## 다음 단계 우선순위
-
-1. RSS/무인증 뉴스 provider를 `Document Intelligence` 도메인에 추가
-2. `publisher_key` 기준 coverage/품질 지표를 붙일지 결정
-3. 시장 데이터 계열도 장기적으로 provider registry와 유사한 실행 규칙으로 맞추기
-4. `company_source_mappings`의 `DART|KIS` 고정은 별도 도메인 작업으로 분리
+1. story continuity를 `cluster_key` 외의 더 안정적인 키로 보강
+2. 휴장일 캘린더 자동 동기화 여부 결정
+3. provider 추가 시 descriptor/config 외부화 범위를 더 넓힐지 결정

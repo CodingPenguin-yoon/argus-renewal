@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { TopNav } from "@/krx/components/layout/top-nav";
-import { marketBasePath } from "@/krx/lib/market";
+import { marketBasePath, marketOverviewPath } from "@/krx/lib/market";
 import { MarketCode } from "@/krx/types/domain";
 
 export function StaticShellHeader({ market }: { market: MarketCode }) {
@@ -11,7 +11,7 @@ export function StaticShellHeader({ market }: { market: MarketCode }) {
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <Link
-              href={marketBasePath(market)}
+              href={marketOverviewPath(market)}
               className="text-lg font-black tracking-tight text-slate-50 md:text-xl"
             >
               Argus KRX

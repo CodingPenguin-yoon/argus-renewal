@@ -22,7 +22,7 @@
 - 각 provider 클래스는 외부 응답을 읽고 `RawDocumentCandidate`로 변환한다.
 - 예시:
   - DART -> 공시 메타데이터
-  - BigKinds -> curated news
+  - MK_RSS -> curated news
   - Naver News -> discovery news
 
 ### 2) 공통 내부 ingestion 계층
@@ -55,12 +55,16 @@
   - `provider`와 `publisher`를 분리해서 품질/coverage 분석 기준을 만든다.
 
 ### 4) 정규화/상품화 계층
-- `events`
-- `source_documents`
-- `normalized_events`
-- `event_evidence`
-- `news_cards`
-- `source_coverage`
+- event normalization 경로
+  - `events`
+  - `event_company_edges`
+  - `event_extractions`
+  - `event_review_queue`
+- 뉴스 탭 market surface 경로
+  - `news_batch_triage`
+  - `market_surface_candidates`
+  - `market_surface_state`
+  - `market_surface_history`
 
 ## provider family
 - `DISCLOSURE`
@@ -72,9 +76,13 @@
 
 현재 기본 seed:
 - `DART`
-- `BIGKINDS`
+- `MK_RSS`
 - `NAVER_NEWS`
 - `NAVER_DATALAB`
+
+향후 추가 후보:
+- `KIS` (`MARKET_DATA`)
+- `FRED` (`REFERENCE_DATA`)
 
 ## 왜 이 구조가 맞는가
 - provider 이름은 바뀔 수 있지만, `DISCLOSURE`, `CURATED_NEWS`, `DISCOVERY_NEWS` 같은 의미 분류는 비교적 안정적이다.
@@ -98,6 +106,7 @@ DB 스키마 변경은 원칙적으로 필요 없다.
 ## 이번 구현에서 같이 보완한 점
 - provider 이름 하드코딩을 줄이고 registry/fallback 기반으로 읽게 바꾼다.
 - 뉴스 materialization에서 provider별 의미를 registry에서 읽게 한다.
+- 뉴스 탭 product layer는 `news_batch_triage -> market_surface_candidates -> market_surface_state` 경로를 사용한다.
 - 최근 문서/이벤트 조회는 expression index를 추가해 스캔 비용을 낮춘다.
 
 ## 남는 제약
@@ -108,7 +117,7 @@ DB 스키마 변경은 원칙적으로 필요 없다.
 ## 전환 로드맵
 
 ### 1단계: 저장 경계 안정화
-- 목표: 새 provider를 넣어도 DB 마이그레이션 없이 `raw_documents -> events -> news_cards` 경로가 동작하게 유지한다.
+- 목표: 새 provider를 넣어도 DB 마이그레이션 없이 `raw_documents -> event normalization` 또는 `raw_documents -> news_batch_triage -> market_surface_state` 경로가 동작하게 유지한다.
 - 상태: 적용됨
 - 기준:
   - provider 이름은 자유 텍스트 저장
@@ -116,7 +125,7 @@ DB 스키마 변경은 원칙적으로 필요 없다.
   - registry에 없으면 `document_type` 기준 fallback 적용
 
 ### 2단계: 수집 orchestration 일반화
-- 목표: `RawDocumentIngestionService`가 `DART`, `BIGKINDS`, `NAVER_NEWS` 분기문 대신 provider descriptor 목록을 순회하도록 바꾼다.
+- 목표: `RawDocumentIngestionService`가 `DART`, `MK_RSS`, `NAVER_NEWS` 분기문 대신 provider descriptor 목록을 순회하도록 바꾼다.
 - 상태: 부분 적용
 - 현재 상태:
   - `RawDocumentIngestionService` 내부에는 descriptor/runner 계층이 들어갔다.

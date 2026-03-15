@@ -298,6 +298,76 @@ export type MarketNewsHeaderContext = {
   }>;
 };
 
+export type MarketNewsBriefingLink = {
+  cardId: string | null;
+  title: string;
+  summary: string | null;
+  marketScope: MarketNewsCard["marketScope"] | null;
+  primaryRegion: MarketNewsCard["primaryRegion"] | null;
+  publishedAt: string | null;
+  sourceUrl: string | null;
+  sourceLabel: string | null;
+};
+
+export type MarketNewsBriefing = {
+  headline: string;
+  summary: string;
+  keyPoints: string[];
+  linkedHeadlines: MarketNewsBriefingLink[];
+  updatedAt: string | null;
+  generationMethod: "llm" | "rule_based";
+  aiConfidence: number;
+  aiProvider: string | null;
+  aiModel: string | null;
+};
+
+export type NewsTabData = {
+  krCards: MarketNewsCard[];
+  globalCards: MarketNewsCard[];
+  disclosureCards: MarketNewsCard[];
+  briefing: MarketNewsBriefing;
+  headerContext: MarketNewsHeaderContext;
+  coverage: MarketNewsCoverage;
+};
+
+export type OverviewGatewayPanel = {
+  key: "market-signal" | "news" | "global-events";
+  title: string;
+  href: string;
+  summary: string;
+  metricLabel: string;
+  metricValue: string;
+  updatedAt: string | null;
+};
+
+export type OverviewReportLink = {
+  title: string;
+  href: string | null;
+  sourceLabel: string | null;
+  publishedAt: string | null;
+};
+
+export type OverviewMacroWidget = {
+  key: string;
+  label: string;
+  summary: string;
+  sourceLabel: string;
+  updatedAt: string | null;
+  tone: "positive" | "neutral" | "negative";
+};
+
+export type OverviewTabData = {
+  marketToneLine: string;
+  keyTakeaways: string[];
+  reportHeadline: string;
+  reportSummary: string;
+  reportUpdatedAt: string | null;
+  reportLinks: OverviewReportLink[];
+  macroWidgets: OverviewMacroWidget[];
+  gatewayPanels: OverviewGatewayPanel[];
+  globalHighlights: GlobalEventItem[];
+};
+
 export type MarketSignalCoverageState = "full" | "partial" | "missing";
 
 export type MarketSignalTone = "positive" | "neutral" | "negative";
@@ -503,4 +573,24 @@ export type DerivativesInvestorFlow = {
   date: string | null;
   items: DerivativesInvestorFlowItem[];
   missingFields: string[];
+};
+
+export type MacroReferenceCard = {
+  key: string;
+  label: string;
+  summary: string;
+  sourceLabel: string;
+  sourceUrl: string | null;
+  updatedAt: string | null;
+  tone: "positive" | "neutral" | "negative";
+};
+
+export type MacroTabData = {
+  referenceCards: MacroReferenceCard[];
+  macroNews: MacroNews[];
+  globalHighlights: GlobalEventItem[];
+  derivativesSummary: DerivativesSummary;
+  derivativesTrends: DerivativesTrends;
+  derivativesInvestorFlow: DerivativesInvestorFlow;
+  updatedAt: string | null;
 };

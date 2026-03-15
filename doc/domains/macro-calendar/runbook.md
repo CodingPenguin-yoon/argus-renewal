@@ -1,7 +1,7 @@
-# KRX 글로벌 이벤트 탭 Runbook
+# KRX 매크로 캘린더 Runbook
 
 ## 목적
-- `/krx/global-events` 탭을 해외 매크로 일정의 raw feed가 아니라 한국 증시용 catalyst view로 운영합니다.
+- `/krx/macro-calendar` 탭을 `매크로 캘린더` 표면으로 운영하며, 해외 매크로 일정의 raw feed가 아니라 한국 증시용 catalyst view로 다룹니다.
 - 공식 캘린더와 공식 데이터 소스를 기본으로 쓰고, forecast/importance/대형 기술주 실적은 선택 vendor가 있을 때만 확장합니다.
 - 예상치나 실제값이 없으면 숫자를 채워 넣지 않고 `미제공`, `발표 전`, `시간 미정`으로 명시합니다.
 
@@ -159,9 +159,17 @@ python3 -m src.krx.source_ingestion.cli sync-global-events
 ```
 
 브라우저:
-- `http://localhost:3000/krx/global-events`
+- `http://localhost:3000/krx/macro-calendar`
 
 ## 알려진 제한사항
 - 기본 경로에서는 FOMC/ECB/BOJ의 actual 값이 비어 있을 수 있습니다.
 - 대형 기술주 실적은 vendor가 없으면 일정이 비어 있습니다.
 - BOJ/FOMC처럼 공식 캘린더가 정확한 시간을 주지 않는 경우 `시간 미정`으로 노출될 수 있습니다.
+
+## 향후 reference source 전략
+- 매크로 캘린더의 일정/이벤트 source는 계속 공식 캘린더 중심으로 유지합니다.
+- 다만 대시보드와 AI 인사이트에서 쓰는 `미국채 10년물`, `미국 금리` reference는 다음 라운드부터 FRED 기준으로 도입할 계획입니다.
+- 즉, FRED는 이 runbook의 일정 source를 대체하는 것이 아니라, 시장 해석용 rate reference를 보강하는 용도입니다.
+- 이 변경은 아직 구현 전입니다.
+- 기준 문서: `../../reference/kis-fred-integration-contract.md`
+- 실행 계획: `../../plans/kis-fred-rollout-plan.md`

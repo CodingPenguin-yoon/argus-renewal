@@ -2,15 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { marketHref } from "@/krx/lib/market";
+import { marketHref, marketInsightsPath, marketMacroCalendarPath, marketOverviewPath } from "@/krx/lib/market";
 import { MarketCode } from "@/krx/types/domain";
 
 export function TopNav({ market }: { market: MarketCode }) {
   const pathname = usePathname();
   const navItems = [
-    { href: marketHref(market), label: "시장 신호" },
-    { href: marketHref(market, "/news"), label: "뉴스" },
-    { href: marketHref(market, "/global-events"), label: "글로벌 이벤트" },
+    { href: marketOverviewPath(market), label: "대시보드", prefetch: true },
+    { href: marketInsightsPath(market), label: "AI 인사이트", prefetch: true },
+    { href: marketHref(market), label: "시장 신호", prefetch: true },
+    { href: marketHref(market, "/news"), label: "시장 뉴스", prefetch: false },
+    { href: marketMacroCalendarPath(market), label: "매크로 캘린더", prefetch: true },
   ];
 
   return (
@@ -21,6 +23,7 @@ export function TopNav({ market }: { market: MarketCode }) {
           <Link
             key={item.href}
             href={item.href}
+            prefetch={item.prefetch}
             className={`rounded-full border px-3 py-1.5 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 ${
               active
                 ? "border-amber-500 bg-amber-400 text-slate-950 shadow-sm"

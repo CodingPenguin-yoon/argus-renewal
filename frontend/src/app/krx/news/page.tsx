@@ -1,4 +1,4 @@
-import { NewsTabDashboard } from "@/krx/news/components/news-tab-dashboard";
+import { NewsTabLiveDashboard } from "@/krx/news/components/news-tab-live-dashboard";
 import { NewsTabScrollReset } from "@/krx/news/components/news-tab-scroll-reset";
 import { normalizeNewsTab } from "@/krx/news/lib/tabs";
 import { getNewsTabData } from "@/krx/server/data-service";
@@ -17,7 +17,7 @@ export default async function KrxNewsPage({
   return (
     <>
       <NewsTabScrollReset />
-      <NewsTabDashboard {...data} activeTab={activeTab} />
+      <NewsTabLiveDashboard initialData={data} activeTab={activeTab} />
     </>
   );
 }

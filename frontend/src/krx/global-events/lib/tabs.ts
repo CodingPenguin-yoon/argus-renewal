@@ -34,5 +34,5 @@ export function globalEventsTabHref(tab: GlobalEventsTabKey): string {
     params.set(GLOBAL_EVENTS_TAB_PARAM, tab);
   }
   const query = params.toString();
-  return query ? `/krx/global-events?${query}` : "/krx/global-events";
+  return query ? `/krx/macro-calendar?${query}` : "/krx/macro-calendar";
 }
