@@ -34,6 +34,7 @@ KRX 해석형 MVP를 위한 모노레포입니다.
 - `대시보드`와 `AI 인사이트`는 이미 이 backend route를 읽도록 연결됐고, FRED 카드가 준비되면 기존 macro news 기반 `금리` 표면보다 우선 사용합니다.
 - 파생 summary contract에는 `KIS_DOMESTIC_DERIVATIVES` 기반 `pre_open_futures`가 추가되어, 개장 전 선물 snapshot을 별도 필드로 받을 수 있습니다.
 - `KIS_DOMESTIC_DERIVATIVES` payload에 market-wide summary 필드가 있으면 `derivatives_daily_metrics` row도 함께 적재되며, KRX row가 없을 때 summary API가 이 경로로 fallback할 수 있습니다.
+- `derivatives_daily_metrics` source priority는 `KRX_DERIVATIVES_MANUAL -> KIS_DOMESTIC_DERIVATIVES -> KRX_DERIVATIVES_REFERENCE -> others` 순서로 고정합니다.
 - 로컬 기본값은 `FRED_PROVIDER=disabled`라서 외부 key 없이 그대로 실행됩니다. 실제 연동 전에는 `file` fixture로 먼저 검증할 수 있습니다.
 
 ## 뉴스 자동화 요약

@@ -17,14 +17,14 @@
 - `시장 신호`는 KIS/KRX provenance를 사람이 읽는 라벨로 노출하고, 파생 탭과 신호 카드에서 source badge를 직접 확인할 수 있습니다.
 - derivatives summary contract는 `KIS_DOMESTIC_DERIVATIVES` 기반 `pre_open_futures`를 내려주고, 파생 탭은 개장 전 선물 변동률을 우선 표시합니다.
 - `KIS_DOMESTIC_DERIVATIVES` payload에 market-wide summary가 있으면 `derivatives_daily_metrics` row를 함께 적재하고, KRX row가 없을 때 derivatives summary API가 이 데이터를 fallback source로 사용합니다.
-- signal engine의 previous derivatives selection은 trade date별 KRX 우선순위를 유지하도록 정리했습니다.
+- `derivatives_daily_metrics` source priority는 `KRX_DERIVATIVES_MANUAL -> KIS_DOMESTIC_DERIVATIVES -> KRX_DERIVATIVES_REFERENCE -> others` 순서로 summary, trends, signal engine에 공통 적용됩니다.
 
 ## In Progress
-- KIS domestic ingest는 시작됐고, 다음은 same-day current row/trend/signal precedence를 KIS 기준으로 바꿀지 결정하는 단계입니다.
+- KIS domestic ingest는 시작됐고, 다음은 mixed-source delta provenance 정책과 KIS adapter 실제 endpoint 연결을 마무리하는 단계입니다.
 
 ## Next
-1. same-day `KIS_DOMESTIC_DERIVATIVES` vs `KRX_DERIVATIVES_REFERENCE` precedence 정책 확정
-2. mixed-source delta provenance 정책 확정
+1. mixed-source delta provenance 정책 확정
+2. KIS derivatives adapter 실제 endpoint 연결
 3. 필요 시 FRED reference 지표를 `DGS2`, `SOFR`까지 확장
 
 ## Risks

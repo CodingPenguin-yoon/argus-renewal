@@ -10,6 +10,15 @@ from ..company_master.db import get_connection, utcnow_iso
 
 logger = logging.getLogger(__name__)
 
+DERIVATIVES_SOURCE_PRIORITY_SQL = """
+CASE
+    WHEN source_name = 'KRX_DERIVATIVES_MANUAL' THEN 0
+    WHEN source_name = 'KIS_DOMESTIC_DERIVATIVES' THEN 1
+    WHEN source_name = 'KRX_DERIVATIVES_REFERENCE' THEN 2
+    ELSE 3
+END
+""".strip()
+
 
 DEFAULT_SIGNAL_RULES: dict[str, Any] = {
     "classification": {
@@ -1738,27 +1747,32 @@ class MarketBriefingSignalService:
                 gap_bias = "flat"
 
         current_iv_row = connection.execute(
-            """
+            f"""
             SELECT implied_volatility
             FROM derivatives_daily_metrics
             WHERE trade_date = ?
-            ORDER BY
-                CASE
-                    WHEN source_name = 'KRX_DERIVATIVES_REFERENCE' THEN 0
-                    WHEN source_name = 'KRX_DERIVATIVES_MANUAL' THEN 1
-                    ELSE 2
-                END,
-                id DESC
+            ORDER BY {DERIVATIVES_SOURCE_PRIORITY_SQL}, id DESC
             LIMIT 1
             """,
             (evaluation_date,),
         ).fetchone()
         previous_iv_row = connection.execute(
-            """
+            f"""
+            WITH ranked AS (
+                SELECT
+                    trade_date,
+                    implied_volatility,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY trade_date
+                        ORDER BY {DERIVATIVES_SOURCE_PRIORITY_SQL}, id DESC
+                    ) AS row_rank
+                FROM derivatives_daily_metrics
+                WHERE trade_date < ?
+            )
             SELECT implied_volatility
-            FROM derivatives_daily_metrics
-            WHERE trade_date < ?
-            ORDER BY trade_date DESC, id DESC
+            FROM ranked
+            WHERE row_rank = 1
+            ORDER BY trade_date DESC
             LIMIT 1
             """,
             (evaluation_date,),
@@ -1921,17 +1935,11 @@ class MarketBriefingSignalService:
 
     def _select_derivatives_row(self, connection, *, trade_date_iso: str) -> dict[str, Any] | None:
         row = connection.execute(
-            """
+            f"""
             SELECT *
             FROM derivatives_daily_metrics
             WHERE trade_date = ?
-            ORDER BY
-                CASE
-                    WHEN source_name = 'KRX_DERIVATIVES_REFERENCE' THEN 0
-                    WHEN source_name = 'KRX_DERIVATIVES_MANUAL' THEN 1
-                    ELSE 2
-                END,
-                id DESC
+            ORDER BY {DERIVATIVES_SOURCE_PRIORITY_SQL}, id DESC
             LIMIT 1
             """,
             (trade_date_iso,),
@@ -1940,19 +1948,13 @@ class MarketBriefingSignalService:
 
     def _select_previous_derivatives_row(self, connection, *, trade_date_iso: str) -> dict[str, Any] | None:
         row = connection.execute(
-            """
+            f"""
             WITH ranked AS (
                 SELECT
                     *,
                     ROW_NUMBER() OVER (
                         PARTITION BY trade_date
-                        ORDER BY
-                            CASE
-                                WHEN source_name = 'KRX_DERIVATIVES_REFERENCE' THEN 0
-                                WHEN source_name = 'KRX_DERIVATIVES_MANUAL' THEN 1
-                                ELSE 2
-                            END,
-                            id DESC
+                        ORDER BY {DERIVATIVES_SOURCE_PRIORITY_SQL}, id DESC
                     ) AS row_rank
                 FROM derivatives_daily_metrics
                 WHERE trade_date < ?

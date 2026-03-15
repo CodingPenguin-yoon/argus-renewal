@@ -16,6 +16,7 @@
 - `시장 신호`는 KIS/KRX provenance를 사람 친화적인 source badge로 노출합니다.
 - derivatives summary contract는 `pre_open_futures`를 포함하며, 파생 탭은 `KIS_DOMESTIC_DERIVATIVES` 개장 전 선물 snapshot을 우선 표시합니다.
 - `KIS_DOMESTIC_DERIVATIVES`는 이제 market-wide summary 필드가 있으면 `derivatives_daily_metrics` row도 같이 적재합니다.
+- `derivatives_daily_metrics` row 선택은 `KRX_DERIVATIVES_MANUAL -> KIS_DOMESTIC_DERIVATIVES -> KRX_DERIVATIVES_REFERENCE -> others` 우선순위를 공통 적용합니다.
 - 상단 GNB는 안정 탭만 적극 prefetch하고 `시장 뉴스`는 제외합니다.
 - 실제 사용자 표면 경로를 `/krx/dashboard`, `/krx/insights`, `/krx/macro-calendar`로 정리했고, 기존 경로는 redirect로 호환합니다.
 - `doc/`에는 `troubleshooting/` 폴더를 추가해 오늘 변경의 배경과 이유를 쉬운 문서로 남겼습니다.
@@ -37,7 +38,7 @@
   - `시장 뉴스` 클릭 후에는 뉴스 RSC와 탭별 리소스가 새로 요청됨
 
 ## 남은 일
-- 현재 남은 구현은 same-day KIS/KRX precedence를 summary·trends·signal engine 전반에 고정하는 일입니다.
+- 현재 남은 구현은 mixed-source delta provenance와 실제 KIS derivatives endpoint 연결입니다.
 - 이후 추가 고도화 후보:
   - prefetch 계측 자동화
   - 게이지 계산식 세분화

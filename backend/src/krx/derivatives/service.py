@@ -11,6 +11,15 @@ from ..company_master.db import get_connection
 
 logger = logging.getLogger(__name__)
 
+DERIVATIVES_SOURCE_PRIORITY_SQL = """
+CASE
+    WHEN source_name = 'KRX_DERIVATIVES_MANUAL' THEN 0
+    WHEN source_name = 'KIS_DOMESTIC_DERIVATIVES' THEN 1
+    WHEN source_name = 'KRX_DERIVATIVES_REFERENCE' THEN 2
+    ELSE 3
+END
+""".strip()
+
 
 def _normalize_key(value: str) -> str:
     return "".join(ch for ch in value.lower().strip() if ch not in {"_", "-", " "})
@@ -501,13 +510,7 @@ class DerivativesDashboardService:
                     *,
                     ROW_NUMBER() OVER (
                         PARTITION BY trade_date
-                        ORDER BY
-                            CASE
-                                WHEN source_name = 'KRX_DERIVATIVES_REFERENCE' THEN 0
-                                WHEN source_name = 'KRX_DERIVATIVES_MANUAL' THEN 1
-                                ELSE 2
-                            END,
-                            id DESC
+                        ORDER BY {DERIVATIVES_SOURCE_PRIORITY_SQL}, id DESC
                     ) AS row_rank
                 FROM derivatives_daily_metrics
                 {where_clause}
@@ -526,19 +529,13 @@ class DerivativesDashboardService:
         if not trade_date:
             return None
         row = connection.execute(
-            """
+            f"""
             WITH ranked AS (
                 SELECT
                     *,
                     ROW_NUMBER() OVER (
                         PARTITION BY trade_date
-                        ORDER BY
-                            CASE
-                                WHEN source_name = 'KRX_DERIVATIVES_REFERENCE' THEN 0
-                                WHEN source_name = 'KRX_DERIVATIVES_MANUAL' THEN 1
-                                ELSE 2
-                            END,
-                            id DESC
+                        ORDER BY {DERIVATIVES_SOURCE_PRIORITY_SQL}, id DESC
                     ) AS row_rank
                 FROM derivatives_daily_metrics
                 WHERE trade_date < ?
@@ -576,13 +573,7 @@ class DerivativesDashboardService:
                     *,
                     ROW_NUMBER() OVER (
                         PARTITION BY trade_date
-                        ORDER BY
-                            CASE
-                                WHEN source_name = 'KRX_DERIVATIVES_REFERENCE' THEN 0
-                                WHEN source_name = 'KRX_DERIVATIVES_MANUAL' THEN 1
-                                ELSE 2
-                            END,
-                            id DESC
+                        ORDER BY {DERIVATIVES_SOURCE_PRIORITY_SQL}, id DESC
                     ) AS row_rank
                 FROM derivatives_daily_metrics
                 {where_clause}

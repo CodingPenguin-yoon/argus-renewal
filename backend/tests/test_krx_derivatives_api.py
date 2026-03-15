@@ -434,7 +434,7 @@ def test_trends_endpoint_shape(tmp_path: Path, monkeypatch) -> None:
         get_settings.cache_clear()
 
 
-def test_existing_data_reuse_priority(tmp_path: Path, monkeypatch) -> None:
+def test_existing_data_reuse_priority_prefers_manual_override(tmp_path: Path, monkeypatch) -> None:
     db_path = _with_db(monkeypatch, tmp_path)
     try:
         _insert_derivatives_row(
@@ -454,8 +454,78 @@ def test_existing_data_reuse_priority(tmp_path: Path, monkeypatch) -> None:
         response = client.get("/api/krx/derivatives/summary", params={"date": "2026-03-09"})
         assert response.status_code == 200
         item = response.json()["item"]
-        assert item["pcr"] == 0.87
-        assert item["source_coverage"]["sections"][0]["source_name"] == "KRX_DERIVATIVES_REFERENCE"
+        assert item["pcr"] == 1.34
+        assert item["source_coverage"]["sections"][0]["source_name"] == "KRX_DERIVATIVES_MANUAL"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_same_day_summary_prefers_kis_over_krx_reference(tmp_path: Path, monkeypatch) -> None:
+    db_path = _with_db(monkeypatch, tmp_path)
+    try:
+        _insert_derivatives_row(
+            db_path,
+            trade_date_iso="2026-03-09",
+            source_name="KRX_DERIVATIVES_REFERENCE",
+            put_call_ratio=0.87,
+        )
+        _insert_derivatives_row(
+            db_path,
+            trade_date_iso="2026-03-09",
+            source_name="KIS_DOMESTIC_DERIVATIVES",
+            put_call_ratio=0.94,
+        )
+
+        client = TestClient(app)
+        response = client.get("/api/krx/derivatives/summary", params={"date": "2026-03-09"})
+        assert response.status_code == 200
+        item = response.json()["item"]
+        assert item["pcr"] == 0.94
+        assert item["source_coverage"]["sections"][0]["source_name"] == "KIS_DOMESTIC_DERIVATIVES"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_trends_endpoint_prefers_priority_row_per_date(tmp_path: Path, monkeypatch) -> None:
+    db_path = _with_db(monkeypatch, tmp_path)
+    try:
+        _insert_derivatives_row(
+            db_path,
+            trade_date_iso="2026-03-08",
+            source_name="KRX_DERIVATIVES_REFERENCE",
+            put_call_ratio=1.08,
+            implied_volatility=20.8,
+            call_open_interest=490000,
+            put_open_interest=510000,
+        )
+        _insert_derivatives_row(
+            db_path,
+            trade_date_iso="2026-03-08",
+            source_name="KIS_DOMESTIC_DERIVATIVES",
+            put_call_ratio=0.96,
+            implied_volatility=18.6,
+            call_open_interest=520000,
+            put_open_interest=480000,
+        )
+        _insert_derivatives_row(
+            db_path,
+            trade_date_iso="2026-03-09",
+            source_name="KRX_DERIVATIVES_REFERENCE",
+            put_call_ratio=0.93,
+            implied_volatility=17.9,
+            call_open_interest=530000,
+            put_open_interest=470000,
+        )
+
+        client = TestClient(app)
+        response = client.get("/api/krx/derivatives/trends", params={"preset": "20d"})
+        assert response.status_code == 200
+        payload = response.json()
+
+        item_by_date = {item["date"]: item for item in payload["items"]}
+        assert item_by_date["2026-03-08"]["pcr"] == 0.96
+        assert item_by_date["2026-03-08"]["source_name"] == "KIS_DOMESTIC_DERIVATIVES"
+        assert item_by_date["2026-03-09"]["pcr"] == 0.93
     finally:
         get_settings.cache_clear()
 
