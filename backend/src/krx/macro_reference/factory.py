@@ -17,5 +17,4 @@ def create_macro_reference_service(settings: Settings) -> MacroReferenceService:
             max_retries=settings.fred_max_retries,
             backoff_seconds=settings.fred_backoff_seconds,
         ),
-        series_ids=settings.fred_series_ids,
     )
