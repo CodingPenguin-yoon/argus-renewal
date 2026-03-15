@@ -21,12 +21,13 @@
 - derivatives summary의 `source_coverage`에는 `pcr_change / oi_change / implied_volatility_change` 전일 비교가 어떤 source 조합으로 계산됐는지 보여주는 `comparisons` provenance가 추가됐습니다.
 - `시장 신호 > 파생상품` 탭은 이제 이 `comparisons` provenance를 직접 노출해, mixed-source 비교와 동일 source 비교를 화면에서 구분해 보여줍니다.
 - `KisDomesticDerivativesService`는 공식 KIS `inquire-price` 응답 형태인 `output1/output2/output3` object payload를 직접 읽고, snapshot row와 nested summary candidate를 함께 해석할 수 있습니다.
+- live KIS 경로는 이제 `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON` 안에 `FID_INPUT_ISCD`가 없으면 비활성 처리되고, `FID_COND_MRKT_DIV_CODE`가 없으면 기본값 `F`를 사용합니다.
 
 ## In Progress
-- KIS domestic ingest는 시작됐고, 다음은 KIS adapter의 실제 query contract를 마무리하는 단계입니다.
+- KIS domestic ingest는 시작됐고, 다음은 실제 최근월물 symbol을 어떤 기준으로 넣을지 자동화하는 단계입니다.
 
 ## Next
-1. KIS derivatives adapter 실제 query params / symbol 전략 연결
+1. KIS derivatives adapter 최근월물 symbol 자동 결정 전략 연결
 2. 필요 시 FRED reference 지표를 `DGS2`, `SOFR`까지 확장
 
 ## Risks

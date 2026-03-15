@@ -460,6 +460,40 @@ def test_kis_domestic_inquire_price_object_payload_support(tmp_path: Path) -> No
     assert summary_row["implied_volatility"] == 17.9
 
 
+def test_kis_domestic_api_requires_fid_input_iscd() -> None:
+    service = KisDomesticDerivativesService(
+        provider="api",
+        file_path=None,
+        base_url="https://openapi.koreainvestment.com:9443",
+        endpoint_path="/uapi/domestic-futureoption/v1/quotations/inquire-price",
+        app_key="app-key",
+        app_secret="app-secret",
+        access_token="access-token",
+        query_params_json=json.dumps({"FID_COND_MRKT_DIV_CODE": "F"}),
+    )
+
+    assert service.is_enabled() == (False, "missing_fid_input_iscd")
+
+
+def test_kis_domestic_api_defaults_market_div_code_to_f() -> None:
+    service = KisDomesticDerivativesService(
+        provider="api",
+        file_path=None,
+        base_url="https://openapi.koreainvestment.com:9443",
+        endpoint_path="/uapi/domestic-futureoption/v1/quotations/inquire-price",
+        app_key="app-key",
+        app_secret="app-secret",
+        access_token="access-token",
+        query_params_json=json.dumps({"fid_input_iscd": "101W09"}),
+    )
+
+    assert service.is_enabled() == (True, None)
+    assert service._render_query_params(trade_date=date(2026, 3, 9)) == {
+        "fid_input_iscd": "101W09",
+        "FID_COND_MRKT_DIV_CODE": "F",
+    }
+
+
 def test_pre_open_rerun_is_idempotent(tmp_path: Path) -> None:
     db_path = str(tmp_path / "briefing.db")
 

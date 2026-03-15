@@ -2,12 +2,13 @@
 
 | ID | Area | Item | Why | Next Action | Status |
 | --- | --- | --- | --- | --- | --- |
-| DATA-003 | Backend | KIS derivatives adapter 추가 | 파생 summary를 실제 매매 source와 맞춰야 함 | 공식 `inquire-price` object payload 지원 이후, 실제 query params / symbol 전략 연결 | Open |
+| DATA-003 | Backend | KIS derivatives adapter 추가 | 파생 summary를 실제 매매 source와 맞춰야 함 | 명시적 query contract는 고정됐고, 다음은 최근월물 `FID_INPUT_ISCD` 자동 결정 전략 연결 | Open |
 
 ## Notes
 - backend summary contract에는 `source_coverage.comparisons`가 추가되어, 전일 대비 변화율이 어떤 source 조합으로 계산됐는지 확인할 수 있습니다.
 - frontend 파생 탭은 이 `comparisons`를 mixed-source / 동일 source badge와 함께 직접 보여줍니다.
 - `KIS_DOMESTIC_DERIVATIVES` provider는 공식 KIS `output1/output2/output3` object payload를 읽을 수 있지만, summary row 적재는 payload에 market-wide field가 실제로 있을 때만 발생합니다.
+- live KIS provider는 `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON`에 `FID_INPUT_ISCD`가 반드시 있어야 하며, `FID_COND_MRKT_DIV_CODE`가 없으면 `F`를 기본값으로 사용합니다.
 
 ## Recently Closed
 | ID | Area | Item | Result |

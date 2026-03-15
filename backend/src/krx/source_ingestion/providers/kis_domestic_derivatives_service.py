@@ -26,6 +26,7 @@ from ._briefing_common import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_KIS_DOMESTIC_DERIVATIVES_TR_ID = "FHMIF10000000"
+DEFAULT_KIS_DOMESTIC_DERIVATIVES_MARKET_DIV_CODE = "F"
 
 
 class KisDomesticDerivativesService:
@@ -78,6 +79,8 @@ class KisDomesticDerivativesService:
                 return False, "missing_endpoint_path"
             if not self.app_key or not self.app_secret or not self.access_token:
                 return False, "missing_kis_credentials"
+            if not self._query_param_value("FID_INPUT_ISCD"):
+                return False, "missing_fid_input_iscd"
             return True, None
 
         return False, f"unsupported_provider:{self.provider}"
@@ -175,9 +178,28 @@ class KisDomesticDerivativesService:
         rendered: dict[str, str] = {}
         for key, value in self.query_params.items():
             rendered[key] = value.replace("{trade_date}", trade_date.isoformat())
-        if not rendered:
-            rendered["trade_date"] = trade_date.isoformat()
+        if not self._query_param_value("FID_COND_MRKT_DIV_CODE", params=rendered):
+            rendered["FID_COND_MRKT_DIV_CODE"] = DEFAULT_KIS_DOMESTIC_DERIVATIVES_MARKET_DIV_CODE
         return rendered
+
+    def _query_param_value(
+        self,
+        key: str,
+        *,
+        params: dict[str, str] | None = None,
+    ) -> str | None:
+        normalized_key = self._normalize_query_param_key(key)
+        source = params if params is not None else self.query_params
+        for candidate_key, candidate_value in source.items():
+            if self._normalize_query_param_key(candidate_key) != normalized_key:
+                continue
+            value = str(candidate_value).strip()
+            if value:
+                return value
+        return None
+
+    def _normalize_query_param_key(self, value: str) -> str:
+        return "".join(ch for ch in value.lower().strip() if ch not in {"_", "-", " "})
 
     def _extract_rows(self, *, payload: Any, trade_date: date) -> list[dict[str, Any]]:
         if isinstance(payload, dict):

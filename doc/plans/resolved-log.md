@@ -11,6 +11,7 @@
 - derivatives summary `source_coverage`에 `comparisons` provenance를 추가해, `pcr_change / oi_change / implied_volatility_change`가 어떤 current/previous source 조합으로 계산됐는지 확인 가능하게 했습니다.
 - `시장 신호 > 파생상품` 탭에 mixed-source delta provenance UI를 추가해, 변화율 계산에 사용된 현재값/전일값 source 조합을 사용자 표면에서 바로 확인할 수 있게 했습니다.
 - `KisDomesticDerivativesService`가 한국투자 공식 `inquire-price` 형태의 `output1/output2/output3` object payload를 직접 읽도록 보강했고, nested summary field가 있을 때는 같은 payload에서 summary row도 함께 만들 수 있게 정리했습니다.
+- live KIS 호출 계약을 명시적으로 고정해, `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON`에 `FID_INPUT_ISCD`가 없으면 API 모드를 비활성 처리하고 `FID_COND_MRKT_DIV_CODE`는 기본값 `F`를 채우도록 정리했습니다.
 - KRX IA를 `대시보드 / AI 인사이트 / 시장 신호 / 시장 뉴스 / 매크로 캘린더` 기준으로 정리했습니다.
 - 공통 헤더의 대형 해석 블록을 축소하고, `오늘의 시장 톤`을 `AI 인사이트` 중심 콘텐츠로 이동했습니다.
 - `doc/`를 `architecture / domains / plans / reference / troubleshooting` 구조로 정리했습니다.
