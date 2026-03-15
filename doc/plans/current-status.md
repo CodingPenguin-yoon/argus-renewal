@@ -14,15 +14,15 @@
 - 다음 라운드 source 전략으로 `파생=KIS`, `미국채 10년물/미국 금리=FRED` 기준 문서와 rollout plan을 추가했습니다.
 - backend에 FRED macro reference route를 추가했고, `DGS10`과 `FEDFUNDS`를 `disabled | file | api` 모드로 읽는 1차 contract를 고정했습니다.
 - `대시보드`와 `AI 인사이트`는 이제 `/api/krx/macro-reference/cards`를 읽고, FRED 카드가 있으면 기존 macro news 기반 `금리` 표면보다 우선 사용합니다.
+- `시장 신호`는 KIS/KRX provenance를 사람이 읽는 라벨로 노출하고, 파생 탭과 신호 카드에서 source badge를 직접 확인할 수 있습니다.
 
 ## In Progress
-- FRED는 `대시보드`와 `AI 인사이트`까지 연결됐고, 다음은 `시장 신호` provenance와 KIS derivatives adapter 범위 확정입니다.
+- frontend provenance 표면은 정리됐고, 다음은 KIS derivatives adapter 범위와 precedence 정책 확정입니다.
 
 ## Next
-1. 시장 신호에 KIS source provenance를 확장
-2. KIS derivatives adapter 범위와 endpoint 확정
-3. KIS source precedence와 provenance 정책 확정
-4. 필요 시 대시보드 거시 위젯을 FRED 데이터 필드 기준으로 세분화
+1. KIS derivatives adapter 범위와 endpoint 확정
+2. KIS source precedence와 provenance 정책 확정
+3. 필요 시 FRED reference 지표를 `DGS2`, `SOFR`까지 확장
 
 ## Risks
 - legacy redirect는 당분간 유지되므로, 외부 링크나 북마크는 새 경로와 구 경로가 공존할 수 있습니다.

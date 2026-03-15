@@ -17,6 +17,14 @@ import {
   MarketSignalSummary,
 } from "@/krx/types/domain";
 
+const SOURCE_NAME_LABELS: Record<string, string> = {
+  KIS_MARKET_BREADTH: "KIS 수급",
+  KIS_NIGHT_FUTURES: "KIS 야간선물",
+  KIS_DOMESTIC_DERIVATIVES: "KIS 국내 파생",
+  KRX_DERIVATIVES_REFERENCE: "KRX 파생 기준",
+  MARKET_BRIEFINGS: "시장 브리핑",
+};
+
 function toneVariant(tone: MarketSignalCard["tone"]) {
   if (tone === "positive") return "positive";
   if (tone === "negative") return "negative";
@@ -108,8 +116,38 @@ function dateLabel(value: string | null) {
   return value;
 }
 
+function sourceNameLabel(value: string) {
+  return SOURCE_NAME_LABELS[value] ?? value.replaceAll("_", " ");
+}
+
+function sourceLabels(sourceNames: string[], limit = sourceNames.length) {
+  return Array.from(new Set(sourceNames.map(sourceNameLabel))).slice(0, limit);
+}
+
 function findCard(summary: MarketSignalSummary, key: MarketSignalCard["key"]) {
   return summary.cards.find((card) => card.key === key) ?? null;
+}
+
+function SourceBadgeRow({
+  sourceNames,
+  limit = 3,
+}: {
+  sourceNames: string[];
+  limit?: number;
+}) {
+  const labels = sourceLabels(sourceNames, limit);
+  if (!labels.length) return null;
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-2" aria-label="데이터 소스">
+      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">데이터 소스</span>
+      {labels.map((label) => (
+        <Badge key={label} variant="neutral">
+          {label}
+        </Badge>
+      ))}
+    </div>
+  );
 }
 
 function DerivativesOneLine({
@@ -140,6 +178,7 @@ function DerivativesOneLine({
       <p className="mt-3 text-sm leading-7 text-slate-600">
         신뢰도 {confidenceBucketLabel(derivativesSummary.confidenceBucket)} · {freshnessLabel(derivativesSummary.lastUpdatedAt)}
       </p>
+      <SourceBadgeRow sourceNames={derivativesSummary.sourceCoverage.sourceNames} />
     </section>
   );
 }
@@ -440,6 +479,7 @@ function SignalCard({ card }: { card: MarketSignalCard }) {
       </div>
       <p className="mt-4 text-lg font-black tracking-tight text-slate-900">{card.interpretationLine}</p>
       {card.detailText ? <p className="mt-3 text-sm leading-6 text-slate-600">{card.detailText}</p> : null}
+      <SourceBadgeRow sourceNames={card.sourceCoverage.sourceNames} />
       <dl className="mt-5 grid gap-3 sm:grid-cols-3">
         {card.supportingMetrics.slice(0, 3).map((metric) => (
           <div key={metric.key} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
@@ -552,6 +592,7 @@ export function MarketSignalDashboard({
             </div>
             <h2 className="mt-4 text-3xl font-black tracking-tight text-slate-900">{summary.interpretationLine}</h2>
             <p className="mt-3 max-w-4xl text-sm leading-7 text-slate-600">{summary.explanationText}</p>
+            <SourceBadgeRow sourceNames={summary.sourceCoverage.sourceNames} />
           </section>
           <section className="grid gap-4 xl:grid-cols-2" data-testid="market-signal-summary-grid">
             <OverviewCard

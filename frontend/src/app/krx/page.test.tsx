@@ -209,6 +209,9 @@ describe("krx market signal page route", () => {
     expect(screen.queryByRole("tab", { name: "홈" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "세부" })).not.toBeInTheDocument();
     expect(screen.getByText("오늘 시장 결론")).toBeInTheDocument();
+    expect(screen.getAllByText("KIS 수급").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("KRX 파생 기준").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("시장 브리핑").length).toBeGreaterThanOrEqual(1);
   });
 
   it("supports direct deep-link navigation to 시장 신호 > 파생", async () => {
@@ -225,6 +228,7 @@ describe("krx market signal page route", () => {
     expect(screen.getByText("추이 차트")).toBeInTheDocument();
     expect(screen.getByText("세부 지표")).toBeInTheDocument();
     expect(screen.getByText("해설")).toBeInTheDocument();
+    expect(screen.getByText("KIS 야간선물")).toBeInTheDocument();
     expect(screen.queryByText("오늘 시장 결론")).not.toBeInTheDocument();
   });
 

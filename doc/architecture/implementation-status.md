@@ -13,6 +13,7 @@
 - 공통 KRX fetch helper는 기본 `no-store`를 유지하면서 필요한 호출자만 `revalidate`를 줄 수 있게 정리했습니다.
 - `시장 신호`, 파생 요약, `AI 인사이트`의 macro news는 30초 재검증 기준으로 분리했습니다.
 - backend에는 `GET /api/krx/macro-reference/cards`가 추가됐고, `대시보드`와 `AI 인사이트`는 이 경로의 FRED 카드를 읽어 기존 `금리` macro card보다 우선 사용합니다.
+- `시장 신호`는 KIS/KRX provenance를 사람 친화적인 source badge로 노출합니다.
 - 상단 GNB는 안정 탭만 적극 prefetch하고 `시장 뉴스`는 제외합니다.
 - 실제 사용자 표면 경로를 `/krx/dashboard`, `/krx/insights`, `/krx/macro-calendar`로 정리했고, 기존 경로는 redirect로 호환합니다.
 - `doc/`에는 `troubleshooting/` 폴더를 추가해 오늘 변경의 배경과 이유를 쉬운 문서로 남겼습니다.
@@ -34,7 +35,7 @@
   - `시장 뉴스` 클릭 후에는 뉴스 RSC와 탭별 리소스가 새로 요청됨
 
 ## 남은 일
-- 현재 남은 구현은 `시장 신호`의 KIS source provenance를 고정하고, KIS 파생 source precedence를 확정하는 일입니다.
+- 현재 남은 구현은 KIS derivatives adapter를 붙이고, KIS 파생 source precedence를 확정하는 일입니다.
 - 이후 추가 고도화 후보:
   - prefetch 계측 자동화
   - 게이지 계산식 세분화
