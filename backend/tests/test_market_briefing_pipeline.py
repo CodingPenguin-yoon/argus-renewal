@@ -103,6 +103,14 @@ def test_market_briefing_happy_path_normalized_records(tmp_path: Path) -> None:
     domestic_file = _write_json(
         tmp_path / "domestic.json",
         {
+            "put_call_ratio": 0.97,
+            "implied_volatility": 17.9,
+            "open_interest_total": 1015000,
+            "call_open_interest": 540000,
+            "put_open_interest": 475000,
+            "futures_investor_foreign_net_buy": 1450,
+            "futures_investor_institution_net_buy": 620,
+            "futures_investor_individual_net_buy": -2070,
             "items": [
                 {
                     "instrument_code": "101S3000",
@@ -222,6 +230,13 @@ def test_market_briefing_happy_path_normalized_records(tmp_path: Path) -> None:
             WHERE trade_date = '2026-03-09' AND source_name = 'KRX_DERIVATIVES_REFERENCE'
             """
         ).fetchone()
+        kis_pre_open_row = connection.execute(
+            """
+            SELECT put_call_ratio, implied_volatility, open_interest_total, futures_investor_foreign_net_buy
+            FROM derivatives_daily_metrics
+            WHERE trade_date = '2026-03-09' AND source_name = 'KIS_DOMESTIC_DERIVATIVES'
+            """
+        ).fetchone()
         snapshot_count = connection.execute(
             """
             SELECT COUNT(*) AS count
@@ -242,6 +257,11 @@ def test_market_briefing_happy_path_normalized_records(tmp_path: Path) -> None:
     assert derivatives_row["put_call_ratio"] == 0.95
     assert derivatives_row["implied_volatility"] == 18.7
     assert derivatives_row["open_interest_total"] == 990000
+    assert kis_pre_open_row is not None
+    assert kis_pre_open_row["put_call_ratio"] == 0.97
+    assert kis_pre_open_row["implied_volatility"] == 17.9
+    assert kis_pre_open_row["open_interest_total"] == 1015000
+    assert kis_pre_open_row["futures_investor_foreign_net_buy"] == 1450
 
     assert snapshot_count == 3
     assert run_count == 3

@@ -16,6 +16,7 @@ def _insert_derivatives_row(
     db_path: str,
     *,
     trade_date_iso: str,
+    source_name: str = "KRX_DERIVATIVES_REFERENCE",
     put_call_ratio: float | None,
     implied_volatility: float | None,
     open_interest_total: float | None,
@@ -46,7 +47,7 @@ def _insert_derivatives_row(
             """,
             (
                 trade_date_iso,
-                "KRX_DERIVATIVES_REFERENCE",
+                source_name,
                 put_call_ratio,
                 implied_volatility,
                 open_interest_total,
@@ -185,6 +186,37 @@ def test_bullish_case(tmp_path: Path) -> None:
     assert result.gap_bias == "gap_up"
     assert result.total_score > 1.0
     assert len(result.components) == 7
+
+
+def test_previous_derivatives_row_keeps_krx_priority_with_same_day_kis_rows(tmp_path: Path) -> None:
+    service, db_path = _build_service(tmp_path)
+    _insert_derivatives_row(
+        db_path,
+        trade_date_iso="2026-03-08",
+        source_name="KIS_DOMESTIC_DERIVATIVES",
+        put_call_ratio=1.22,
+        implied_volatility=20.4,
+        open_interest_total=99000,
+        futures_foreign_net_buy=50,
+        futures_institution_net_buy=-20,
+    )
+    _insert_derivatives_row(
+        db_path,
+        trade_date_iso="2026-03-08",
+        source_name="KRX_DERIVATIVES_REFERENCE",
+        put_call_ratio=1.0,
+        implied_volatility=19.0,
+        open_interest_total=100000,
+        futures_foreign_net_buy=100,
+        futures_institution_net_buy=100,
+    )
+
+    with get_connection(db_path) as connection:
+        previous_row = service._select_previous_derivatives_row(connection, trade_date_iso="2026-03-09")
+
+    assert previous_row is not None
+    assert previous_row["source_name"] == "KRX_DERIVATIVES_REFERENCE"
+    assert previous_row["put_call_ratio"] == 1.0
 
 
 def test_bearish_case(tmp_path: Path) -> None:

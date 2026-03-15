@@ -1941,10 +1941,26 @@ class MarketBriefingSignalService:
     def _select_previous_derivatives_row(self, connection, *, trade_date_iso: str) -> dict[str, Any] | None:
         row = connection.execute(
             """
+            WITH ranked AS (
+                SELECT
+                    *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY trade_date
+                        ORDER BY
+                            CASE
+                                WHEN source_name = 'KRX_DERIVATIVES_REFERENCE' THEN 0
+                                WHEN source_name = 'KRX_DERIVATIVES_MANUAL' THEN 1
+                                ELSE 2
+                            END,
+                            id DESC
+                    ) AS row_rank
+                FROM derivatives_daily_metrics
+                WHERE trade_date < ?
+            )
             SELECT *
-            FROM derivatives_daily_metrics
-            WHERE trade_date < ?
-            ORDER BY trade_date DESC, id DESC
+            FROM ranked
+            WHERE row_rank = 1
+            ORDER BY trade_date DESC
             LIMIT 1
             """,
             (trade_date_iso,),

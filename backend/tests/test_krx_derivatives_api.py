@@ -460,6 +460,37 @@ def test_existing_data_reuse_priority(tmp_path: Path, monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_summary_endpoint_falls_back_to_kis_domestic_daily_metrics(tmp_path: Path, monkeypatch) -> None:
+    db_path = _with_db(monkeypatch, tmp_path)
+    try:
+        _insert_derivatives_row(
+            db_path,
+            trade_date_iso="2026-03-09",
+            source_name="KIS_DOMESTIC_DERIVATIVES",
+            put_call_ratio=0.97,
+            implied_volatility=17.9,
+            open_interest_total=1015000,
+            call_open_interest=540000,
+            put_open_interest=475000,
+            futures_foreign_net_buy=1450,
+            futures_institution_net_buy=620,
+            futures_individual_net_buy=-2070,
+        )
+        _insert_pre_open_snapshot_row(db_path, trade_date_iso="2026-03-09", change_rate=0.34)
+
+        client = TestClient(app)
+        response = client.get("/api/krx/derivatives/summary", params={"date": "2026-03-09"})
+        assert response.status_code == 200
+        item = response.json()["item"]
+
+        assert item["pcr"] == 0.97
+        assert item["pre_open_futures"]["signal"] == "gap_up"
+        assert item["source_coverage"]["sections"][0]["source_name"] == "KIS_DOMESTIC_DERIVATIVES"
+        assert "KIS_DOMESTIC_DERIVATIVES" in item["source_coverage"]["source_names"]
+    finally:
+        get_settings.cache_clear()
+
+
 def test_no_llm_deterministic_briefing_path(tmp_path: Path, monkeypatch) -> None:
     db_path = _with_db(monkeypatch, tmp_path)
     try:

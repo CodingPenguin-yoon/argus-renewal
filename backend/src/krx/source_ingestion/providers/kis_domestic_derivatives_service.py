@@ -6,7 +6,11 @@ from typing import Any
 
 import httpx
 
-from ..briefing_models import BriefingProviderBatch, MarketIntradaySnapshotRecord
+from ..briefing_models import (
+    BriefingProviderBatch,
+    DerivativesDailyMetricRecord,
+    MarketIntradaySnapshotRecord,
+)
 from ._briefing_common import (
     extract_rows,
     fetch_json_with_retries,
@@ -102,17 +106,25 @@ class KisDomesticDerivativesService:
             payload, retry_count = self._fetch_api_payload(trade_date=trade_date)
 
         rows = self._extract_rows(payload=payload, trade_date=trade_date)
+        summary_record = self._normalize_summary_record(
+            payload=payload,
+            trade_date=trade_date,
+            source_url=source_url,
+        )
         if not rows:
             logger.warning(
                 "kis_domestic_derivatives_rows_missing",
                 extra={"trade_date": trade_date.isoformat()},
             )
-            return BriefingProviderBatch(records=[], retry_count=retry_count)
+            records = [summary_record] if summary_record is not None else []
+            return BriefingProviderBatch(records=records, retry_count=retry_count)
 
         snapshot_at = (snapshot_time or datetime.now(timezone.utc)).astimezone(timezone.utc)
         snapshot_iso = snapshot_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
-        records: list[MarketIntradaySnapshotRecord] = []
+        records: list[MarketIntradaySnapshotRecord | DerivativesDailyMetricRecord] = []
+        if summary_record is not None:
+            records.append(summary_record)
         for index, row in enumerate(rows):
             records.append(
                 self._normalize_row(
@@ -170,9 +182,161 @@ class KisDomesticDerivativesService:
             direct_row = payload.get(trade_date.isoformat())
             if isinstance(direct_row, dict):
                 return [direct_row]
-            if all(not isinstance(value, (dict, list)) for value in payload.values()):
+            if all(not isinstance(value, (dict, list)) for value in payload.values()) and self._looks_like_snapshot_row(payload):
                 return [payload]
         return extract_rows(payload, self.response_paths)
+
+    def _normalize_summary_record(
+        self,
+        *,
+        payload: Any,
+        trade_date: date,
+        source_url: str | None,
+    ) -> DerivativesDailyMetricRecord | None:
+        summary_payload = self._extract_summary_payload(payload)
+        if summary_payload is None:
+            return None
+
+        record = DerivativesDailyMetricRecord(
+            source_name="KIS_DOMESTIC_DERIVATIVES",
+            trade_date=trade_date.isoformat(),
+            metric_scope="KRX_DERIVATIVES",
+            put_call_ratio=pick_float(
+                summary_payload,
+                self._aliases("put_call_ratio", ("put_call_ratio", "putcall_ratio", "pcr")),
+            ),
+            implied_volatility=pick_float(
+                summary_payload,
+                self._aliases("implied_volatility", ("implied_volatility", "iv", "impl_vol", "vkospi")),
+            ),
+            open_interest_total=pick_float(
+                summary_payload,
+                self._aliases("open_interest_total", ("open_interest_total", "open_interest", "total_open_interest")),
+            ),
+            call_open_interest=pick_float(
+                summary_payload,
+                self._aliases("call_open_interest", ("call_open_interest", "call_oi", "call_openint")),
+            ),
+            put_open_interest=pick_float(
+                summary_payload,
+                self._aliases("put_open_interest", ("put_open_interest", "put_oi", "put_openint")),
+            ),
+            futures_investor_foreign_net_buy=pick_float(
+                summary_payload,
+                self._aliases(
+                    "futures_investor_foreign_net_buy",
+                    ("futures_investor_foreign_net_buy", "futures_foreign_net_buy", "fut_frgn_net_buy"),
+                ),
+            ),
+            futures_investor_institution_net_buy=pick_float(
+                summary_payload,
+                self._aliases(
+                    "futures_investor_institution_net_buy",
+                    ("futures_investor_institution_net_buy", "futures_institution_net_buy", "fut_inst_net_buy"),
+                ),
+            ),
+            futures_investor_individual_net_buy=pick_float(
+                summary_payload,
+                self._aliases(
+                    "futures_investor_individual_net_buy",
+                    ("futures_investor_individual_net_buy", "futures_individual_net_buy", "fut_indv_net_buy"),
+                ),
+            ),
+            options_investor_foreign_net_buy=pick_float(
+                summary_payload,
+                self._aliases(
+                    "options_investor_foreign_net_buy",
+                    ("options_investor_foreign_net_buy", "options_foreign_net_buy", "opt_frgn_net_buy"),
+                ),
+            ),
+            options_investor_institution_net_buy=pick_float(
+                summary_payload,
+                self._aliases(
+                    "options_investor_institution_net_buy",
+                    ("options_investor_institution_net_buy", "options_institution_net_buy", "opt_inst_net_buy"),
+                ),
+            ),
+            options_investor_individual_net_buy=pick_float(
+                summary_payload,
+                self._aliases(
+                    "options_investor_individual_net_buy",
+                    ("options_investor_individual_net_buy", "options_individual_net_buy", "opt_indv_net_buy"),
+                ),
+            ),
+            futures_volume_total=pick_float(
+                summary_payload,
+                self._aliases("futures_volume_total", ("futures_volume_total", "futures_volume", "fut_volume")),
+            ),
+            options_volume_total=pick_float(
+                summary_payload,
+                self._aliases("options_volume_total", ("options_volume_total", "options_volume", "opt_volume")),
+            ),
+            source_url=source_url,
+            source_record_id=pick_text(
+                summary_payload,
+                self._aliases("source_record_id", ("id", "record_id", "seq", "trade_date")),
+            )
+            or trade_date.isoformat(),
+            raw_payload=summary_payload,
+            additional_metrics={
+                "source_date": pick_text(summary_payload, self._aliases("source_date", ("trade_date", "date"))),
+                "note": pick_text(summary_payload, self._aliases("note", ("note", "remark", "memo"))),
+            },
+        )
+
+        if not any(
+            value is not None
+            for value in (
+                record.put_call_ratio,
+                record.implied_volatility,
+                record.open_interest_total,
+                record.call_open_interest,
+                record.put_open_interest,
+                record.futures_investor_foreign_net_buy,
+                record.options_investor_foreign_net_buy,
+            )
+        ):
+            return None
+
+        return record
+
+    def _extract_summary_payload(self, payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+
+        candidates: list[dict[str, Any]] = [payload]
+        for key in ("summary", "market_summary", "overview", "totals", "market_totals"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                candidates.append(value)
+
+        for candidate in candidates:
+            if self._has_summary_metrics(candidate):
+                return candidate
+        return None
+
+    def _has_summary_metrics(self, payload: dict[str, Any]) -> bool:
+        return any(
+            pick_float(payload, self._aliases(field, aliases)) is not None
+            for field, aliases in (
+                ("put_call_ratio", ("put_call_ratio", "putcall_ratio", "pcr")),
+                ("implied_volatility", ("implied_volatility", "iv", "impl_vol", "vkospi")),
+                ("open_interest_total", ("open_interest_total", "open_interest", "total_open_interest")),
+                (
+                    "futures_investor_foreign_net_buy",
+                    ("futures_investor_foreign_net_buy", "futures_foreign_net_buy", "fut_frgn_net_buy"),
+                ),
+            )
+        )
+
+    def _looks_like_snapshot_row(self, payload: dict[str, Any]) -> bool:
+        return any(
+            pick_text(payload, self._aliases(field, aliases))
+            for field, aliases in (
+                ("instrument_code", ("instrument_code", "futures_code", "symbol", "code", "item_code", "pdno")),
+                ("instrument_name", ("instrument_name", "name", "prdt_name", "hts_kor_isnm")),
+            )
+        )
 
     def _normalize_row(
         self,
