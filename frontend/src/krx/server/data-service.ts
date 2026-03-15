@@ -191,6 +191,18 @@ function buildMacroReferenceCards(macroNews: MacroNews[]) {
     }));
 }
 
+function buildOverviewMacroWidgets(macroNews: MacroNews[], fredReferenceCards: MacroReferenceCard[]) {
+  const baseCards = buildMacroReferenceCards(macroNews);
+  const latestByKey = new Map(baseCards.map((item) => [item.key, item]));
+  const us10yCard = fredReferenceCards.find((item) => item.key === "us10y") ?? fredReferenceCards[0] ?? null;
+
+  return [
+    latestByKey.get("환율") ?? null,
+    latestByKey.get("유가/에너지") ?? null,
+    us10yCard ?? latestByKey.get("금리") ?? null,
+  ].filter((item): item is MacroReferenceCard => Boolean(item));
+}
+
 function toneFromChange(value: number | null): MacroReferenceCard["tone"] {
   if (value === null || value === 0) return "neutral";
   return value > 0 ? "positive" : "negative";
@@ -419,13 +431,14 @@ export async function getGlobalEventsTabData() {
 }
 
 export async function getOverviewTabData(): Promise<OverviewTabData> {
-  const [marketSignal, newsTab, globalEvents, macroNews] = await Promise.all([
+  const [marketSignal, newsTab, globalEvents, macroNews, fredReferenceCards] = await Promise.all([
     getMarketSignalTabData(),
     getNewsTabData(),
     getGlobalEventsTabData(),
     getMacroNews({ revalidate: KRX_SHORT_REVALIDATE_SECONDS }),
+    getBackendMacroReferenceCards(),
   ]);
-  const macroWidgets = buildMacroReferenceCards(macroNews).slice(0, 3);
+  const macroWidgets = buildOverviewMacroWidgets(macroNews, fredReferenceCards);
 
   const marketCard = marketSignal.summary.cards[0];
   const globalHighlight = globalEvents.highlights[0];

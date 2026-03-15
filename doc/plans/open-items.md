@@ -3,7 +3,7 @@
 | ID | Area | Item | Why | Next Action | Status |
 | --- | --- | --- | --- | --- | --- |
 | DATA-003 | Backend | KIS derivatives adapter 추가 | 파생 summary를 실제 매매 source와 맞춰야 함 | 최소 endpoint/필드 확정 후 adapter 추가 | Open |
-| DATA-004 | Frontend | 대시보드/시장 신호 source 연결 확장 | AI 인사이트는 연결됐고 나머지 표면에도 provenance를 맞춰야 함 | overview / market-signal wiring | Open |
+| DATA-004 | Frontend | 시장 신호 source 연결 확장 | 대시보드와 AI 인사이트는 연결됐고 시장 신호 provenance가 아직 남아 있음 | market-signal wiring | Open |
 | DATA-005 | Backend | KIS precedence 정책 고정 | 기존 KRX reference와 KIS가 섞일 때 우선순위 충돌 가능성 존재 | source priority 규칙과 테스트 추가 | Open |
 
 ## Recently Closed

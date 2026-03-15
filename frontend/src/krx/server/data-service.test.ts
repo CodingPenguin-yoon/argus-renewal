@@ -257,6 +257,22 @@ describe("overview and macro aggregators", () => {
   });
 
   it("builds app-wide overview data from existing tab services", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        updated_at: null,
+        items: [],
+        coverage: {
+          state: "empty",
+          available_items: 0,
+          expected_items: 2,
+          provider: "disabled",
+          summary: "disabled",
+          note: "feature_flag_disabled",
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
     const marketSignalSummary = {
       requestedDate: null,
       date: "2026-03-15",
@@ -488,10 +504,259 @@ describe("overview and macro aggregators", () => {
 
     expect(getMacroNews).toHaveBeenCalledWith({ revalidate: KRX_SHORT_REVALIDATE_SECONDS });
     expect(result.macroWidgets.map((item) => item.label)).toEqual(["환율", "WTI·에너지", "금리"]);
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:4000/api/krx/macro-reference/cards", {
+      next: { revalidate: 3600 },
+    });
     expect(result.marketToneLine).toContain("상방");
     expect(result.gatewayPanels.map((item) => item.title)).toEqual(["시장 신호", "시장 뉴스", "매크로 캘린더"]);
     expect(result.reportLinks[0]?.title).toBe("글로벌 1");
     expect(result.globalHighlights[0]?.title).toBe("연준 발언");
+  });
+
+  it("uses the 미국채 10년물 FRED card for overview widgets even if backend order changes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        updated_at: "2026-03-15T01:10:00Z",
+        items: [
+          {
+            key: "fedfunds",
+            label: "연방기금실효금리(월평균)",
+            summary: "연방기금실효금리(월평균) 4.33% · 2026-03-01 기준",
+            value: 4.33,
+            value_display: "4.33%",
+            change_value: 0,
+            change_display: "0.00%p",
+            unit: "pct",
+            stale: false,
+            source: {
+              key: "FRED",
+              name: "Federal Reserve Economic Data",
+              series_id: "FEDFUNDS",
+              series_name: "FEDFUNDS",
+              url: "https://fred.stlouisfed.org/series/FEDFUNDS",
+              observed_at: "2026-03-01",
+              updated_at: "2026-03-15T01:10:00Z",
+            },
+            freshness: {
+              status: "fresh",
+              observed_at: "2026-03-01",
+              age_seconds: 0,
+              ttl_seconds: 3888000,
+            },
+            metadata: {
+              series_id: "FEDFUNDS",
+              series_name: "FEDFUNDS",
+              semantics: "monthly_average_effective_federal_funds_rate_percent",
+              frequency: "monthly",
+              freshness_ttl_seconds: 3888000,
+              provider_mode: "file",
+              retry_count: 0,
+            },
+          },
+          {
+            key: "us10y",
+            label: "미국채 10년물",
+            summary: "미국채 10년물 4.31% · 2026-03-15 기준",
+            value: 4.31,
+            value_display: "4.31%",
+            change_value: 0.05,
+            change_display: "+0.05%p",
+            unit: "pct",
+            stale: false,
+            source: {
+              key: "FRED",
+              name: "Federal Reserve Economic Data",
+              series_id: "DGS10",
+              series_name: "DGS10",
+              url: "https://fred.stlouisfed.org/series/DGS10",
+              observed_at: "2026-03-15",
+              updated_at: "2026-03-15T01:10:00Z",
+            },
+            freshness: {
+              status: "fresh",
+              observed_at: "2026-03-15",
+              age_seconds: 0,
+              ttl_seconds: 172800,
+            },
+            metadata: {
+              series_id: "DGS10",
+              series_name: "DGS10",
+              semantics: "daily_market_yield_percent",
+              frequency: "daily",
+              freshness_ttl_seconds: 172800,
+              provider_mode: "file",
+              retry_count: 0,
+            },
+          },
+        ],
+        coverage: {
+          state: "full",
+          available_items: 2,
+          expected_items: 2,
+          provider: "file",
+          summary: "full",
+          note: null,
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    vi.mocked(getMarketSignalSummary).mockResolvedValue({
+      requestedDate: null,
+      date: "2026-03-15",
+      requestedDateAvailable: true,
+      isLatestFallback: false,
+      interpretationLine: "시장 톤은 상방 쪽으로 기울고 있습니다.",
+      explanationText: "수급과 파생을 함께 보면 상방 정합성이 높습니다.",
+      explanationSource: "rule_based",
+      directionalBias: "bullish",
+      gapBias: "gap_up",
+      volatilityBias: "stable",
+      confidenceBucket: "high",
+      sourceCoverage: {
+        tradeDate: "2026-03-15",
+        state: "full",
+        coverageRatio: 1,
+        label: "소스 6/6",
+        sourceNames: ["MARKET_BRIEFINGS"],
+        sections: [],
+      },
+      cards: [],
+      lastUpdatedAt: "2026-03-15T01:10:00Z",
+      missingFields: [],
+    });
+    vi.mocked(getDerivativesSummary).mockResolvedValue({
+      requestedDate: null,
+      date: "2026-03-15",
+      requestedDateAvailable: true,
+      isLatestFallback: false,
+      sourceCoverage: {
+        tradeDate: "2026-03-15",
+        coverageRatio: 1,
+        state: "full",
+        label: "소스 5/5",
+        sourceNames: ["KRX_DERIVATIVES_REFERENCE"],
+        sections: [],
+      },
+      pcr: null,
+      pcrChange: null,
+      callNotional: null,
+      putNotional: null,
+      callOpenInterest: null,
+      putOpenInterest: null,
+      openInterestTotal: null,
+      oiChange: null,
+      foreignFuturesNetPosition: null,
+      impliedVolatility: null,
+      impliedVolatilityChange: null,
+      directionalBias: "neutral",
+      gapBias: "flat",
+      volatilityBias: "stable",
+      confidenceBucket: "low",
+      explanationText: "파생 요약 대기",
+      briefingSource: "rule_based",
+      participantSummary: [],
+      detailLevel: 1,
+      components: [],
+      lastUpdatedAt: null,
+      missingFields: [],
+      nightFutures: {
+        signal: null,
+        changeRate: null,
+        price: null,
+        priceChange: null,
+        instrumentCode: null,
+        instrumentName: null,
+        snapshotTime: null,
+        sourceName: null,
+        sourceUrl: null,
+      },
+    });
+    vi.mocked(getDerivativesTrends).mockResolvedValue({ preset: "20d", date: "2026-03-15", items: [], missingFields: [] });
+    vi.mocked(getDerivativesInvestorFlow).mockResolvedValue({
+      preset: "20d",
+      date: "2026-03-15",
+      items: [],
+      missingFields: [],
+    });
+    vi.mocked(getMarketNewsDashboard).mockResolvedValue(buildDashboardFixture());
+    vi.mocked(getMarketNewsCards).mockResolvedValue([
+      buildCard({
+        id: "kr-latest",
+        title: "최신 KR 카드",
+        updatedAt: "2026-03-15T00:05:00Z",
+        rankingScore: 0.7,
+      }),
+    ]);
+    vi.mocked(getGlobalEventsDashboardData).mockResolvedValue({
+      highlights: [],
+      upcoming: [],
+      week: [],
+      coverage: {
+        state: "partial",
+        coverageRatio: 0.5,
+        availableSources: 1,
+        expectedSources: 2,
+        summary: "일부 반영",
+        updatedAt: "2026-03-15T00:40:00Z",
+        items: [],
+      },
+    });
+    vi.mocked(getMacroNews).mockResolvedValue([
+      {
+        id: "macro-fx",
+        type: "macro",
+        title: "달러 강세",
+        summary: "요약",
+        whyItMatters: "환율 부담이 커집니다.",
+        source: "연합뉴스",
+        sourceUrl: "https://example.com/fx",
+        publishedAt: "2026-03-15T01:05:00Z",
+        credibilityScore: 0.8,
+        materialityScore: 0.8,
+        editorialScore: 0.8,
+        storyState: "ONGOING",
+        editorialReason: null,
+        aiConfidence: 0.7,
+        sentiment: "negative",
+        importance: "high",
+        relatedSectors: [],
+        relatedTickers: [],
+        category: "환율",
+        tags: [],
+      },
+      {
+        id: "macro-oil",
+        type: "macro",
+        title: "유가 반등",
+        summary: "요약",
+        whyItMatters: "에너지 비용 변수입니다.",
+        source: "로이터",
+        sourceUrl: "https://example.com/oil",
+        publishedAt: "2026-03-15T01:00:00Z",
+        credibilityScore: 0.8,
+        materialityScore: 0.7,
+        editorialScore: 0.7,
+        storyState: "NEW",
+        editorialReason: null,
+        aiConfidence: 0.7,
+        sentiment: "negative",
+        importance: "medium",
+        relatedSectors: [],
+        relatedTickers: [],
+        category: "유가/에너지",
+        tags: [],
+      },
+    ]);
+
+    const result = await getOverviewTabData();
+
+    expect(result.macroWidgets.map((item) => item.label)).toEqual(["환율", "WTI·에너지", "미국채 10년물"]);
+    expect(result.macroWidgets[2]?.sourceLabel).toBe("FRED");
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:4000/api/krx/macro-reference/cards", {
+      next: { revalidate: 3600 },
+    });
   });
 
   it("builds macro tab data from existing macro, derivatives, and global-event services", async () => {

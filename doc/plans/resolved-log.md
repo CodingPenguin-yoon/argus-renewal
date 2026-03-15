@@ -3,6 +3,7 @@
 ## 2026-03-16
 - backend에 `GET /api/krx/macro-reference/cards`를 추가하고, `DGS10`과 `FEDFUNDS`를 읽는 FRED reference contract를 `disabled / file / api` 모드로 고정했습니다.
 - `AI 인사이트`가 `/api/krx/macro-reference/cards`를 읽도록 연결하고, FRED 카드가 준비되면 기존 macro news의 `금리` 카드를 대체하도록 정리했습니다.
+- `대시보드`도 같은 FRED reference 경로를 읽도록 연결하고, overview 위젯에서는 `미국채 10년물` 카드를 우선 사용하도록 정리했습니다.
 - KRX IA를 `대시보드 / AI 인사이트 / 시장 신호 / 시장 뉴스 / 매크로 캘린더` 기준으로 정리했습니다.
 - 공통 헤더의 대형 해석 블록을 축소하고, `오늘의 시장 톤`을 `AI 인사이트` 중심 콘텐츠로 이동했습니다.
 - `doc/`를 `architecture / domains / plans / reference / troubleshooting` 구조로 정리했습니다.
