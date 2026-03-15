@@ -27,6 +27,12 @@ KRX 해석형 MVP를 위한 모노레포입니다.
 - `시장 신호`와 관련 파생 데이터 fetch, `AI 인사이트`의 macro news fetch는 30초 재검증을 사용합니다.
 - 상단 GNB는 안정적인 탭만 적극 prefetch하고, `시장 뉴스`는 제외합니다.
 
+## KIS / FRED source 전략
+- `파생 데이터`는 KIS로 유지합니다. 이 영역은 장기적으로 호가/체결/주문과 연결될 수 있는 시장 데이터 경로입니다.
+- `미국채 10년물`과 `미국 금리 reference`는 FRED로 분리합니다.
+- 1차 backend 구현은 `GET /api/krx/macro-reference/cards` 기준으로 들어가며, 초기 series는 `DGS10`과 `FEDFUNDS`만 고정합니다.
+- 로컬 기본값은 `FRED_PROVIDER=disabled`라서 외부 key 없이 그대로 실행됩니다. 실제 연동 전에는 `file` fixture로 먼저 검증할 수 있습니다.
+
 ## 뉴스 자동화 요약
 - 수집/가공 스케줄은 앱 내부 루프가 아니라 `python3 -m src.krx.source_ingestion.cli run-news-automation` 를 1분 cron tick으로 호출하는 구조입니다.
 - scheduled news sync는 기본 시장 키워드(`RAW_INGESTION_SCHEDULE_MARKET_NEWS_KEYWORDS`)로 KR 시장 뉴스를 먼저 모으고, 이후 batch triage가 걸러냅니다.

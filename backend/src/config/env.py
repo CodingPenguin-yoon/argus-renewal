@@ -69,6 +69,15 @@ class Settings(BaseSettings):
     krx_derivatives_reference_query_params_json: Optional[str] = None
     krx_derivatives_reference_field_alias_map_json: Optional[str] = None
 
+    fred_provider: str = "disabled"
+    fred_file_path: Optional[str] = None
+    fred_base_url: str = "https://api.stlouisfed.org/fred"
+    fred_observations_path: str = "/series/observations"
+    fred_api_key: Optional[str] = None
+    fred_timeout_seconds: float = 20.0
+    fred_max_retries: int = 3
+    fred_backoff_seconds: float = 1.0
+
     raw_ingestion_timeout_seconds: float = 20.0
     raw_ingestion_max_retries: int = 3
     raw_ingestion_backoff_seconds: float = 1.0

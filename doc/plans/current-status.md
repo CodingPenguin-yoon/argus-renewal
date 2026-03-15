@@ -12,15 +12,16 @@
 - 사용자 표면 canonical 경로를 `/krx/dashboard`, `/krx/insights`, `/krx/macro-calendar`로 정리하고, 기존 경로는 redirect로 유지했습니다.
 - 오늘 작업의 배경과 의사결정을 쉬운 말로 설명하는 `doc/troubleshooting/` 문서를 추가했습니다.
 - 다음 라운드 source 전략으로 `파생=KIS`, `미국채 10년물/미국 금리=FRED` 기준 문서와 rollout plan을 추가했습니다.
+- backend에 FRED macro reference route를 추가했고, `DGS10`과 `FEDFUNDS`를 `disabled | file | api` 모드로 읽는 1차 contract를 고정했습니다.
 
 ## In Progress
-- 다음 데이터 source 연동 라운드의 범위와 순서를 문서로 고정했습니다.
+- FRED backend path는 완료했고, 다음은 frontend reference wiring과 KIS derivatives adapter 범위 확정입니다.
 
 ## Next
-1. FRED rates adapter 범위와 series 확정
+1. frontend에서 `/api/krx/macro-reference/cards`를 AI 인사이트 reference card에 연결
 2. KIS derivatives adapter 범위와 endpoint 확정
-3. backend provider wiring
-4. frontend 연결
+3. KIS source precedence와 provenance 정책 확정
+4. 시장 신호/대시보드까지 source wiring 확장
 
 ## Risks
 - legacy redirect는 당분간 유지되므로, 외부 링크나 북마크는 새 경로와 구 경로가 공존할 수 있습니다.

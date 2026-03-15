@@ -30,11 +30,20 @@
 
 ### FRED
 - `DGS10`: 미국채 10년물
-- `FEDFUNDS`: 연방기금금리
+- `FEDFUNDS`: 연방기금실효금리 월평균
 
 ### 2차 검토 series
 - `DGS2`
 - `SOFR`
+
+## 1차 backend contract
+- route: `GET /api/krx/macro-reference/cards`
+- provider mode:
+  - `disabled`
+  - `file`
+  - `api`
+- 기본 local mode는 `disabled`입니다.
+- file fixture를 먼저 통과시키고, API mode는 FRED key가 준비된 뒤 활성화합니다.
 
 ## provider family
 - `KIS`: `MARKET_DATA`
