@@ -378,6 +378,88 @@ def test_partial_provider_failure_keeps_successful_provider_data(tmp_path: Path)
     assert status_by_provider["KRX_DERIVATIVES_REFERENCE"] == "FAILED"
 
 
+def test_kis_domestic_inquire_price_object_payload_support(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "briefing.db")
+    trade_date = date(2026, 3, 9)
+
+    domestic_file = _write_json(
+        tmp_path / "domestic_inquire_price.json",
+        {
+            "output1": {
+                "futs_shrn_iscd": "101W09",
+                "hts_kor_isnm": "KOSPI200 선물 최근월",
+                "futs_prpr": "402.15",
+                "futs_prdy_vrss": "1.20",
+                "futs_prdy_ctrt": "0.30",
+                "acml_vol": "15000",
+                "hts_otst_stpl_qty": "210000",
+                "hts_ints_vltl": "17.90",
+            },
+            "output2": {
+                "put_call_ratio": "0.97",
+                "open_interest_total": "1015000",
+                "futures_investor_foreign_net_buy": "1450",
+            },
+            "output3": {
+                "hist_vltl": "18.10",
+                "note": "official-kis-object-shape",
+            },
+        },
+    )
+
+    service = _make_service(
+        db_path=db_path,
+        domestic=KisDomesticDerivativesService(
+            provider="file",
+            file_path=domestic_file,
+            base_url="https://openapi.koreainvestment.com:9443",
+            endpoint_path="/uapi/domestic-futureoption/v1/quotations/inquire-price",
+            app_key=None,
+            app_secret=None,
+            access_token=None,
+        ),
+    )
+
+    result = service.collect_pre_open_snapshots(
+        trade_date=trade_date,
+        snapshot_time=datetime(2026, 3, 9, 23, 20, tzinfo=timezone.utc),
+    )
+
+    assert result.status == "SUCCESS"
+
+    with get_connection(db_path) as connection:
+        snapshot_row = connection.execute(
+            """
+            SELECT instrument_code, instrument_name, price, price_change, change_rate, volume, open_interest, implied_volatility
+            FROM market_intraday_snapshots
+            WHERE trade_date = '2026-03-09' AND source_name = 'KIS_DOMESTIC_DERIVATIVES'
+            """
+        ).fetchone()
+        summary_row = connection.execute(
+            """
+            SELECT put_call_ratio, open_interest_total, futures_investor_foreign_net_buy, implied_volatility
+            FROM derivatives_daily_metrics
+            WHERE trade_date = '2026-03-09' AND source_name = 'KIS_DOMESTIC_DERIVATIVES'
+            """
+        ).fetchone()
+
+    assert snapshot_row is not None
+    assert snapshot_row["instrument_code"] == "101W09"
+    assert snapshot_row["instrument_name"] == "KOSPI200 선물 최근월"
+    assert snapshot_row["price"] == 402.15
+    assert snapshot_row["price_change"] == 1.2
+    assert snapshot_row["change_rate"] == 0.3
+    assert snapshot_row["volume"] == 15000
+    assert snapshot_row["open_interest"] == 210000
+    assert snapshot_row["implied_volatility"] == 17.9
+
+    assert summary_row is not None
+    assert summary_row["put_call_ratio"] == 0.97
+    assert summary_row["open_interest_total"] == 1015000
+    assert summary_row["futures_investor_foreign_net_buy"] == 1450
+    assert summary_row["implied_volatility"] == 17.9
+
+
 def test_pre_open_rerun_is_idempotent(tmp_path: Path) -> None:
     db_path = str(tmp_path / "briefing.db")
 

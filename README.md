@@ -35,6 +35,7 @@ KRX 해석형 MVP를 위한 모노레포입니다.
 - 파생 summary contract에는 `KIS_DOMESTIC_DERIVATIVES` 기반 `pre_open_futures`가 추가되어, 개장 전 선물 snapshot을 별도 필드로 받을 수 있습니다.
 - `KIS_DOMESTIC_DERIVATIVES` payload에 market-wide summary 필드가 있으면 `derivatives_daily_metrics` row도 함께 적재되며, KRX row가 없을 때 summary API가 이 경로로 fallback할 수 있습니다.
 - `derivatives_daily_metrics` source priority는 `KRX_DERIVATIVES_MANUAL -> KIS_DOMESTIC_DERIVATIVES -> KRX_DERIVATIVES_REFERENCE -> others` 순서로 고정합니다.
+- `KisDomesticDerivativesService`는 이제 한국투자 공식 `inquire-price` 응답 형태인 `output1/output2/output3` object payload도 읽습니다. 다만 `derivatives_daily_metrics` summary row는 market-wide 성격의 필드가 실제 payload에 있을 때만 함께 적재됩니다.
 - 로컬 기본값은 `FRED_PROVIDER=disabled`라서 외부 key 없이 그대로 실행됩니다. 실제 연동 전에는 `file` fixture로 먼저 검증할 수 있습니다.
 
 ## 뉴스 자동화 요약

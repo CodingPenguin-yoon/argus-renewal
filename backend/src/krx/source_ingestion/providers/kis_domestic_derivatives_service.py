@@ -25,6 +25,8 @@ from ._briefing_common import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_KIS_DOMESTIC_DERIVATIVES_TR_ID = "FHMIF10000000"
+
 
 class KisDomesticDerivativesService:
     def __init__(
@@ -59,7 +61,7 @@ class KisDomesticDerivativesService:
         self.response_paths = parse_response_paths(response_paths)
         self.query_params = parse_query_params_json(query_params_json)
         self.field_alias_map = parse_field_alias_map_json(field_alias_map_json)
-        self.tr_id = (tr_id or "").strip() or None
+        self.tr_id = (tr_id or "").strip() or DEFAULT_KIS_DOMESTIC_DERIVATIVES_TR_ID
         self._http_client = http_client
 
     def is_enabled(self) -> tuple[bool, str | None]:
@@ -184,7 +186,13 @@ class KisDomesticDerivativesService:
                 return [direct_row]
             if all(not isinstance(value, (dict, list)) for value in payload.values()) and self._looks_like_snapshot_row(payload):
                 return [payload]
-        return extract_rows(payload, self.response_paths)
+            object_rows = self._extract_object_rows(payload)
+            if object_rows:
+                return object_rows
+        try:
+            return extract_rows(payload, self.response_paths)
+        except ValueError:
+            return []
 
     def _normalize_summary_record(
         self,
@@ -207,7 +215,10 @@ class KisDomesticDerivativesService:
             ),
             implied_volatility=pick_float(
                 summary_payload,
-                self._aliases("implied_volatility", ("implied_volatility", "iv", "impl_vol", "vkospi")),
+                self._aliases(
+                    "implied_volatility",
+                    ("implied_volatility", "iv", "impl_vol", "vkospi", "hts_ints_vltl", "hist_vltl", "unas_hist_vltl"),
+                ),
             ),
             open_interest_total=pick_float(
                 summary_payload,
@@ -301,19 +312,61 @@ class KisDomesticDerivativesService:
         return record
 
     def _extract_summary_payload(self, payload: Any) -> dict[str, Any] | None:
-        if not isinstance(payload, dict):
+        candidates = self._collect_summary_candidates(payload)
+        if not candidates:
             return None
 
-        candidates: list[dict[str, Any]] = [payload]
-        for key in ("summary", "market_summary", "overview", "totals", "market_totals"):
-            value = payload.get(key)
-            if isinstance(value, dict):
-                candidates.append(value)
+        merged: dict[str, Any] = {}
+        for candidate in candidates:
+            merged.update(candidate)
+        if merged and self._has_summary_metrics(merged):
+            return merged
 
         for candidate in candidates:
             if self._has_summary_metrics(candidate):
                 return candidate
         return None
+
+    def _collect_summary_candidates(self, payload: Any) -> list[dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return []
+
+        candidates: list[dict[str, Any]] = []
+        seen: set[int] = set()
+
+        def _append(candidate: Any) -> None:
+            if not isinstance(candidate, dict):
+                return
+            marker = id(candidate)
+            if marker in seen:
+                return
+            seen.add(marker)
+            candidates.append(candidate)
+
+        _append(payload)
+        for key in (
+            "summary",
+            "market_summary",
+            "overview",
+            "totals",
+            "market_totals",
+            "output1",
+            "output2",
+            "output3",
+        ):
+            _append(payload.get(key))
+        for value in payload.values():
+            _append(value)
+
+        return candidates
+
+    def _extract_object_rows(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for key in ("output1", "output", "item", "data"):
+            candidate = payload.get(key)
+            if isinstance(candidate, dict) and self._looks_like_snapshot_row(candidate):
+                rows.append(candidate)
+        return rows
 
     def _has_summary_metrics(self, payload: dict[str, Any]) -> bool:
         return any(
@@ -333,7 +386,19 @@ class KisDomesticDerivativesService:
         return any(
             pick_text(payload, self._aliases(field, aliases))
             for field, aliases in (
-                ("instrument_code", ("instrument_code", "futures_code", "symbol", "code", "item_code", "pdno")),
+                (
+                    "instrument_code",
+                    (
+                        "instrument_code",
+                        "futures_code",
+                        "symbol",
+                        "code",
+                        "item_code",
+                        "pdno",
+                        "futs_shrn_iscd",
+                        "optn_shrn_iscd",
+                    ),
+                ),
                 ("instrument_name", ("instrument_name", "name", "prdt_name", "hts_kor_isnm")),
             )
         )
@@ -358,6 +423,8 @@ class KisDomesticDerivativesService:
                     "code",
                     "item_code",
                     "pdno",
+                    "futs_shrn_iscd",
+                    "optn_shrn_iscd",
                 ),
             ),
         )
@@ -378,19 +445,25 @@ class KisDomesticDerivativesService:
                 row,
                 self._aliases("instrument_name", ("instrument_name", "name", "prdt_name", "hts_kor_isnm")),
             ),
-            price=pick_float(row, self._aliases("price", ("price", "current_price", "stck_prpr", "last"))),
+            price=pick_float(
+                row,
+                self._aliases("price", ("price", "current_price", "stck_prpr", "futs_prpr", "last")),
+            ),
             price_change=pick_float(
                 row,
-                self._aliases("price_change", ("price_change", "change", "prdy_vrss", "diff")),
+                self._aliases("price_change", ("price_change", "change", "prdy_vrss", "futs_prdy_vrss", "diff")),
             ),
             change_rate=pick_float(
                 row,
-                self._aliases("change_rate", ("change_rate", "chg_rate", "prdy_ctrt", "rate")),
+                self._aliases("change_rate", ("change_rate", "chg_rate", "prdy_ctrt", "futs_prdy_ctrt", "rate")),
             ),
             volume=pick_float(row, self._aliases("volume", ("volume", "acml_vol", "trade_volume"))),
             open_interest=pick_float(
                 row,
-                self._aliases("open_interest", ("open_interest", "opn_interest", "open_int")),
+                self._aliases(
+                    "open_interest",
+                    ("open_interest", "opn_interest", "open_int", "hts_otst_stpl_qty"),
+                ),
             ),
             put_call_ratio=pick_float(
                 row,
@@ -398,7 +471,10 @@ class KisDomesticDerivativesService:
             ),
             implied_volatility=pick_float(
                 row,
-                self._aliases("implied_volatility", ("implied_volatility", "iv", "impl_vol")),
+                self._aliases(
+                    "implied_volatility",
+                    ("implied_volatility", "iv", "impl_vol", "hts_ints_vltl", "hist_vltl", "unas_hist_vltl"),
+                ),
             ),
             source_url=source_url,
             source_record_id=pick_text(row, self._aliases("source_record_id", ("id", "record_id", "seq"))),

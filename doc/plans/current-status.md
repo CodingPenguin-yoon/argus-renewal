@@ -19,13 +19,14 @@
 - `KIS_DOMESTIC_DERIVATIVES` payload에 market-wide summary가 있으면 `derivatives_daily_metrics` row를 함께 적재하고, KRX row가 없을 때 derivatives summary API가 이 데이터를 fallback source로 사용합니다.
 - `derivatives_daily_metrics` source priority는 `KRX_DERIVATIVES_MANUAL -> KIS_DOMESTIC_DERIVATIVES -> KRX_DERIVATIVES_REFERENCE -> others` 순서로 summary, trends, signal engine에 공통 적용됩니다.
 - derivatives summary의 `source_coverage`에는 `pcr_change / oi_change / implied_volatility_change` 전일 비교가 어떤 source 조합으로 계산됐는지 보여주는 `comparisons` provenance가 추가됐습니다.
+- `KisDomesticDerivativesService`는 공식 KIS `inquire-price` 응답 형태인 `output1/output2/output3` object payload를 직접 읽고, snapshot row와 nested summary candidate를 함께 해석할 수 있습니다.
 
 ## In Progress
-- KIS domestic ingest는 시작됐고, 다음은 이 provenance를 UI에서 어떻게 노출할지와 KIS adapter 실제 endpoint 연결을 마무리하는 단계입니다.
+- KIS domestic ingest는 시작됐고, 다음은 이 provenance를 UI에서 어떻게 노출할지와 KIS adapter의 실제 query contract를 마무리하는 단계입니다.
 
 ## Next
 1. mixed-source delta provenance UI 노출 방식 확정
-2. KIS derivatives adapter 실제 endpoint 연결
+2. KIS derivatives adapter 실제 query params / symbol 전략 연결
 3. 필요 시 FRED reference 지표를 `DGS2`, `SOFR`까지 확장
 
 ## Risks
