@@ -50,7 +50,8 @@
 - 완료: market-wide summary 필드를 `derivatives_daily_metrics`로 적재하는 fallback ingest 경로 추가
 - 완료: `derivatives_daily_metrics` source priority를 `KRX_DERIVATIVES_MANUAL -> KIS_DOMESTIC_DERIVATIVES -> KRX_DERIVATIVES_REFERENCE -> others`로 고정
 - 완료: 공식 KIS `inquire-price` 응답 형태인 `output1/output2/output3` object payload support
-- 남음: mixed-source delta provenance UI와 실제 KIS query params / symbol 전략 연결
+- 완료: mixed-source delta provenance UI를 시장 신호 파생 탭에 노출
+- 남음: 실제 KIS query params / symbol 전략 연결
 
 완료 기준:
 - `시장 신호`의 파생 요약이 KIS source로 재구성 가능

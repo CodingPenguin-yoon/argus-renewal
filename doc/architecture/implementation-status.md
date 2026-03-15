@@ -18,6 +18,7 @@
 - `KIS_DOMESTIC_DERIVATIVES`는 이제 market-wide summary 필드가 있으면 `derivatives_daily_metrics` row도 같이 적재합니다.
 - `derivatives_daily_metrics` row 선택은 `KRX_DERIVATIVES_MANUAL -> KIS_DOMESTIC_DERIVATIVES -> KRX_DERIVATIVES_REFERENCE -> others` 우선순위를 공통 적용합니다.
 - derivatives summary `source_coverage`는 섹션별 source 외에도, 전일 대비 변화율 계산의 current/previous source 조합을 `comparisons`로 제공합니다.
+- 파생 탭은 이 `comparisons`를 mixed-source/동일 source badge와 설명 문장으로 직접 표면화합니다.
 - `KisDomesticDerivativesService`는 공식 KIS `inquire-price` 응답의 `output1/output2/output3` object payload를 지원하며, snapshot row와 nested summary candidate를 같은 payload에서 읽을 수 있습니다.
 - 상단 GNB는 안정 탭만 적극 prefetch하고 `시장 뉴스`는 제외합니다.
 - 실제 사용자 표면 경로를 `/krx/dashboard`, `/krx/insights`, `/krx/macro-calendar`로 정리했고, 기존 경로는 redirect로 호환합니다.
@@ -40,7 +41,7 @@
   - `시장 뉴스` 클릭 후에는 뉴스 RSC와 탭별 리소스가 새로 요청됨
 
 ## 남은 일
-- 현재 남은 구현은 mixed-source delta provenance UI 반영과 실제 KIS derivatives query params / symbol 전략 연결입니다.
+- 현재 남은 구현은 실제 KIS derivatives query params / symbol 전략 연결입니다.
 - 이후 추가 고도화 후보:
   - prefetch 계측 자동화
   - 게이지 계산식 세분화

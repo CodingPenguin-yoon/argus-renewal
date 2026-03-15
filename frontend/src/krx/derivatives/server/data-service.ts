@@ -296,6 +296,7 @@ export function emptyDerivativesSummary(): DerivativesSummary {
       label: "소스 0/6",
       sourceNames: [],
       sections: [],
+      comparisons: [],
     },
     pcr: null,
     pcrChange: null,

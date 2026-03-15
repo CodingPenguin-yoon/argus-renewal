@@ -150,6 +150,66 @@ function SourceBadgeRow({
   );
 }
 
+function comparisonBadgeVariant(comparison: DerivativesSummary["sourceCoverage"]["comparisons"][number]) {
+  if (comparison.status === "missing") return "low";
+  if (comparison.mixedSource) return "high";
+  return "positive";
+}
+
+function comparisonBadgeLabel(comparison: DerivativesSummary["sourceCoverage"]["comparisons"][number]) {
+  if (comparison.status === "missing") return "비교 없음";
+  if (comparison.mixedSource) return "혼합 소스";
+  return "동일 소스";
+}
+
+function comparisonDescription(comparison: DerivativesSummary["sourceCoverage"]["comparisons"][number]) {
+  if (comparison.status === "missing") {
+    return "현재값 또는 전일값 소스가 비어 있어 변화율 계산 근거를 표시할 수 없습니다.";
+  }
+
+  const currentLabel = comparison.currentSourceName ? sourceNameLabel(comparison.currentSourceName) : "현재 소스 없음";
+  const previousLabel = comparison.previousSourceName ? sourceNameLabel(comparison.previousSourceName) : "전일 소스 없음";
+
+  if (!comparison.mixedSource && comparison.currentSourceName && comparison.currentSourceName === comparison.previousSourceName) {
+    return `${currentLabel} 기준으로 현재값과 전일값을 연속 비교했습니다.`;
+  }
+
+  return `현재 ${currentLabel} / 전일 ${previousLabel} 기준으로 계산했습니다.`;
+}
+
+function DerivativesComparisonPanel({
+  comparisons,
+}: {
+  comparisons: DerivativesSummary["sourceCoverage"]["comparisons"];
+}) {
+  if (!comparisons.length) return null;
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <SectionHeader
+        title="변화율 계산 소스"
+        description="전일 대비 숫자가 어떤 현재값/전일값 원천을 비교한 결과인지 함께 표시합니다."
+      />
+      <div className="grid gap-3 xl:grid-cols-3">
+        {comparisons.map((comparison) => (
+          <article key={comparison.key} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="neutral">{comparison.label}</Badge>
+              <Badge variant={comparisonBadgeVariant(comparison)}>{comparisonBadgeLabel(comparison)}</Badge>
+            </div>
+            <p className="mt-3 text-sm leading-6 text-slate-700">{comparisonDescription(comparison)}</p>
+            {comparison.status === "available" ? (
+              <p className="mt-2 text-xs text-slate-500">
+                현재 {comparison.currentTradeDate ?? "-"} · 전일 {comparison.previousTradeDate ?? "-"}
+              </p>
+            ) : null}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function DerivativesOneLine({
   derivativesSummary,
   fallbackLine,
@@ -399,6 +459,8 @@ function DerivativesTabPanel({
           />
         </div>
       </section>
+
+      <DerivativesComparisonPanel comparisons={derivativesSummary.sourceCoverage.comparisons} />
 
       <section>
         <SectionHeader

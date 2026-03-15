@@ -157,6 +157,38 @@ function buildMarketSignalFixture() {
     label: "소스 5/6",
     sourceNames: ["KRX_DERIVATIVES_REFERENCE", "KIS_DOMESTIC_DERIVATIVES", "KIS_NIGHT_FUTURES"],
     sections: [],
+    comparisons: [
+      {
+        key: "pcr_change",
+        label: "PCR 변화율",
+        status: "available",
+        currentTradeDate: "2026-03-09",
+        currentSourceName: "KIS_DOMESTIC_DERIVATIVES",
+        previousTradeDate: "2026-03-08",
+        previousSourceName: "KRX_DERIVATIVES_REFERENCE",
+        mixedSource: true,
+      },
+      {
+        key: "oi_change",
+        label: "미결제약정 변화율",
+        status: "available",
+        currentTradeDate: "2026-03-09",
+        currentSourceName: "KIS_DOMESTIC_DERIVATIVES",
+        previousTradeDate: "2026-03-08",
+        previousSourceName: "KIS_DOMESTIC_DERIVATIVES",
+        mixedSource: false,
+      },
+      {
+        key: "implied_volatility_change",
+        label: "내재변동성 변화율",
+        status: "missing",
+        currentTradeDate: "2026-03-09",
+        currentSourceName: "KIS_DOMESTIC_DERIVATIVES",
+        previousTradeDate: null,
+        previousSourceName: null,
+        mixedSource: false,
+      },
+    ],
   };
   derivativesSummary.pcr = 0.91;
   derivativesSummary.pcrChange = -1.8;
@@ -228,10 +260,16 @@ describe("krx market signal page route", () => {
     expect(screen.getByText("핵심 파생 카드")).toBeInTheDocument();
     expect(screen.getByText("추이 차트")).toBeInTheDocument();
     expect(screen.getByText("세부 지표")).toBeInTheDocument();
+    expect(screen.getByText("변화율 계산 소스")).toBeInTheDocument();
     expect(screen.getByText("해설")).toBeInTheDocument();
     expect(screen.getAllByText("개장 전 선물 변동률").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("KIS 국내 파생")).toBeInTheDocument();
     expect(screen.getByText("KIS 야간선물")).toBeInTheDocument();
+    expect(screen.getByText("혼합 소스")).toBeInTheDocument();
+    expect(screen.getByText("동일 소스")).toBeInTheDocument();
+    expect(screen.getByText(/현재 KIS 국내 파생/)).toBeInTheDocument();
+    expect(screen.getByText(/전일 KRX 파생 기준/)).toBeInTheDocument();
+    expect(screen.getByText(/KIS 국내 파생 기준으로 현재값과 전일값을 연속 비교했습니다/)).toBeInTheDocument();
     expect(screen.queryByText("오늘 시장 결론")).not.toBeInTheDocument();
   });
 
