@@ -49,7 +49,7 @@
 - `시장 신호`의 파생 요약이 KIS source로 재구성 가능
 
 ### Phase 4. frontend wiring
-- 대시보드와 AI 인사이트의 금리 reference 카드 연결
+- 대시보드와 AI 인사이트의 금리 reference 카드 연결 완료 상태 유지
 - 시장 신호의 파생 source provenance 교체
 - source label, 업데이트 시각, fallback 문구 정리
 
