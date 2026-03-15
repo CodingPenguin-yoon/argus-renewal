@@ -13,15 +13,16 @@
 - 오늘 작업의 배경과 의사결정을 쉬운 말로 설명하는 `doc/troubleshooting/` 문서를 추가했습니다.
 - 다음 라운드 source 전략으로 `파생=KIS`, `미국채 10년물/미국 금리=FRED` 기준 문서와 rollout plan을 추가했습니다.
 - backend에 FRED macro reference route를 추가했고, `DGS10`과 `FEDFUNDS`를 `disabled | file | api` 모드로 읽는 1차 contract를 고정했습니다.
+- `AI 인사이트`는 이제 `/api/krx/macro-reference/cards`를 읽고, FRED 카드가 있으면 기존 macro news의 `금리` 카드를 대체합니다.
 
 ## In Progress
-- FRED backend path는 완료했고, 다음은 frontend reference wiring과 KIS derivatives adapter 범위 확정입니다.
+- FRED는 `AI 인사이트`까지 연결됐고, 다음은 대시보드/시장 신호 확장과 KIS derivatives adapter 범위 확정입니다.
 
 ## Next
-1. frontend에서 `/api/krx/macro-reference/cards`를 AI 인사이트 reference card에 연결
+1. 대시보드와 시장 신호에 FRED/KIS source provenance를 확장
 2. KIS derivatives adapter 범위와 endpoint 확정
 3. KIS source precedence와 provenance 정책 확정
-4. 시장 신호/대시보드까지 source wiring 확장
+4. 필요 시 대시보드 거시 위젯도 FRED 기준으로 세분화
 
 ## Risks
 - legacy redirect는 당분간 유지되므로, 외부 링크나 북마크는 새 경로와 구 경로가 공존할 수 있습니다.

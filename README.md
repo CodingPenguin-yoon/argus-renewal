@@ -31,6 +31,7 @@ KRX 해석형 MVP를 위한 모노레포입니다.
 - `파생 데이터`는 KIS로 유지합니다. 이 영역은 장기적으로 호가/체결/주문과 연결될 수 있는 시장 데이터 경로입니다.
 - `미국채 10년물`과 `미국 금리 reference`는 FRED로 분리합니다.
 - 1차 backend 구현은 `GET /api/krx/macro-reference/cards` 기준으로 들어가며, 초기 series는 `DGS10`과 `FEDFUNDS`만 고정합니다.
+- `AI 인사이트`는 이미 이 backend route를 읽도록 연결됐고, 기존 macro news의 `금리` 카드는 FRED 카드가 준비될 때만 대체합니다.
 - 로컬 기본값은 `FRED_PROVIDER=disabled`라서 외부 key 없이 그대로 실행됩니다. 실제 연동 전에는 `file` fixture로 먼저 검증할 수 있습니다.
 
 ## 뉴스 자동화 요약

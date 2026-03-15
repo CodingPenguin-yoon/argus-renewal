@@ -31,6 +31,7 @@ import {
 
 const BACKEND_BASE_URL = env.BACKEND_BASE_URL.replace(/\/+$/, "");
 const KR_NEWS_TAB_ACCUMULATION_LIMIT = 50;
+const FRED_REFERENCE_REVALIDATE_SECONDS = 60 * 60;
 
 type ApiAppHeaderSupportingPoint = {
   text: string;
@@ -76,6 +77,55 @@ type ApiAppHeader = {
   updated_at: string | null;
   source_coverage: ApiAppHeaderCoverage;
   breaking_news: ApiBreakingNews | null;
+};
+
+type ApiMacroReferenceCard = {
+  key: string;
+  label: string;
+  summary: string | null;
+  value: number | null;
+  value_display: string | null;
+  change_value: number | null;
+  change_display: string | null;
+  unit: string;
+  stale: boolean;
+  source: {
+    key: string;
+    name: string;
+    series_id: string;
+    series_name: string;
+    url: string | null;
+    observed_at: string | null;
+    updated_at: string | null;
+  };
+  freshness: {
+    status: "fresh" | "stale" | "unknown";
+    observed_at: string | null;
+    age_seconds: number | null;
+    ttl_seconds: number;
+  };
+  metadata: {
+    series_id: string;
+    series_name: string;
+    semantics: string;
+    frequency: string;
+    freshness_ttl_seconds: number;
+    provider_mode: string;
+    retry_count: number;
+  };
+};
+
+type ApiMacroReferencePayload = {
+  updated_at: string | null;
+  items: ApiMacroReferenceCard[];
+  coverage: {
+    state: "full" | "partial" | "empty";
+    available_items: number;
+    expected_items: number;
+    provider: string;
+    summary: string;
+    note: string | null;
+  };
 };
 
 function keepMvpNewsScope(region: "KR" | "GLOBAL", cards: MarketNewsCard[]) {
@@ -139,6 +189,47 @@ function buildMacroReferenceCards(macroNews: MacroNews[]) {
       updatedAt: item.publishedAt,
       tone: toneFromSentiment(item.sentiment),
     }));
+}
+
+function toneFromChange(value: number | null): MacroReferenceCard["tone"] {
+  if (value === null || value === 0) return "neutral";
+  return value > 0 ? "positive" : "negative";
+}
+
+async function getBackendMacroReferenceCards(): Promise<MacroReferenceCard[]> {
+  try {
+    const response = await fetch(`${BACKEND_BASE_URL}/api/krx/macro-reference/cards`, {
+      next: { revalidate: FRED_REFERENCE_REVALIDATE_SECONDS },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Macro reference request failed (${response.status})`);
+    }
+
+    const payload = (await response.json()) as ApiMacroReferencePayload;
+    return payload.items.map((item) => ({
+      key: item.key,
+      label: item.label,
+      summary: firstNonEmpty(item.summary, item.value_display, item.source.series_name),
+      sourceLabel: item.source.key,
+      sourceUrl: item.source.url,
+      updatedAt: item.source.observed_at ?? item.source.updated_at,
+      tone: toneFromChange(item.change_value),
+    }));
+  } catch (error) {
+    console.error(
+      JSON.stringify(
+        {
+          scope: "krx_macro_reference_fetch",
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        },
+        null,
+        0,
+      ),
+    );
+    return [];
+  }
 }
 
 function mapAppHeader(api: ApiAppHeader): AppHeader {
@@ -408,18 +499,21 @@ export async function getOverviewTabData(): Promise<OverviewTabData> {
 }
 
 export async function getMacroTabData(): Promise<MacroTabData> {
-  const [macroNews, globalEvents, derivativesSummary, derivativesTrends, derivativesInvestorFlow] =
+  const [macroNews, globalEvents, derivativesSummary, derivativesTrends, derivativesInvestorFlow, fredReferenceCards] =
     await Promise.all([
       getMacroNews({ revalidate: KRX_SHORT_REVALIDATE_SECONDS }),
       getGlobalEventsTabData(),
       getDerivativesSummary(),
       getDerivativesTrends("20d"),
       getDerivativesInvestorFlow("20d"),
+      getBackendMacroReferenceCards(),
     ]);
-  const referenceCards: MacroReferenceCard[] = buildMacroReferenceCards(macroNews).map((item) => ({
-    ...item,
-    label: item.key,
-  }));
+  const referenceCards: MacroReferenceCard[] = buildMacroReferenceCards(macroNews).flatMap((item) => {
+    if (item.key === "금리" && fredReferenceCards.length) {
+      return fredReferenceCards;
+    }
+    return [item];
+  });
 
   referenceCards.push({
     key: "derivatives",
@@ -445,6 +539,7 @@ export async function getMacroTabData(): Promise<MacroTabData> {
     derivativesInvestorFlow,
     updatedAt: pickLatestIso(
       macroNews[0]?.publishedAt,
+      ...fredReferenceCards.map((item) => item.updatedAt),
       globalEvents.coverage.updatedAt,
       derivativesSummary.lastUpdatedAt,
     ),

@@ -7,7 +7,6 @@ import { getMarketSignalSummary } from "@/krx/market-signal/server/data-service"
 import { getMacroNews } from "@/krx/news/server/data-service";
 import { getDerivativesInvestorFlow, getDerivativesSummary, getDerivativesTrends } from "@/krx/derivatives/server/data-service";
 import { getMacroTabData, getNewsTabData, getOverviewTabData } from "@/krx/server/data-service";
-import { KRX_SHORT_REVALIDATE_SECONDS } from "@/krx/server/client";
 import type { MarketNewsCard, NewsTabData } from "@/krx/types/domain";
 
 vi.mock("@/krx/news/server/data-service", () => ({
@@ -199,6 +198,7 @@ function buildDashboardFixture(): NewsTabData {
 describe("getNewsTabData", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("keeps summary/global cards ranking-sorted but makes KR feed recency-sorted", async () => {
@@ -253,6 +253,7 @@ describe("getNewsTabData", () => {
 describe("overview and macro aggregators", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("builds app-wide overview data from existing tab services", async () => {
@@ -494,6 +495,23 @@ describe("overview and macro aggregators", () => {
   });
 
   it("builds macro tab data from existing macro, derivatives, and global-event services", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        updated_at: null,
+        items: [],
+        coverage: {
+          state: "empty",
+          available_items: 0,
+          expected_items: 2,
+          provider: "disabled",
+          summary: "disabled",
+          note: "feature_flag_disabled",
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
     vi.mocked(getMacroNews).mockResolvedValue([
       {
         id: "macro-fx",
@@ -614,7 +632,194 @@ describe("overview and macro aggregators", () => {
 
     expect(getMacroNews).toHaveBeenCalledWith({ revalidate: KRX_SHORT_REVALIDATE_SECONDS });
     expect(result.referenceCards.map((item) => item.label)).toContain("환율");
+    expect(result.referenceCards.map((item) => item.label)).toContain("WTI·에너지");
     expect(result.referenceCards.map((item) => item.label)).toContain("파생 시그널");
     expect(result.updatedAt).toBe("2026-03-15T01:20:00Z");
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:4000/api/krx/macro-reference/cards", {
+      next: { revalidate: 3600 },
+    });
+  });
+
+  it("replaces the legacy 금리 card with FRED reference cards when available", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        updated_at: "2026-03-15T01:10:00Z",
+        items: [
+          {
+            key: "us10y",
+            label: "미국채 10년물",
+            summary: "미국채 10년물 4.31% · 2026-03-15 기준",
+            value: 4.31,
+            value_display: "4.31%",
+            change_value: 0.05,
+            change_display: "+0.05%p",
+            unit: "pct",
+            stale: false,
+            source: {
+              key: "FRED",
+              name: "Federal Reserve Economic Data",
+              series_id: "DGS10",
+              series_name: "DGS10",
+              url: "https://fred.stlouisfed.org/series/DGS10",
+              observed_at: "2026-03-15",
+              updated_at: "2026-03-15T01:10:00Z",
+            },
+            freshness: {
+              status: "fresh",
+              observed_at: "2026-03-15",
+              age_seconds: 0,
+              ttl_seconds: 172800,
+            },
+            metadata: {
+              series_id: "DGS10",
+              series_name: "DGS10",
+              semantics: "daily_market_yield_percent",
+              frequency: "daily",
+              freshness_ttl_seconds: 172800,
+              provider_mode: "file",
+              retry_count: 0,
+            },
+          },
+          {
+            key: "fedfunds",
+            label: "연방기금실효금리(월평균)",
+            summary: "연방기금실효금리(월평균) 4.33% · 2026-03-01 기준",
+            value: 4.33,
+            value_display: "4.33%",
+            change_value: 0,
+            change_display: "0.00%p",
+            unit: "pct",
+            stale: false,
+            source: {
+              key: "FRED",
+              name: "Federal Reserve Economic Data",
+              series_id: "FEDFUNDS",
+              series_name: "FEDFUNDS",
+              url: "https://fred.stlouisfed.org/series/FEDFUNDS",
+              observed_at: "2026-03-01",
+              updated_at: "2026-03-15T01:10:00Z",
+            },
+            freshness: {
+              status: "fresh",
+              observed_at: "2026-03-01",
+              age_seconds: 0,
+              ttl_seconds: 3888000,
+            },
+            metadata: {
+              series_id: "FEDFUNDS",
+              series_name: "FEDFUNDS",
+              semantics: "monthly_average_effective_federal_funds_rate_percent",
+              frequency: "monthly",
+              freshness_ttl_seconds: 3888000,
+              provider_mode: "file",
+              retry_count: 0,
+            },
+          },
+        ],
+        coverage: {
+          state: "full",
+          available_items: 2,
+          expected_items: 2,
+          provider: "file",
+          summary: "full",
+          note: null,
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    vi.mocked(getMacroNews).mockResolvedValue([
+      {
+        id: "macro-rates",
+        type: "macro",
+        headline: "국채 금리 부담",
+        summary: "기존 금리 카드",
+        whyItMatters: "기존 금리 카드",
+        impact: "부담",
+        category: "금리",
+        source: "Reuters",
+        sourceUrl: "https://example.com/rates",
+        sentiment: "negative",
+        publishedAt: "2026-03-15T00:30:00Z",
+        relatedTickers: [],
+      },
+    ]);
+    vi.mocked(getGlobalEventsDashboardData).mockResolvedValue({
+      highlights: [],
+      upcoming: [],
+      week: [],
+      coverage: {
+        state: "empty",
+        coverageRatio: 0,
+        availableSources: 0,
+        expectedSources: 0,
+        summary: "없음",
+        updatedAt: null,
+        items: [],
+      },
+    });
+    vi.mocked(getDerivativesSummary).mockResolvedValue({
+      tradeDate: "2026-03-15",
+      requestedDate: null,
+      requestedDateAvailable: true,
+      isLatestFallback: false,
+      sourceCoverage: {
+        tradeDate: "2026-03-15",
+        coverageRatio: 1,
+        state: "full",
+        label: "소스 1/1",
+        sourceNames: ["KIS"],
+        sections: [],
+      },
+      pcr: null,
+      pcrChange: null,
+      callNotional: null,
+      putNotional: null,
+      callOpenInterest: null,
+      putOpenInterest: null,
+      openInterestTotal: null,
+      oiChange: null,
+      foreignFuturesNetPosition: null,
+      impliedVolatility: null,
+      impliedVolatilityChange: null,
+      directionalBias: "neutral",
+      gapBias: "flat",
+      volatilityBias: "stable",
+      confidenceBucket: "medium",
+      explanationText: "파생 중립",
+      briefingSource: "rule_based",
+      participantSummary: [],
+      detailLevel: 1,
+      components: [],
+      lastUpdatedAt: "2026-03-15T01:20:00Z",
+      missingFields: [],
+      nightFutures: {
+        signal: null,
+        changeRate: null,
+        price: null,
+        priceChange: null,
+        instrumentCode: null,
+        instrumentName: null,
+        snapshotTime: null,
+        sourceName: null,
+        sourceUrl: null,
+      },
+    });
+    vi.mocked(getDerivativesTrends).mockResolvedValue({ preset: "20d", date: "2026-03-15", items: [], missingFields: [] });
+    vi.mocked(getDerivativesInvestorFlow).mockResolvedValue({
+      preset: "20d",
+      date: "2026-03-15",
+      items: [],
+      missingFields: [],
+    });
+
+    const result = await getMacroTabData();
+
+    expect(result.referenceCards.map((item) => item.label)).toEqual([
+      "미국채 10년물",
+      "연방기금실효금리(월평균)",
+      "파생 시그널",
+    ]);
   });
 });
