@@ -351,6 +351,12 @@ def test_summary_endpoint_with_full_data(tmp_path: Path, monkeypatch) -> None:
         assert "call_notional" not in item["missing_fields"]
         assert len(item["source_coverage"]["sections"]) >= 5
         assert "KIS_DOMESTIC_DERIVATIVES" in item["source_coverage"]["source_names"]
+        comparison_map = {
+            comparison["key"]: comparison for comparison in item["source_coverage"]["comparisons"]
+        }
+        assert comparison_map["pcr_change"]["current_source_name"] == "KRX_DERIVATIVES_REFERENCE"
+        assert comparison_map["pcr_change"]["previous_source_name"] == "KRX_DERIVATIVES_REFERENCE"
+        assert comparison_map["pcr_change"]["mixed_source"] is False
     finally:
         get_settings.cache_clear()
 
@@ -526,6 +532,46 @@ def test_trends_endpoint_prefers_priority_row_per_date(tmp_path: Path, monkeypat
         assert item_by_date["2026-03-08"]["pcr"] == 0.96
         assert item_by_date["2026-03-08"]["source_name"] == "KIS_DOMESTIC_DERIVATIVES"
         assert item_by_date["2026-03-09"]["pcr"] == 0.93
+    finally:
+        get_settings.cache_clear()
+
+
+def test_summary_source_coverage_flags_mixed_source_deltas(tmp_path: Path, monkeypatch) -> None:
+    db_path = _with_db(monkeypatch, tmp_path)
+    try:
+        _insert_derivatives_row(
+            db_path,
+            trade_date_iso="2026-03-08",
+            source_name="KRX_DERIVATIVES_REFERENCE",
+            put_call_ratio=1.08,
+            implied_volatility=20.3,
+            open_interest_total=995000,
+            call_open_interest=500000,
+            put_open_interest=495000,
+        )
+        _insert_derivatives_row(
+            db_path,
+            trade_date_iso="2026-03-09",
+            source_name="KIS_DOMESTIC_DERIVATIVES",
+            put_call_ratio=0.97,
+            implied_volatility=18.4,
+            open_interest_total=1032000,
+            call_open_interest=535000,
+            put_open_interest=497000,
+        )
+
+        client = TestClient(app)
+        response = client.get("/api/krx/derivatives/summary", params={"date": "2026-03-09"})
+        assert response.status_code == 200
+        item = response.json()["item"]
+
+        comparison_map = {
+            comparison["key"]: comparison for comparison in item["source_coverage"]["comparisons"]
+        }
+        assert comparison_map["pcr_change"]["current_source_name"] == "KIS_DOMESTIC_DERIVATIVES"
+        assert comparison_map["pcr_change"]["previous_source_name"] == "KRX_DERIVATIVES_REFERENCE"
+        assert comparison_map["pcr_change"]["mixed_source"] is True
+        assert comparison_map["pcr_change"]["status"] == "available"
     finally:
         get_settings.cache_clear()
 

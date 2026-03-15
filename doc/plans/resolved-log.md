@@ -8,6 +8,7 @@
 - derivatives summary contract에 `pre_open_futures`를 추가하고, 파생 탭은 `KIS_DOMESTIC_DERIVATIVES` 개장 전 선물 변동률을 우선 노출하도록 정리했습니다.
 - `KIS_DOMESTIC_DERIVATIVES` payload의 market-wide summary 필드를 `derivatives_daily_metrics`로 적재하고, signal engine의 previous derivatives selection에 trade date별 source priority를 반영했습니다.
 - `derivatives_daily_metrics` source priority를 `KRX_DERIVATIVES_MANUAL -> KIS_DOMESTIC_DERIVATIVES -> KRX_DERIVATIVES_REFERENCE -> others`로 고정하고, summary·trends·signal engine 선택 로직과 회귀 테스트를 함께 정리했습니다.
+- derivatives summary `source_coverage`에 `comparisons` provenance를 추가해, `pcr_change / oi_change / implied_volatility_change`가 어떤 current/previous source 조합으로 계산됐는지 확인 가능하게 했습니다.
 - KRX IA를 `대시보드 / AI 인사이트 / 시장 신호 / 시장 뉴스 / 매크로 캘린더` 기준으로 정리했습니다.
 - 공통 헤더의 대형 해석 블록을 축소하고, `오늘의 시장 톤`을 `AI 인사이트` 중심 콘텐츠로 이동했습니다.
 - `doc/`를 `architecture / domains / plans / reference / troubleshooting` 구조로 정리했습니다.

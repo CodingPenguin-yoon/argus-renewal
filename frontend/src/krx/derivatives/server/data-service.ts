@@ -19,6 +19,16 @@ type ApiDerivativesSourceCoverage = {
   trade_date: string | null;
   coverage_ratio: number;
   sections: ApiDerivativesCoverageSection[];
+  comparisons: Array<{
+    key: string;
+    label: string;
+    status: "available" | "missing";
+    current_trade_date: string | null;
+    current_source_name: string | null;
+    previous_trade_date: string | null;
+    previous_source_name: string | null;
+    mixed_source: boolean;
+  }>;
   source_names: string[];
 };
 
@@ -155,6 +165,16 @@ function mapSummary(item: ApiDerivativesSummary): DerivativesSummary {
     sourceName: section.source_name,
     updatedAt: section.updated_at,
   }));
+  const comparisons = item.source_coverage.comparisons.map((comparison) => ({
+    key: comparison.key,
+    label: comparison.label,
+    status: comparison.status,
+    currentTradeDate: comparison.current_trade_date,
+    currentSourceName: comparison.current_source_name,
+    previousTradeDate: comparison.previous_trade_date,
+    previousSourceName: comparison.previous_source_name,
+    mixedSource: comparison.mixed_source,
+  }));
   const availableCount = sections.filter((section) => section.status === "available" || section.status === "rule_based").length;
   const expectedCount = sections.length || 1;
   const label = `소스 ${availableCount}/${expectedCount}`;
@@ -171,6 +191,7 @@ function mapSummary(item: ApiDerivativesSummary): DerivativesSummary {
       label,
       sourceNames: item.source_coverage.source_names,
       sections,
+      comparisons,
     },
     pcr: item.pcr,
     pcrChange: item.pcr_change,

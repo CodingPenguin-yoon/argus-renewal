@@ -252,6 +252,7 @@ class DerivativesDashboardService:
         source_coverage = self._build_source_coverage(
             trade_date=resolved_date,
             derivatives_row=derivatives_row,
+            previous_derivatives=previous_derivatives,
             pre_open_snapshot=pre_open_snapshot,
             night_snapshot=night_snapshot,
             briefing=briefing,
@@ -1015,6 +1016,7 @@ class DerivativesDashboardService:
         *,
         trade_date: str | None,
         derivatives_row: dict[str, Any] | None,
+        previous_derivatives: dict[str, Any] | None,
         pre_open_snapshot: dict[str, Any] | None,
         night_snapshot: dict[str, Any] | None,
         briefing: dict[str, Any] | None,
@@ -1065,6 +1067,50 @@ class DerivativesDashboardService:
                 "updated_at": derivatives_row.get("updated_at") if derivatives_row else None,
             },
         ]
+        comparisons = [
+            {
+                "key": "pcr_change",
+                "label": "Put/Call 전일 대비",
+                "status": "available" if derivatives_row and previous_derivatives else "missing",
+                "current_trade_date": derivatives_row.get("trade_date") if derivatives_row else None,
+                "current_source_name": derivatives_row.get("source_name") if derivatives_row else None,
+                "previous_trade_date": previous_derivatives.get("trade_date") if previous_derivatives else None,
+                "previous_source_name": previous_derivatives.get("source_name") if previous_derivatives else None,
+                "mixed_source": bool(
+                    derivatives_row
+                    and previous_derivatives
+                    and derivatives_row.get("source_name") != previous_derivatives.get("source_name")
+                ),
+            },
+            {
+                "key": "oi_change",
+                "label": "미결제약정 전일 대비",
+                "status": "available" if derivatives_row and previous_derivatives else "missing",
+                "current_trade_date": derivatives_row.get("trade_date") if derivatives_row else None,
+                "current_source_name": derivatives_row.get("source_name") if derivatives_row else None,
+                "previous_trade_date": previous_derivatives.get("trade_date") if previous_derivatives else None,
+                "previous_source_name": previous_derivatives.get("source_name") if previous_derivatives else None,
+                "mixed_source": bool(
+                    derivatives_row
+                    and previous_derivatives
+                    and derivatives_row.get("source_name") != previous_derivatives.get("source_name")
+                ),
+            },
+            {
+                "key": "implied_volatility_change",
+                "label": "내재변동성 전일 대비",
+                "status": "available" if derivatives_row and previous_derivatives else "missing",
+                "current_trade_date": derivatives_row.get("trade_date") if derivatives_row else None,
+                "current_source_name": derivatives_row.get("source_name") if derivatives_row else None,
+                "previous_trade_date": previous_derivatives.get("trade_date") if previous_derivatives else None,
+                "previous_source_name": previous_derivatives.get("source_name") if previous_derivatives else None,
+                "mixed_source": bool(
+                    derivatives_row
+                    and previous_derivatives
+                    and derivatives_row.get("source_name") != previous_derivatives.get("source_name")
+                ),
+            },
+        ]
 
         available_count = sum(
             1 for section in sections if section["status"] in {"available", "rule_based"}
@@ -1080,6 +1126,7 @@ class DerivativesDashboardService:
             "trade_date": trade_date,
             "coverage_ratio": round(available_count / len(sections), 4) if sections else 0.0,
             "sections": sections,
+            "comparisons": comparisons,
             "source_names": source_names,
         }
 

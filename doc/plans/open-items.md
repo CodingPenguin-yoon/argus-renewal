@@ -2,7 +2,10 @@
 
 | ID | Area | Item | Why | Next Action | Status |
 | --- | --- | --- | --- | --- | --- |
-| DATA-003 | Backend | KIS derivatives adapter 추가 | 파생 summary를 실제 매매 source와 맞춰야 함 | 실제 KIS endpoint 필드 매핑과 mixed-source delta provenance를 연결 | Open |
+| DATA-003 | Backend | KIS derivatives adapter 추가 | 파생 summary를 실제 매매 source와 맞춰야 함 | 실제 KIS endpoint 필드 매핑과 mixed-source delta provenance UI 연결 | Open |
+
+## Notes
+- backend summary contract에는 `source_coverage.comparisons`가 추가되어, 전일 대비 변화율이 어떤 source 조합으로 계산됐는지 확인할 수 있습니다.
 
 ## Recently Closed
 | ID | Area | Item | Result |

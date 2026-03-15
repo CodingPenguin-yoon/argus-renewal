@@ -457,6 +457,19 @@ export type DerivativesCoverageSection = {
   updatedAt: string | null;
 };
 
+export type DerivativesCoverageComparisonStatus = "available" | "missing";
+
+export type DerivativesCoverageComparison = {
+  key: string;
+  label: string;
+  status: DerivativesCoverageComparisonStatus;
+  currentTradeDate: string | null;
+  currentSourceName: string | null;
+  previousTradeDate: string | null;
+  previousSourceName: string | null;
+  mixedSource: boolean;
+};
+
 export type DerivativesSourceCoverage = {
   tradeDate: string | null;
   state: DerivativesSourceCoverageState;
@@ -464,6 +477,7 @@ export type DerivativesSourceCoverage = {
   label: string;
   sourceNames: string[];
   sections: DerivativesCoverageSection[];
+  comparisons: DerivativesCoverageComparison[];
 };
 
 export type DerivativesBias = "bullish" | "bearish" | "neutral";
