@@ -13,7 +13,7 @@
 
 ### FRED 담당
 - 원/달러 환율 reference
-- WTI 원유 reference
+- WTI·에너지 reference
 - 미국채 10년물
 - 미국 기준금리/정책금리 계열
 - 미국 단기금리/보조금리 계열

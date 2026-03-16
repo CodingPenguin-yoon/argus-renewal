@@ -29,9 +29,9 @@ KRX 해석형 MVP를 위한 모노레포입니다.
 
 ## KIS / FRED source 전략
 - `파생 데이터`는 KIS로 유지합니다. 이 영역은 장기적으로 호가/체결/주문과 연결될 수 있는 시장 데이터 경로입니다.
-- `미국채 10년물`과 `미국 금리 reference`는 FRED로 분리합니다.
-- 1차 backend 구현은 `GET /api/krx/macro-reference/cards` 기준으로 들어가며, 초기 series는 `DGS10`과 `FEDFUNDS`만 고정합니다.
-- `대시보드`와 `AI 인사이트`는 이미 이 backend route를 읽도록 연결됐고, FRED 카드가 준비되면 기존 macro news 기반 `금리` 표면보다 우선 사용합니다.
+- `환율`, `WTI·에너지`, `미국채 10년물`, `미국 금리 reference`는 FRED로 분리합니다.
+- 1차 backend 구현은 `GET /api/krx/macro-reference/cards` 기준으로 들어가며, 초기 series는 `DEXKOUS`, `DCOILWTICO`, `DGS10`, `FEDFUNDS`를 고정합니다.
+- `대시보드`와 `AI 인사이트`는 이미 이 backend route를 읽도록 연결됐고, FRED 카드가 준비되면 기존 macro news 기반 `환율`, `유가/에너지`, `금리` 표면보다 우선 사용합니다.
 - 파생 summary contract에는 `KIS_DOMESTIC_DERIVATIVES` 기반 `pre_open_futures`가 추가되어, 개장 전 선물 snapshot을 별도 필드로 받을 수 있습니다.
 - `KIS_DOMESTIC_DERIVATIVES` payload에 market-wide summary 필드가 있으면 `derivatives_daily_metrics` row도 함께 적재되며, KRX row가 없을 때 summary API가 이 경로로 fallback할 수 있습니다.
 - `derivatives_daily_metrics` source priority는 `KRX_DERIVATIVES_MANUAL -> KIS_DOMESTIC_DERIVATIVES -> KRX_DERIVATIVES_REFERENCE -> others` 순서로 고정합니다.
