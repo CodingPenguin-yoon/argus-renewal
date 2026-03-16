@@ -62,6 +62,7 @@
 
 ## 참고 자료
 - `reference/domain-oriented-data-model.md`
+- `reference/env-by-sector.md`
 - `reference/provider-flexibility-design.md`
 - `reference/kis-fred-integration-contract.md`
 - `reference/risk-priority.md`

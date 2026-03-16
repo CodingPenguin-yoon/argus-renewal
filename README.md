@@ -65,6 +65,8 @@ pnpm dev:backend
 pnpm dev:frontend
 ```
 
+Env 정리는 [doc/reference/env-by-sector.md](/Users/yoon/03_projects/05_economy_project/argus_renewal/doc/reference/env-by-sector.md)를 기준으로 보면 됩니다. 현재 1차 live에서 바로 채울 값은 `KIS_APP_KEY`, `KIS_APP_SECRET`, `KIS_ACCESS_TOKEN`, `KIS_DOMESTIC_DERIVATIVES_PROVIDER`, `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON`, `FRED_PROVIDER`, `FRED_API_KEY`입니다.
+
 ## 검증
 ```bash
 pnpm lint
@@ -83,6 +85,7 @@ pnpm build
 - 뉴스 리빌드 요약: `doc/domains/news/rebuild-summary.md`
 - 도메인 기준 데이터 모델: `doc/reference/domain-oriented-data-model.md`
 - provider 유연화 설계: `doc/reference/provider-flexibility-design.md`
+- env 섹터 가이드: `doc/reference/env-by-sector.md`
 - 리스크 우선순위: `doc/reference/risk-priority.md`
 - 진행 현황 추적: `doc/plans/README.md`
 - 실행/설치: `RUN_GUIDE.md`

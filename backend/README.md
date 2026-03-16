@@ -8,7 +8,7 @@ cd backend
 python3 -m uvicorn src.main:app --reload --host 0.0.0.0 --port 4000
 ```
 
-환경 변수는 루트의 `.env.example`을 기준으로 관리합니다. 예시는 도메인별로 묶여 있으며, 실제 런타임에서 읽지 않는 오래된 항목은 제거했습니다.
+환경 변수는 루트의 `.env.example`을 기준으로 관리합니다. 실제로 값을 넣을 때는 `backend/.env`를 쓰고, 섹터별 정리와 현재 필수값은 [doc/reference/env-by-sector.md](/Users/yoon/03_projects/05_economy_project/argus_renewal/doc/reference/env-by-sector.md)를 보면 됩니다.
 
 ## 핵심 API
 - `GET /health`
