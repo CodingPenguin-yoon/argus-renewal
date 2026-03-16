@@ -204,6 +204,10 @@ function findFredReferenceCard(cards: MacroReferenceCard[], key: (typeof FRED_RE
   return cards.find((item) => item.key === key) ?? null;
 }
 
+function findFredRateReferenceCard(cards: MacroReferenceCard[]) {
+  return findFredReferenceCard(cards, "us10y") ?? findFredReferenceCard(cards, "fedfunds");
+}
+
 function buildOverviewMacroWidgets(macroNews: MacroNews[], fredReferenceCards: MacroReferenceCard[]) {
   const baseCards = buildMacroReferenceCards(macroNews);
   const latestByKey = new Map(baseCards.map((item) => [item.key, item]));
@@ -211,7 +215,7 @@ function buildOverviewMacroWidgets(macroNews: MacroNews[], fredReferenceCards: M
   return [
     findFredReferenceCard(fredReferenceCards, "usdkrw") ?? latestByKey.get("환율") ?? null,
     findFredReferenceCard(fredReferenceCards, "wti") ?? latestByKey.get("유가/에너지") ?? null,
-    findFredReferenceCard(fredReferenceCards, "us10y") ?? latestByKey.get("금리") ?? null,
+    findFredRateReferenceCard(fredReferenceCards) ?? latestByKey.get("금리") ?? null,
   ].filter((item): item is MacroReferenceCard => Boolean(item));
 }
 
