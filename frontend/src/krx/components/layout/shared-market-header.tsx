@@ -44,6 +44,9 @@ export function SharedMarketHeader({ data }: { data: AppHeader }) {
               실시간 상태
             </h1>
             <p className="mt-2 text-sm leading-6 text-slate-600">{data.sourceCoverage.summary}</p>
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              이 영역은 장 상태, 커버리지, 속보만 빠르게 확인하는 공통 셸입니다. 메인 해석은 각 탭에서 읽습니다.
+            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 md:justify-end">

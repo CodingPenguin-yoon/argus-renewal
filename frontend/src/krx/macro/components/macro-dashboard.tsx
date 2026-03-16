@@ -124,6 +124,35 @@ function gaugeAccent(value: number) {
   return "from-rose-300 via-rose-400 to-red-300";
 }
 
+function counterpointLines(data: MacroTabData) {
+  const lines = data.referenceCards
+    .filter((item) => item.tone !== "positive")
+    .map((item) => `${item.label}: ${item.summary}`);
+
+  if (!lines.length && data.derivativesSummary.explanationText.trim()) {
+    lines.push(data.derivativesSummary.explanationText.trim());
+  }
+
+  return lines.slice(0, 2);
+}
+
+function triggerLines(data: MacroTabData) {
+  const lines: string[] = [];
+  const riskCard = data.referenceCards.find((item) => item.tone === "negative");
+
+  if (riskCard) {
+    lines.push(`${riskCard.label} 신호가 더 악화되면 현재 해석 강도를 낮춰야 합니다.`);
+  }
+  if (data.derivativesSummary.volatilityBias === "rising") {
+    lines.push("변동성 가열이 이어지면 추세 판단보다 확인 신호를 우선해야 합니다.");
+  }
+  if (!lines.length) {
+    lines.push("환율, 금리, 파생 방향이 동시에 꺾이면 현재 해석을 다시 점검해야 합니다.");
+  }
+
+  return lines.slice(0, 2);
+}
+
 export function MacroDashboard({
   data,
   headerData,
@@ -136,6 +165,9 @@ export function MacroDashboard({
     volatilityGauge(data.derivativesSummary),
     confidenceGauge(headerData, data.derivativesSummary),
   ];
+  const evidenceLines = headerData.supportingPoints.slice(0, 3);
+  const counterLines = counterpointLines(data);
+  const triggerItems = triggerLines(data);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 md:py-8">
@@ -161,24 +193,50 @@ export function MacroDashboard({
 
         <div className="mt-6 grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
           <article className="rounded-[24px] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/80">시장 해석</p>
-            <h2 className="mt-3 text-2xl font-black tracking-tight text-white">오늘의 시장 톤</h2>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/80">주장</p>
+            <h2 className="mt-3 text-2xl font-black tracking-tight text-white">오늘의 해석</h2>
             <p className="mt-4 text-base leading-8 text-slate-100">
               {headerData.marketToneLine || "시장 해석 문장이 아직 준비되지 않았습니다."}
             </p>
 
-            {headerData.supportingPoints.length ? (
-              <div className="mt-5 flex flex-wrap gap-2">
-                {headerData.supportingPoints.slice(0, 4).map((point) => (
-                  <span
-                    key={`${point.sourceKey}-${point.text}`}
-                    className="inline-flex rounded-full border border-white/10 bg-white/8 px-3 py-1.5 text-sm text-slate-100"
-                  >
-                    {point.text}
-                  </span>
+            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+              <section className="rounded-2xl border border-white/10 bg-slate-950/22 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-100/70">근거</p>
+                {evidenceLines.length ? (
+                  <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-100">
+                    {evidenceLines.map((point) => (
+                      <li key={`${point.sourceKey}-${point.text}`} className="rounded-xl border border-white/10 bg-white/6 px-3 py-2">
+                        {point.text}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-3 text-sm leading-6 text-slate-200">아직 공개할 근거 라인이 충분하지 않습니다.</p>
+                )}
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-slate-950/22 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-100/70">반대 근거</p>
+                <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-100">
+                  {counterLines.map((line) => (
+                    <li key={line} className="rounded-xl border border-white/10 bg-white/6 px-3 py-2">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/25 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-100/70">해석이 바뀌는 조건</p>
+              <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-100">
+                {triggerItems.map((line) => (
+                  <li key={line} className="rounded-xl border border-white/10 bg-white/6 px-3 py-2">
+                    {line}
+                  </li>
                 ))}
-              </div>
-            ) : null}
+              </ul>
+            </div>
 
             <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/25 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-100/70">소스 커버리지</p>

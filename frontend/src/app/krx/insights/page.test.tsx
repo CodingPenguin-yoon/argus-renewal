@@ -133,7 +133,10 @@ describe("krx insights page route", () => {
     render(await KrxInsightsPage());
 
     expect(screen.getByRole("heading", { name: "AI 인사이트" })).toBeInTheDocument();
-    expect(screen.getByText("오늘의 시장 톤")).toBeInTheDocument();
+    expect(screen.getByText("오늘의 해석")).toBeInTheDocument();
+    expect(screen.getByText("근거")).toBeInTheDocument();
+    expect(screen.getByText("반대 근거")).toBeInTheDocument();
+    expect(screen.getByText("해석이 바뀌는 조건")).toBeInTheDocument();
     expect(screen.getAllByText("파생 기준점")).toHaveLength(2);
     expect(screen.getByText("달러 강세 재확인")).toBeInTheDocument();
     expect(screen.getByText("OPEC 코멘트")).toBeInTheDocument();

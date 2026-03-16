@@ -128,10 +128,12 @@ describe("krx dashboard page route", () => {
     render(await KrxDashboardPage());
 
     expect(screen.getByRole("heading", { name: "대시보드" })).toBeInTheDocument();
-    expect(screen.getByText("오늘의 종합 리포트")).toBeInTheDocument();
+    expect(screen.getByText("핵심 드라이버 3개")).toBeInTheDocument();
+    expect(screen.getByText("60초 브리프")).toBeInTheDocument();
     expect(screen.getByText("거시 미니 위젯")).toBeInTheDocument();
     expect(screen.getByText("WTI·에너지")).toBeInTheDocument();
-    expect(screen.getByText("체크포인트")).toBeInTheDocument();
+    expect(screen.getByText("경고 포인트")).toBeInTheDocument();
+    expect(screen.getByText("오늘 먼저 볼 탭")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /시장 신호/ })).toHaveAttribute("href", "/krx");
     expect(screen.getByRole("link", { name: /매크로 캘린더/ })).toHaveAttribute("href", "/krx/macro-calendar");
     expect(screen.getByText("FOMC 위원 발언")).toBeInTheDocument();

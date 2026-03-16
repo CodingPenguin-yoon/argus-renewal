@@ -212,6 +212,15 @@ function ImpactCard({ item }: { item: GlobalEventItem }) {
   );
 }
 
+function catalystEmptyState(title: string, description: string) {
+  return (
+    <EmptyState
+      title={title}
+      description={`${description} 오늘 KRX는 내부 수급, 환율, 외국인 선물 변화 비중을 더 높게 봐야 합니다.`}
+    />
+  );
+}
+
 export function GlobalEventsDashboard({
   highlights,
   upcoming,
@@ -306,10 +315,10 @@ export function GlobalEventsDashboard({
                   ))}
                 </div>
               ) : (
-                <EmptyState
-                  title="이번 주 핵심 이벤트가 아직 없습니다"
-                  description="현재 표시 가능한 이벤트가 없습니다. 최신 데이터가 준비되면 이 영역에 표시됩니다."
-                />
+                catalystEmptyState(
+                  "이번 주 대형 글로벌 촉매가 아직 보이지 않습니다",
+                  "이번 주는 해외 일정보다 국내 수급과 가격 변수 해석이 더 중요할 수 있습니다.",
+                )
               )}
             </section>
 
@@ -333,10 +342,10 @@ export function GlobalEventsDashboard({
                   ))}
                 </div>
               ) : (
-                <EmptyState
-                  title="다음 24시간 내 일정이 없습니다"
-                  description="현재 표시 가능한 이벤트가 없습니다."
-                />
+                catalystEmptyState(
+                  "다음 24시간 대형 글로벌 촉매 없음",
+                  "당장 시장을 흔들 대형 일정이 보이지 않아 오늘은 내부 변수 해석 비중이 더 큽니다.",
+                )
               )}
             </section>
           </div>
@@ -354,10 +363,10 @@ export function GlobalEventsDashboard({
                   ))}
                 </div>
               ) : (
-                <EmptyState
-                  title="영향 해석 카드가 아직 없습니다"
-                  description="최신 데이터가 준비되면 이 영역에 표시됩니다."
-                />
+                catalystEmptyState(
+                  "해석할 글로벌 촉매가 아직 없습니다",
+                  "큰 이벤트가 비어 있는 구간 자체가 오늘은 환율과 수급 해석이 더 중요하다는 신호일 수 있습니다.",
+                )
               )}
             </section>
           </aside>
@@ -377,10 +386,10 @@ export function GlobalEventsDashboard({
               ))}
             </div>
           ) : (
-            <EmptyState
-              title="핵심 이벤트가 아직 없습니다"
-              description="현재 표시 가능한 이벤트가 없습니다. 최신 데이터가 준비되면 이 영역에 표시됩니다."
-            />
+            catalystEmptyState(
+              "핵심 이벤트가 아직 없습니다",
+              "이번 주는 이벤트보다 환율과 선물 방향성이 더 큰 변수일 수 있습니다.",
+            )
           )}
         </section>
       ) : null}
@@ -398,10 +407,10 @@ export function GlobalEventsDashboard({
               ))}
             </div>
           ) : (
-            <EmptyState
-              title="다음 24시간 내 일정이 없습니다"
-              description="현재 표시 가능한 이벤트가 없습니다."
-            />
+            catalystEmptyState(
+              "다음 24시간 내 일정이 없습니다",
+              "대형 해외 이벤트 공백 구간으로, 내부 수급과 달러 흐름을 더 우선해 봐야 합니다.",
+            )
           )}
         </section>
       ) : null}
@@ -419,10 +428,10 @@ export function GlobalEventsDashboard({
               ))}
             </div>
           ) : (
-            <EmptyState
-              title="이번 주 일정이 없습니다"
-              description="현재 표시 가능한 이벤트가 없습니다."
-            />
+            catalystEmptyState(
+              "이번 주 일정이 없습니다",
+              "이번 주는 글로벌 발표보다 국내 수급과 가격 체력이 상대적으로 더 중요할 수 있습니다.",
+            )
           )}
         </section>
       ) : null}
@@ -440,10 +449,10 @@ export function GlobalEventsDashboard({
               ))}
             </div>
           ) : (
-            <EmptyState
-              title="표시 가능한 실적 이벤트가 없습니다"
-              description="현재 표시 가능한 이벤트가 없습니다."
-            />
+            catalystEmptyState(
+              "표시 가능한 실적 이벤트가 없습니다",
+              "실적 촉매 공백 구간이라면 오늘은 거시와 수급 해석이 상대적으로 더 중요합니다.",
+            )
           )}
         </section>
       ) : null}

@@ -47,6 +47,7 @@ describe("shared market header", () => {
     expect(screen.getByText("실시간 상태")).toBeInTheDocument();
     expect(screen.queryByText("오늘의 시장 톤")).not.toBeInTheDocument();
     expect(screen.getByText("모든 핵심 소스가 반영되었습니다.")).toBeInTheDocument();
+    expect(screen.getByText(/장 상태, 커버리지, 속보만 빠르게 확인하는 공통 셸/)).toBeInTheDocument();
   });
 
   it("hides the breaking layer when there is no breaking item", () => {

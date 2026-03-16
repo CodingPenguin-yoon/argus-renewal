@@ -13,7 +13,15 @@ function toneClasses(tone: "positive" | "neutral" | "negative") {
   return "border-slate-200 bg-slate-100 text-slate-700";
 }
 
+function driverToneClasses(index: number) {
+  if (index === 0) return "border-amber-200 bg-amber-50 text-amber-800";
+  if (index === 1) return "border-sky-200 bg-sky-50 text-sky-800";
+  return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
 export function OverviewDashboard({ data }: { data: OverviewTabData }) {
+  const keyDrivers = data.keyTakeaways.slice(0, 3);
+  const warningPoint = data.keyTakeaways[3] ?? data.keyTakeaways[data.keyTakeaways.length - 1] ?? null;
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 md:py-8">
       <section className="grid gap-6 xl:grid-cols-[1.5fr_0.9fr]">
@@ -28,8 +36,26 @@ export function OverviewDashboard({ data }: { data: OverviewTabData }) {
 
           <div className="mt-5 space-y-5">
             <div className="rounded-2xl border border-slate-200/80 bg-slate-50/90 px-4 py-4">
-              <p className="text-sm leading-7 text-slate-700">{data.marketToneLine}</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">지금 무슨 장인가</p>
+              <p className="mt-2 text-base leading-7 text-slate-800">{data.marketToneLine}</p>
             </div>
+
+            {keyDrivers.length ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-sm font-semibold text-slate-950">핵심 드라이버 3개</h2>
+                  <span className="text-xs text-slate-500">30초 안에 먼저 볼 이유</span>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {keyDrivers.map((item, index) => (
+                    <article key={`${index}-${item}`} className={`rounded-2xl border px-4 py-4 ${driverToneClasses(index)}`}>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.16em]">driver {index + 1}</p>
+                      <p className="mt-3 text-sm leading-6">{item}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {data.macroWidgets.length ? (
               <div className="space-y-3">
@@ -60,27 +86,27 @@ export function OverviewDashboard({ data }: { data: OverviewTabData }) {
             ) : null}
 
             <div className="space-y-2">
-              <h2 className="text-2xl font-semibold tracking-tight text-slate-950">{data.reportHeadline}</h2>
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">60초 브리프</h2>
+                <span className="text-xs text-slate-500">{data.reportHeadline}</span>
+              </div>
               <p className="text-base leading-8 text-slate-700">{data.reportSummary}</p>
             </div>
 
-            <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-slate-950">체크포인트</h3>
-              <ul className="space-y-2.5">
-                {data.keyTakeaways.map((item, index) => (
-                  <li
-                    key={`${index}-${item}`}
-                    className="flex items-start gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/85 px-4 py-3"
-                  >
-                    <span className="mt-2 inline-flex h-2 w-2 shrink-0 rounded-full bg-amber-400" />
-                    <p className="text-sm leading-6 text-slate-700">{item}</p>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {warningPoint ? (
+              <div className="rounded-2xl border border-rose-200/80 bg-rose-50/85 px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold text-rose-900">경고 포인트</h3>
+                  <span className="rounded-full border border-rose-200 bg-white/80 px-2.5 py-1 text-[11px] font-semibold text-rose-700">
+                    체크 필요
+                  </span>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-rose-900/90">{warningPoint}</p>
+              </div>
+            ) : null}
 
             <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-slate-950">핵심 링크</h3>
+              <h3 className="text-sm font-semibold text-slate-950">바로 연결된 근거</h3>
               <ul className="space-y-3">
                 {data.reportLinks.map((item, index) => (
                   <li
@@ -112,7 +138,7 @@ export function OverviewDashboard({ data }: { data: OverviewTabData }) {
         <aside className="space-y-6">
           <section className="rounded-[28px] border border-slate-200/80 bg-white/95 p-6 shadow-[0_20px_70px_-50px_rgba(15,23,42,0.45)]">
             <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">Gateway</p>
-            <h2 className="mt-2 text-lg font-semibold text-slate-950">다음 탭 한눈에 보기</h2>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">오늘 먼저 볼 탭</h2>
             <div className="mt-4 space-y-3">
               {data.gatewayPanels.map((item) => (
                 <Link

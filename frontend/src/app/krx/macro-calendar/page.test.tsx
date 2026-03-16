@@ -77,7 +77,7 @@ function makeEvent({
   };
 }
 
-function buildFixture({ includeEarnings }: { includeEarnings: boolean }) {
+function buildFixture({ includeEarnings, includeEvents = true }: { includeEarnings: boolean; includeEvents?: boolean }) {
   const cpi = makeEvent({
     eventKey: "BLS:CPI:2026-02",
     title: "미국 CPI",
@@ -94,9 +94,9 @@ function buildFixture({ includeEarnings }: { includeEarnings: boolean }) {
   });
 
   return {
-    highlights: [cpi],
-    upcoming: [cpi],
-    week: includeEarnings ? [cpi, earnings] : [cpi],
+    highlights: includeEvents ? [cpi] : [],
+    upcoming: includeEvents ? [cpi] : [],
+    week: includeEvents ? (includeEarnings ? [cpi, earnings] : [cpi]) : [],
     coverage: {
       state: "partial" as const,
       coverageRatio: 0.8,
@@ -165,5 +165,16 @@ describe("krx macro calendar page route", () => {
     render(component);
 
     expect(screen.queryByRole("tab", { name: "실적" })).not.toBeInTheDocument();
+  });
+
+  it("turns empty states into interpreted catalyst guidance", async () => {
+    vi.mocked(getGlobalEventsTabData).mockResolvedValue(buildFixture({ includeEarnings: false, includeEvents: false }));
+
+    const component = await KrxMacroCalendarPage();
+    render(component);
+
+    expect(screen.getByText("이번 주 대형 글로벌 촉매가 아직 보이지 않습니다")).toBeInTheDocument();
+    expect(screen.getByText("다음 24시간 대형 글로벌 촉매 없음")).toBeInTheDocument();
+    expect(screen.getAllByText(/내부 수급, 환율, 외국인 선물 변화 비중/).length).toBeGreaterThan(0);
   });
 });
