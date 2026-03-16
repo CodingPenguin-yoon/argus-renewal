@@ -76,7 +76,7 @@
 
 ## open questions
 - KIS에서 실제로 사용할 파생 endpoint 최종 확정
-- FRED series를 `DGS10`, `FEDFUNDS`로 고정할지 여부
+- FRED series를 `DEXKOUS`, `DCOILWTICO`, `DGS10`, `FEDFUNDS`로 유지할지 여부
 - `DGS2`, `SOFR`를 1차 범위에 포함할지 여부
 
 ## 관련 문서

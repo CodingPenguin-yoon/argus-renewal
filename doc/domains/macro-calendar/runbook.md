@@ -168,9 +168,9 @@ python3 -m src.krx.source_ingestion.cli sync-global-events
 
 ## 향후 reference source 전략
 - 매크로 캘린더의 일정/이벤트 source는 계속 공식 캘린더 중심으로 유지합니다.
-- 대시보드와 AI 인사이트에서 쓰는 `미국채 10년물`, `미국 금리` reference는 이제 FRED 기준으로 연결됐습니다.
-- 즉, FRED는 이 runbook의 일정 source를 대체하는 것이 아니라, 시장 해석용 rate reference를 보강하는 용도입니다.
-- 1차 backend 구현으로 `GET /api/krx/macro-reference/cards`가 추가됐고, 현재는 `DGS10`, `FEDFUNDS`만 제공합니다.
+- 대시보드와 AI 인사이트에서 쓰는 `환율`, `WTI·에너지`, `미국채 10년물`, `미국 금리` reference는 이제 FRED 기준으로 연결됐습니다.
+- 즉, FRED는 이 runbook의 일정 source를 대체하는 것이 아니라, 시장 해석용 macro reference를 보강하는 용도입니다.
+- 1차 backend 구현으로 `GET /api/krx/macro-reference/cards`가 추가됐고, 현재는 `DEXKOUS`, `DCOILWTICO`, `DGS10`, `FEDFUNDS`를 제공합니다.
 - 남은 frontend 연결 범위는 `시장 신호` provenance 정리입니다.
 - 기준 문서: `../../reference/kis-fred-integration-contract.md`
 - 실행 계획: `../../plans/kis-fred-rollout-plan.md`

@@ -2,7 +2,7 @@
 
 ## 목적
 - 다음 데이터 연동 라운드에서 source ownership을 먼저 고정합니다.
-- 파생과 거시 금리를 같은 기준으로 오래 운영할 수 있게 기준 문서를 남깁니다.
+- 파생과 거시 reference를 같은 기준으로 오래 운영할 수 있게 기준 문서를 남깁니다.
 
 ## canonical source ownership
 
@@ -12,6 +12,8 @@
 - 장기적으로 호가/체결/주문과 이어질 수 있는 파생 데이터
 
 ### FRED 담당
+- 원/달러 환율 reference
+- WTI 원유 reference
 - 미국채 10년물
 - 미국 기준금리/정책금리 계열
 - 미국 단기금리/보조금리 계열
@@ -22,13 +24,15 @@
 - 이 프로젝트의 파생 데이터는 단순 참고가 아니라 `시장 신호`와 직접 연결됩니다.
 - 장기적으로 실제 거래 연계 가능성이 중요한 영역이므로 KIS가 더 자연스럽습니다.
 
-### 미국 금리는 FRED
-- 미국채 10년물과 미국 금리는 시장 해석용 reference에 가깝습니다.
+### 거시 reference는 FRED
+- 환율, WTI, 미국채 10년물, 미국 금리는 시장 해석용 reference에 가깝습니다.
 - FRED는 시계열 안정성, 과거 데이터, 표준 series 관리에 유리합니다.
 
 ## 1차 target series
 
 ### FRED
+- `DEXKOUS`: 환율
+- `DCOILWTICO`: WTI·에너지
 - `DGS10`: 미국채 10년물
 - `FEDFUNDS`: 연방기금실효금리 월평균
 
@@ -51,7 +55,7 @@
 
 ## freshness policy
 - `KIS derivatives`: 장중 민감도가 높으므로 짧은 캐시
-- `FRED rates`: 해석용 reference이므로 긴 캐시
+- `FRED macro reference`: 해석용 reference이므로 긴 캐시
 
 권장 기준:
 - KIS summary: 30초 ~ 2분
@@ -62,7 +66,7 @@
   - 파생 카드에 graceful fallback
   - source coverage와 업데이트 지연 문구 노출
 - FRED 실패 시:
-  - 금리 reference 카드만 fallback
+  - 환율/원유/금리 reference 카드만 fallback
   - 뉴스/시장 신호는 유지
 
 ## provenance policy

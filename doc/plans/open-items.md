@@ -14,8 +14,8 @@
 ## Recently Closed
 | ID | Area | Item | Result |
 | --- | --- | --- | --- |
-| DATA-001 | Strategy | `파생=KIS`, `미국 금리=FRED` source 전략 고정 | 완료 |
-| DATA-002 | Backend | FRED rates adapter 추가 | `GET /api/krx/macro-reference/cards`와 `DGS10`/`FEDFUNDS` contract 완료 |
+| DATA-001 | Strategy | `파생=KIS`, `환율/WTI/미국 금리=FRED` source 전략 고정 | 완료 |
+| DATA-002 | Backend | FRED rates adapter 추가 | `GET /api/krx/macro-reference/cards`와 `DEXKOUS`/`DCOILWTICO`/`DGS10`/`FEDFUNDS` contract 완료 |
 | DATA-004 | Frontend | 시장 신호 source 연결 확장 | KIS/KRX provenance를 시장 신호 UI badge로 노출 완료 |
 | DATA-003A | Backend | KIS pre-open summary contract 추가 | derivatives summary에 `pre_open_futures` 필드를 추가하고 파생 탭에 반영 완료 |
 | DATA-003B | Backend | KIS domestic market-wide summary ingest | payload summary를 `derivatives_daily_metrics`에 적재하고 KRX 부재 시 fallback 경로 확인 완료 |
