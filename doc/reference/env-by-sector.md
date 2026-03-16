@@ -17,7 +17,7 @@
   - `KIS_DOMESTIC_DERIVATIVES_PROVIDER=api`
   - `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON={"FID_INPUT_ISCD":"AUTO_KOSPI200_FRONT"}`
 
-### FRED 금리 reference
+### FRED 거시 reference
 - `FRED_PROVIDER=api`
 - `FRED_API_KEY`
 
@@ -81,7 +81,7 @@
 
 ### 거시 금리 reference
 - `FRED_*`
-  - 현재는 `DGS10`, `FEDFUNDS`만 씁니다.
+  - 현재는 `DEXKOUS`, `DCOILWTICO`, `DGS10`, `FEDFUNDS`를 씁니다.
 
 ### 회사 리포트
 - `COMPANY_REPORT_*`

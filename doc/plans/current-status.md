@@ -11,9 +11,9 @@
 - `AI 인사이트`에 `시장 심리 / 변동성 온도 / AI 확신도` 게이지를 추가했고 접근성 속성을 보강했습니다.
 - 사용자 표면 canonical 경로를 `/krx/dashboard`, `/krx/insights`, `/krx/macro-calendar`로 정리하고, 기존 경로는 redirect로 유지했습니다.
 - 오늘 작업의 배경과 의사결정을 쉬운 말로 설명하는 `doc/troubleshooting/` 문서를 추가했습니다.
-- 다음 라운드 source 전략으로 `파생=KIS`, `미국채 10년물/미국 금리=FRED` 기준 문서와 rollout plan을 추가했습니다.
-- backend에 FRED macro reference route를 추가했고, `DGS10`과 `FEDFUNDS`를 `disabled | file | api` 모드로 읽는 1차 contract를 고정했습니다.
-- `대시보드`와 `AI 인사이트`는 이제 `/api/krx/macro-reference/cards`를 읽고, FRED 카드가 있으면 기존 macro news 기반 `금리` 표면보다 우선 사용합니다.
+- 다음 라운드 source 전략으로 `파생=KIS`, `환율/WTI·에너지/미국채 10년물/미국 금리=FRED` 기준 문서와 rollout plan을 추가했습니다.
+- backend에 FRED macro reference route를 추가했고, `DEXKOUS`, `DCOILWTICO`, `DGS10`, `FEDFUNDS`를 `disabled | file | api` 모드로 읽는 1차 contract를 고정했습니다.
+- `대시보드`와 `AI 인사이트`는 이제 `/api/krx/macro-reference/cards`를 읽고, FRED 카드가 있으면 기존 macro news 기반 `환율`, `유가/에너지`, `금리` 표면보다 우선 사용합니다.
 - `시장 신호`는 KIS/KRX provenance를 사람이 읽는 라벨로 노출하고, 파생 탭과 신호 카드에서 source badge를 직접 확인할 수 있습니다.
 - derivatives summary contract는 `KIS_DOMESTIC_DERIVATIVES` 기반 `pre_open_futures`를 내려주고, 파생 탭은 개장 전 선물 변동률을 우선 표시합니다.
 - `KIS_DOMESTIC_DERIVATIVES` payload에 market-wide summary가 있으면 `derivatives_daily_metrics` row를 함께 적재하고, KRX row가 없을 때 derivatives summary API가 이 데이터를 fallback source로 사용합니다.

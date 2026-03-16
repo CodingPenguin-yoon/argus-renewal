@@ -12,7 +12,7 @@
 - `대시보드` 상단에는 환율, WTI·에너지, 금리 미니 위젯을 추가했습니다.
 - 공통 KRX fetch helper는 기본 `no-store`를 유지하면서 필요한 호출자만 `revalidate`를 줄 수 있게 정리했습니다.
 - `시장 신호`, 파생 요약, `AI 인사이트`의 macro news는 30초 재검증 기준으로 분리했습니다.
-- backend에는 `GET /api/krx/macro-reference/cards`가 추가됐고, `대시보드`와 `AI 인사이트`는 이 경로의 FRED 카드를 읽어 기존 `금리` macro card보다 우선 사용합니다.
+- backend에는 `GET /api/krx/macro-reference/cards`가 추가됐고, `대시보드`와 `AI 인사이트`는 이 경로의 FRED 카드를 읽어 기존 `환율`, `유가/에너지`, `금리` macro card보다 우선 사용합니다.
 - `시장 신호`는 KIS/KRX provenance를 사람 친화적인 source badge로 노출합니다.
 - derivatives summary contract는 `pre_open_futures`를 포함하며, 파생 탭은 `KIS_DOMESTIC_DERIVATIVES` 개장 전 선물 snapshot을 우선 표시합니다.
 - `KIS_DOMESTIC_DERIVATIVES`는 이제 market-wide summary 필드가 있으면 `derivatives_daily_metrics` row도 같이 적재합니다.

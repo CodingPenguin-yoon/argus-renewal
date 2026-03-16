@@ -265,7 +265,7 @@ describe("overview and macro aggregators", () => {
         coverage: {
           state: "empty",
           available_items: 0,
-          expected_items: 2,
+          expected_items: 4,
           provider: "disabled",
           summary: "disabled",
           note: "feature_flag_disabled",
@@ -524,12 +524,47 @@ describe("overview and macro aggregators", () => {
     expect(result.globalHighlights[0]?.title).toBe("연준 발언");
   });
 
-  it("uses the 미국채 10년물 FRED card for overview widgets even if backend order changes", async () => {
+  it("uses FRED cards for overview macro widgets even if backend order changes", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
         updated_at: "2026-03-15T01:10:00Z",
         items: [
+          {
+            key: "wti",
+            label: "WTI·에너지",
+            summary: "WTI·에너지 $67.55/bbl · 2026-03-15 기준",
+            value: 67.55,
+            value_display: "$67.55/bbl",
+            change_value: 1.45,
+            change_display: "+$1.45/bbl",
+            unit: "usd_per_barrel",
+            stale: false,
+            source: {
+              key: "FRED",
+              name: "Federal Reserve Economic Data",
+              series_id: "DCOILWTICO",
+              series_name: "DCOILWTICO",
+              url: "https://fred.stlouisfed.org/series/DCOILWTICO",
+              observed_at: "2026-03-15",
+              updated_at: "2026-03-15T01:10:00Z",
+            },
+            freshness: {
+              status: "fresh",
+              observed_at: "2026-03-15",
+              age_seconds: 0,
+              ttl_seconds: 172800,
+            },
+            metadata: {
+              series_id: "DCOILWTICO",
+              series_name: "DCOILWTICO",
+              semantics: "daily_spot_price_usd_per_barrel",
+              frequency: "daily",
+              freshness_ttl_seconds: 172800,
+              provider_mode: "file",
+              retry_count: 0,
+            },
+          },
           {
             key: "fedfunds",
             label: "연방기금실효금리(월평균)",
@@ -561,6 +596,41 @@ describe("overview and macro aggregators", () => {
               semantics: "monthly_average_effective_federal_funds_rate_percent",
               frequency: "monthly",
               freshness_ttl_seconds: 3888000,
+              provider_mode: "file",
+              retry_count: 0,
+            },
+          },
+          {
+            key: "usdkrw",
+            label: "환율",
+            summary: "환율 1,458.30원 · 2026-03-15 기준",
+            value: 1458.3,
+            value_display: "1,458.30원",
+            change_value: 6.2,
+            change_display: "+6.20원",
+            unit: "krw_per_usd",
+            stale: false,
+            source: {
+              key: "FRED",
+              name: "Federal Reserve Economic Data",
+              series_id: "DEXKOUS",
+              series_name: "DEXKOUS",
+              url: "https://fred.stlouisfed.org/series/DEXKOUS",
+              observed_at: "2026-03-15",
+              updated_at: "2026-03-15T01:10:00Z",
+            },
+            freshness: {
+              status: "fresh",
+              observed_at: "2026-03-15",
+              age_seconds: 0,
+              ttl_seconds: 172800,
+            },
+            metadata: {
+              series_id: "DEXKOUS",
+              series_name: "DEXKOUS",
+              semantics: "daily_spot_exchange_rate_krw_per_usd",
+              frequency: "daily",
+              freshness_ttl_seconds: 172800,
               provider_mode: "file",
               retry_count: 0,
             },
@@ -603,8 +673,8 @@ describe("overview and macro aggregators", () => {
         ],
         coverage: {
           state: "full",
-          available_items: 2,
-          expected_items: 2,
+          available_items: 4,
+          expected_items: 4,
           provider: "file",
           summary: "full",
           note: null,
@@ -775,6 +845,7 @@ describe("overview and macro aggregators", () => {
     const result = await getOverviewTabData();
 
     expect(result.macroWidgets.map((item) => item.label)).toEqual(["환율", "WTI·에너지", "미국채 10년물"]);
+    expect(result.macroWidgets.every((item) => item.sourceLabel === "FRED")).toBe(true);
     expect(result.macroWidgets[2]?.sourceLabel).toBe("FRED");
     expect(fetchMock).toHaveBeenCalledWith("http://localhost:4000/api/krx/macro-reference/cards", {
       next: { revalidate: 3600 },
@@ -790,7 +861,7 @@ describe("overview and macro aggregators", () => {
         coverage: {
           state: "empty",
           available_items: 0,
-          expected_items: 2,
+          expected_items: 4,
           provider: "disabled",
           summary: "disabled",
           note: "feature_flag_disabled",
@@ -938,12 +1009,82 @@ describe("overview and macro aggregators", () => {
     });
   });
 
-  it("replaces the legacy 금리 card with FRED reference cards when available", async () => {
+  it("replaces legacy macro reference cards with FRED cards when available", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
         updated_at: "2026-03-15T01:10:00Z",
         items: [
+          {
+            key: "usdkrw",
+            label: "환율",
+            summary: "환율 1,458.30원 · 2026-03-15 기준",
+            value: 1458.3,
+            value_display: "1,458.30원",
+            change_value: 6.2,
+            change_display: "+6.20원",
+            unit: "krw_per_usd",
+            stale: false,
+            source: {
+              key: "FRED",
+              name: "Federal Reserve Economic Data",
+              series_id: "DEXKOUS",
+              series_name: "DEXKOUS",
+              url: "https://fred.stlouisfed.org/series/DEXKOUS",
+              observed_at: "2026-03-15",
+              updated_at: "2026-03-15T01:10:00Z",
+            },
+            freshness: {
+              status: "fresh",
+              observed_at: "2026-03-15",
+              age_seconds: 0,
+              ttl_seconds: 172800,
+            },
+            metadata: {
+              series_id: "DEXKOUS",
+              series_name: "DEXKOUS",
+              semantics: "daily_spot_exchange_rate_krw_per_usd",
+              frequency: "daily",
+              freshness_ttl_seconds: 172800,
+              provider_mode: "file",
+              retry_count: 0,
+            },
+          },
+          {
+            key: "wti",
+            label: "WTI·에너지",
+            summary: "WTI·에너지 $67.55/bbl · 2026-03-15 기준",
+            value: 67.55,
+            value_display: "$67.55/bbl",
+            change_value: 1.45,
+            change_display: "+$1.45/bbl",
+            unit: "usd_per_barrel",
+            stale: false,
+            source: {
+              key: "FRED",
+              name: "Federal Reserve Economic Data",
+              series_id: "DCOILWTICO",
+              series_name: "DCOILWTICO",
+              url: "https://fred.stlouisfed.org/series/DCOILWTICO",
+              observed_at: "2026-03-15",
+              updated_at: "2026-03-15T01:10:00Z",
+            },
+            freshness: {
+              status: "fresh",
+              observed_at: "2026-03-15",
+              age_seconds: 0,
+              ttl_seconds: 172800,
+            },
+            metadata: {
+              series_id: "DCOILWTICO",
+              series_name: "DCOILWTICO",
+              semantics: "daily_spot_price_usd_per_barrel",
+              frequency: "daily",
+              freshness_ttl_seconds: 172800,
+              provider_mode: "file",
+              retry_count: 0,
+            },
+          },
           {
             key: "us10y",
             label: "미국채 10년물",
@@ -1017,8 +1158,8 @@ describe("overview and macro aggregators", () => {
         ],
         coverage: {
           state: "full",
-          available_items: 2,
-          expected_items: 2,
+          available_items: 4,
+          expected_items: 4,
           provider: "file",
           summary: "full",
           note: null,
@@ -1134,6 +1275,8 @@ describe("overview and macro aggregators", () => {
     const result = await getMacroTabData();
 
     expect(result.referenceCards.map((item) => item.label)).toEqual([
+      "환율",
+      "WTI·에너지",
       "미국채 10년물",
       "연방기금실효금리(월평균)",
       "파생 시그널",

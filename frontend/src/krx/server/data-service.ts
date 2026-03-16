@@ -191,20 +191,35 @@ function buildMacroReferenceCards(macroNews: MacroNews[]) {
     }));
 }
 
+const FRED_REFERENCE_ORDER = ["usdkrw", "wti", "us10y", "fedfunds"] as const;
+const RISING_IS_RISK_OFF_REFERENCE_KEYS = new Set<string>(["usdkrw", "wti", "us10y", "fedfunds"]);
+
+function macroReferenceLabel(key: string, label: string) {
+  if (key === "usdkrw") return "환율";
+  if (key === "wti") return "WTI·에너지";
+  return label;
+}
+
+function findFredReferenceCard(cards: MacroReferenceCard[], key: (typeof FRED_REFERENCE_ORDER)[number]) {
+  return cards.find((item) => item.key === key) ?? null;
+}
+
 function buildOverviewMacroWidgets(macroNews: MacroNews[], fredReferenceCards: MacroReferenceCard[]) {
   const baseCards = buildMacroReferenceCards(macroNews);
   const latestByKey = new Map(baseCards.map((item) => [item.key, item]));
-  const us10yCard = fredReferenceCards.find((item) => item.key === "us10y") ?? fredReferenceCards[0] ?? null;
 
   return [
-    latestByKey.get("환율") ?? null,
-    latestByKey.get("유가/에너지") ?? null,
-    us10yCard ?? latestByKey.get("금리") ?? null,
+    findFredReferenceCard(fredReferenceCards, "usdkrw") ?? latestByKey.get("환율") ?? null,
+    findFredReferenceCard(fredReferenceCards, "wti") ?? latestByKey.get("유가/에너지") ?? null,
+    findFredReferenceCard(fredReferenceCards, "us10y") ?? latestByKey.get("금리") ?? null,
   ].filter((item): item is MacroReferenceCard => Boolean(item));
 }
 
-function toneFromChange(value: number | null): MacroReferenceCard["tone"] {
+function toneFromMacroReferenceChange(key: string, value: number | null): MacroReferenceCard["tone"] {
   if (value === null || value === 0) return "neutral";
+  if (RISING_IS_RISK_OFF_REFERENCE_KEYS.has(key)) {
+    return value > 0 ? "negative" : "positive";
+  }
   return value > 0 ? "positive" : "negative";
 }
 
@@ -221,12 +236,12 @@ async function getBackendMacroReferenceCards(): Promise<MacroReferenceCard[]> {
     const payload = (await response.json()) as ApiMacroReferencePayload;
     return payload.items.map((item) => ({
       key: item.key,
-      label: item.label,
+      label: macroReferenceLabel(item.key, item.label),
       summary: firstNonEmpty(item.summary, item.value_display, item.source.series_name),
       sourceLabel: item.source.key,
       sourceUrl: item.source.url,
       updatedAt: item.source.observed_at ?? item.source.updated_at,
-      tone: toneFromChange(item.change_value),
+      tone: toneFromMacroReferenceChange(item.key, item.change_value),
     }));
   } catch (error) {
     console.error(
@@ -521,12 +536,20 @@ export async function getMacroTabData(): Promise<MacroTabData> {
       getDerivativesInvestorFlow("20d"),
       getBackendMacroReferenceCards(),
     ]);
-  const referenceCards: MacroReferenceCard[] = buildMacroReferenceCards(macroNews).flatMap((item) => {
-    if (item.key === "금리" && fredReferenceCards.length) {
-      return fredReferenceCards;
+  const fredReferenceCardsByKey = new Map(fredReferenceCards.map((item) => [item.key, item]));
+  const macroReferenceCards = buildMacroReferenceCards(macroNews).filter((item) => {
+    if (item.key === "환율") return !fredReferenceCardsByKey.has("usdkrw");
+    if (item.key === "유가/에너지") return !fredReferenceCardsByKey.has("wti");
+    if (item.key === "금리") {
+      return !(fredReferenceCardsByKey.has("us10y") || fredReferenceCardsByKey.has("fedfunds"));
     }
-    return [item];
+    return true;
   });
+  const orderedFredReferenceCards = FRED_REFERENCE_ORDER.flatMap((key) => {
+    const card = fredReferenceCardsByKey.get(key);
+    return card ? [card] : [];
+  });
+  const referenceCards: MacroReferenceCard[] = [...orderedFredReferenceCards, ...macroReferenceCards];
 
   referenceCards.push({
     key: "derivatives",

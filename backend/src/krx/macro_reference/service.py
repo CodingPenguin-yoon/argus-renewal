@@ -11,6 +11,28 @@ _FRED_SOURCE_NAME = "Federal Reserve Economic Data"
 
 _SERIES_DEFINITIONS: tuple[FredSeriesDefinition, ...] = (
     FredSeriesDefinition(
+        key="usdkrw",
+        label="환율",
+        series_id="DEXKOUS",
+        series_name="South Korean Won to One U.S. Dollar",
+        semantics="daily_spot_exchange_rate_krw_per_usd",
+        frequency="daily",
+        unit="krw_per_usd",
+        freshness_ttl_seconds=60 * 60 * 24 * 2,
+        source_url="https://fred.stlouisfed.org/series/DEXKOUS",
+    ),
+    FredSeriesDefinition(
+        key="wti",
+        label="WTI·에너지",
+        series_id="DCOILWTICO",
+        series_name="Crude Oil Prices: West Texas Intermediate (WTI) - Cushing, Oklahoma",
+        semantics="daily_spot_price_usd_per_barrel",
+        frequency="daily",
+        unit="usd_per_barrel",
+        freshness_ttl_seconds=60 * 60 * 24 * 2,
+        source_url="https://fred.stlouisfed.org/series/DCOILWTICO",
+    ),
+    FredSeriesDefinition(
         key="us10y",
         label="미국채 10년물",
         series_id="DGS10",
@@ -94,9 +116,9 @@ class MacroReferenceService:
             "key": snapshot.definition.key,
             "label": snapshot.definition.label,
             "value": snapshot.value,
-            "value_display": _format_pct(snapshot.value),
+            "value_display": _format_value(snapshot.value, snapshot.definition.unit),
             "change_value": snapshot.change_value,
-            "change_display": _format_pct_point(snapshot.change_value),
+            "change_display": _format_change(snapshot.change_value, snapshot.definition.unit),
             "summary": _summary_line(snapshot=snapshot),
             "unit": snapshot.definition.unit,
             "stale": freshness["status"] == "stale",
@@ -175,21 +197,36 @@ def _coverage_summary(
     disabled_reason: str | None,
 ) -> str:
     if disabled_reason:
-        return f"FRED 금리 reference가 비활성화되어 있습니다. ({disabled_reason})"
-    return f"FRED 금리 reference {available_items}/{expected_items}개가 {provider} 경로로 준비됐습니다."
+        return f"FRED 거시 reference가 비활성화되어 있습니다. ({disabled_reason})"
+    return f"FRED 거시 reference {available_items}/{expected_items}개가 {provider} 경로로 준비됐습니다."
 
 
-def _format_pct(value: float | None) -> str | None:
+def _format_value(value: float | None, unit: str) -> str | None:
     if value is None:
         return None
-    return f"{value:.2f}%"
+    if unit == "pct":
+        return f"{value:.2f}%"
+    if unit == "krw_per_usd":
+        return f"{value:,.2f}원"
+    if unit == "usd_per_barrel":
+        return f"${value:,.2f}/bbl"
+    return f"{value:,.2f}"
 
 
-def _format_pct_point(value: float | None) -> str | None:
+def _format_change(value: float | None, unit: str) -> str | None:
     if value is None:
         return None
     sign = "+" if value > 0 else ""
-    return f"{sign}{value:.2f}%p"
+    magnitude = abs(value)
+    if unit == "pct":
+        return f"{sign}{value:.2f}%p"
+    if unit == "krw_per_usd":
+        prefix = "-" if value < 0 else sign
+        return f"{prefix}{magnitude:,.2f}원"
+    if unit == "usd_per_barrel":
+        prefix = "-" if value < 0 else sign
+        return f"{prefix}${magnitude:,.2f}/bbl"
+    return f"{sign}{value:,.2f}"
 
 
 def _freshness(*, snapshot: FredSeriesSnapshot, now: datetime) -> dict[str, Any]:
@@ -219,7 +256,7 @@ def _parse_observed_at(value: str | None) -> datetime | None:
 
 
 def _summary_line(*, snapshot: FredSeriesSnapshot) -> str | None:
-    value_display = _format_pct(snapshot.value)
+    value_display = _format_value(snapshot.value, snapshot.definition.unit)
     if value_display is None:
         return None
     if snapshot.observed_at:
