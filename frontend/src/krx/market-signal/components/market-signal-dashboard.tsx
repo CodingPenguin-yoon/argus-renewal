@@ -629,26 +629,45 @@ function CheckpointBoard({
 }
 
 function subtabDescription(tab: MarketSignalSubtabKey) {
-  if (tab === "summary") return "오늘 시장 결론, 자금 흐름, 파생상품, 체크포인트를 한 번에 요약합니다.";
+  if (tab === "summary") return "팩트, 수급, 파생, 트리거를 한 번에 정리해 오늘 시장의 핵심 보드를 제공합니다.";
   if (tab === "fund-flow") return "외국인·기관·프로그램 수급 중심으로 당일 자금 방향을 확인합니다.";
   if (tab === "derivatives") return "파생 포지션과 변동성 지표를 핵심 카드와 추이 차트로 제공합니다.";
   if (tab === "checkpoints") return "개장 전/장중 확인해야 할 리스크 체크포인트를 정리합니다.";
   return "";
 }
 
-function OverviewCard({
+function SummaryBoardCard({
   title,
-  description,
+  card,
+  fallbackLine,
+  fallbackDetail,
   tab,
 }: {
   title: string;
-  description: string;
+  card: MarketSignalCard | null;
+  fallbackLine: string;
+  fallbackDetail?: string;
   tab: MarketSignalSubtabKey;
 }) {
+  const metric = card?.supportingMetrics[0] ?? null;
+  const detail = card?.detailText ?? fallbackDetail ?? null;
+
   return (
-    <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-semibold tracking-wide text-slate-500">{title}</p>
-      <p className="mt-2 text-sm leading-6 text-slate-800">{description}</p>
+    <article className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="neutral">{title}</Badge>
+        {card?.trendBadge ? <Badge variant={toneVariant(card.trendBadge.tone)}>{card.trendBadge.label}</Badge> : null}
+        {card?.sourceCoverage ? <Badge variant={coverageVariant(card.sourceCoverage.state)}>{card.sourceCoverage.label}</Badge> : null}
+      </div>
+      <p className="mt-4 text-lg font-black tracking-tight text-slate-900">{card?.interpretationLine ?? fallbackLine}</p>
+      {detail ? <p className="mt-3 text-sm leading-6 text-slate-600">{detail}</p> : null}
+      {metric ? (
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{metric.label}</p>
+          <p className="mt-2 text-2xl font-black tracking-tight text-slate-900">{metric.formattedValue}</p>
+          <p className="mt-2 text-xs leading-5 text-slate-500">{metricProvenanceLabel(metric)}</p>
+        </div>
+      ) : null}
       {tab !== "summary" ? (
         <Link
           href={marketSignalSubtabHref(tab)}
@@ -721,7 +740,7 @@ export function MarketSignalDashboard({
         <>
           <section className="rounded-[32px] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_34%),linear-gradient(180deg,#fffdf7_0%,#ffffff_100%)] p-6 shadow-sm">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="high">종합</Badge>
+              <Badge variant="high">요약 보드</Badge>
               <Badge variant={coverageVariant(summary.sourceCoverage.state)}>{summary.sourceCoverage.label}</Badge>
               <Badge variant="neutral">{freshnessLabel(summary.lastUpdatedAt)}</Badge>
             </div>
@@ -730,24 +749,32 @@ export function MarketSignalDashboard({
             <SourceBadgeRow sourceNames={summary.sourceCoverage.sourceNames} />
           </section>
           <section className="grid gap-4 xl:grid-cols-2" data-testid="market-signal-summary-grid">
-            <OverviewCard
-              title="오늘 시장 결론"
-              description={todayCard?.interpretationLine ?? summary.interpretationLine}
+            <SummaryBoardCard
+              title="팩트"
+              card={todayCard}
+              fallbackLine={summary.interpretationLine}
+              fallbackDetail={summary.explanationText}
               tab="summary"
             />
-            <OverviewCard
-              title="자금 흐름 요약"
-              description={fundFlowCard?.interpretationLine ?? "외국인·기관 수급 데이터가 준비되면 이 영역에 표시됩니다."}
+            <SummaryBoardCard
+              title="수급"
+              card={fundFlowCard}
+              fallbackLine="외국인·기관 수급 데이터가 준비되면 이 영역에 표시됩니다."
+              fallbackDetail="외국인·기관·프로그램 수급이 들어오면 오늘 자금 방향을 이 블록에서 바로 확인할 수 있습니다."
               tab="fund-flow"
             />
-            <OverviewCard
-              title="파생상품 요약"
-              description={derivativesCard?.interpretationLine ?? derivativesSummaryLine}
+            <SummaryBoardCard
+              title="파생"
+              card={derivativesCard}
+              fallbackLine={derivativesSummaryLine}
+              fallbackDetail="파생 세부 탭에서는 변화율 계산 소스와 추이 차트까지 이어서 확인할 수 있습니다."
               tab="derivatives"
             />
-            <OverviewCard
-              title="오늘 체크포인트 요약"
-              description={checkpointsCard?.interpretationLine ?? "개장 전 확인할 리스크 항목이 준비되면 이 영역에 표시됩니다."}
+            <SummaryBoardCard
+              title="트리거"
+              card={checkpointsCard}
+              fallbackLine="개장 전 확인할 리스크 항목이 준비되면 이 영역에 표시됩니다."
+              fallbackDetail="체크포인트 세부 탭에서는 트리거 보드와 팩트 보드를 함께 볼 수 있습니다."
               tab="checkpoints"
             />
           </section>
