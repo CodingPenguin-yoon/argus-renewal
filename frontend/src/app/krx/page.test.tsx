@@ -273,6 +273,22 @@ describe("krx market signal page route", () => {
     expect(screen.queryByText("오늘 시장 결론")).not.toBeInTheDocument();
   });
 
+  it("supports direct deep-link navigation to 시장 신호 > 체크포인트", async () => {
+    vi.mocked(getMarketSignalTabData).mockResolvedValue(buildMarketSignalFixture());
+
+    const component = await KrxHomePage({
+      searchParams: Promise.resolve({ subtab: "checkpoints" }),
+    });
+    render(component);
+
+    expect(screen.getByRole("tab", { name: "체크포인트" })).toHaveAttribute("href", "/krx?subtab=checkpoints");
+    expect(screen.getByText("트리거 보드")).toBeInTheDocument();
+    expect(screen.getByText("팩트 보드")).toBeInTheDocument();
+    expect(screen.getByText("프로그램 수급 지속 여부를 먼저 확인해야 합니다.")).toBeInTheDocument();
+    expect(screen.getByText("Put/Call 비율 압력")).toBeInTheDocument();
+    expect(screen.getByText("시장 브리핑 · 2026-03-09")).toBeInTheDocument();
+  });
+
   it("renders derivatives tab gracefully even with partial data and user-facing empty copy", async () => {
     const fixture = buildMarketSignalFixture();
     fixture.derivativesSummary = emptyDerivativesSummary();

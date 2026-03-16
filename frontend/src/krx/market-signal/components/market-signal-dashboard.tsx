@@ -564,6 +564,70 @@ function SignalCard({ card }: { card: MarketSignalCard }) {
   );
 }
 
+function metricProvenanceLabel(metric: MarketSignalCard["supportingMetrics"][number]) {
+  const parts: string[] = [];
+
+  if (metric.provenance.sourceName) {
+    parts.push(sourceNameLabel(metric.provenance.sourceName));
+  }
+
+  if (metric.provenance.tradeDate) {
+    parts.push(metric.provenance.tradeDate);
+  }
+
+  return parts.join(" · ") || "소스 정보 없음";
+}
+
+function CheckpointBoard({
+  card,
+  updatedAt,
+}: {
+  card: MarketSignalCard;
+  updatedAt: string | null;
+}) {
+  return (
+    <section className="space-y-5" data-testid="market-signal-checkpoints-board">
+      <article className="rounded-[30px] border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="high">트리거 보드</Badge>
+          <Badge variant={coverageVariant(card.sourceCoverage.state)}>{card.sourceCoverage.label}</Badge>
+          {card.trendBadge ? <Badge variant={toneVariant(card.trendBadge.tone)}>{card.trendBadge.label}</Badge> : null}
+          <Badge variant="neutral">{freshnessLabel(updatedAt)}</Badge>
+        </div>
+        <p className="mt-4 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">지금 먼저 볼 트리거</p>
+        <h2 className="mt-2 text-2xl font-black tracking-tight text-slate-900">{card.interpretationLine}</h2>
+        <p className="mt-3 text-sm leading-7 text-slate-600">
+          {card.detailText ?? "추가 설명은 아직 없지만, 아래 팩트 보드에 연결된 지표를 먼저 확인하면 됩니다."}
+        </p>
+        <SourceBadgeRow sourceNames={card.sourceCoverage.sourceNames} />
+      </article>
+
+      <section className="rounded-[30px] border border-slate-200 bg-white p-6 shadow-sm">
+        <SectionHeader
+          title="팩트 보드"
+          description="현재 체크포인트가 어떤 숫자와 규칙 기반 근거에서 나왔는지 함께 확인합니다."
+        />
+        {card.supportingMetrics.length ? (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {card.supportingMetrics.map((metric) => (
+              <article key={metric.key} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{metric.label}</p>
+                <p className="mt-2 text-2xl font-black tracking-tight text-slate-900">{metric.formattedValue}</p>
+                <p className="mt-3 text-xs leading-5 text-slate-500">{metricProvenanceLabel(metric)}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="표시할 팩트가 아직 없습니다"
+            description="지원 지표가 채워지면 트리거를 설명하는 팩트 보드가 이 영역에 표시됩니다."
+          />
+        )}
+      </section>
+    </section>
+  );
+}
+
 function subtabDescription(tab: MarketSignalSubtabKey) {
   if (tab === "summary") return "오늘 시장 결론, 자금 흐름, 파생상품, 체크포인트를 한 번에 요약합니다.";
   if (tab === "fund-flow") return "외국인·기관·프로그램 수급 중심으로 당일 자금 방향을 확인합니다.";
@@ -712,7 +776,7 @@ export function MarketSignalDashboard({
 
       {activeSubtab === "checkpoints" ? (
         checkpointsCard ? (
-          <SignalCard card={checkpointsCard} />
+          <CheckpointBoard card={checkpointsCard} updatedAt={summary.lastUpdatedAt} />
         ) : (
           <EmptyState
             title="체크포인트를 아직 만들지 못했습니다"
