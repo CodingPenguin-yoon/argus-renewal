@@ -15,6 +15,23 @@ import {
   MarketNewsHeaderContext,
 } from "@/krx/types/domain";
 
+type StoryClusterItem = {
+  key: string;
+  title: string;
+  summary: string | null;
+  whyItMatters: string;
+  marketImpact: string | null;
+  marketScope: MarketNewsCard["marketScope"];
+  primaryRegion: MarketNewsCard["primaryRegion"] | null;
+  importanceLabel: MarketNewsCard["importanceLabel"];
+  storyState: MarketNewsCard["storyState"];
+  evidenceCount: number;
+  publishedAt: string | null;
+  sourceLabel: string | null;
+  sourceUrl: string | null;
+  detailHref: string;
+};
+
 function formatMaybeDate(value: string | null) {
   if (!value) return "업데이트 정보 없음";
   try {
@@ -56,6 +73,24 @@ function safeExternalHref(value: string | null) {
   }
 }
 
+function storyStateLabel(value: MarketNewsCard["storyState"]) {
+  if (value === "NEW") return "새 이슈";
+  if (value === "DISCLOSURE_CONFIRMED") return "공시 확인";
+  return "진행 중";
+}
+
+function importanceLabelText(value: MarketNewsCard["importanceLabel"]) {
+  if (value === "high") return "영향 큼";
+  if (value === "low") return "보조";
+  return "중간";
+}
+
+function storyDetailHref(scope: MarketNewsCard["marketScope"]) {
+  if (scope === "global_market") return newsTabHref("global");
+  if (scope === "company") return newsTabHref("disclosures");
+  return newsTabHref("kr");
+}
+
 function dedupeBriefingPoints(items: string[]) {
   const deduped: string[] = [];
   const seen = new Set<string>();
@@ -80,6 +115,77 @@ function dedupeBriefingLinks(items: MarketNewsBriefing["linkedHeadlines"]) {
     deduped.push(item);
   }
   return deduped;
+}
+
+function buildStoryClusters({
+  krCards,
+  globalCards,
+  disclosureCards,
+  linkedHeadlines,
+}: {
+  krCards: MarketNewsCard[];
+  globalCards: MarketNewsCard[];
+  disclosureCards: MarketNewsCard[];
+  linkedHeadlines: MarketNewsBriefing["linkedHeadlines"];
+}) {
+  const cardMap = new Map<string, MarketNewsCard>();
+  [...krCards, ...globalCards, ...disclosureCards].forEach((card) => {
+    cardMap.set(card.id, card);
+  });
+
+  const linkedClusters = linkedHeadlines.flatMap((item, index) => {
+    const matchedCard = item.cardId ? cardMap.get(item.cardId) : null;
+    const scope = matchedCard?.marketScope ?? item.marketScope ?? "kr_market";
+    const primaryRegion = matchedCard?.primaryRegion ?? item.primaryRegion ?? "KR";
+    const summary = item.summary ?? matchedCard?.oneLineSummary ?? null;
+    const whyItMatters = matchedCard?.whyItMatters ?? summary ?? "핵심 스토리의 의미를 정리하는 중입니다.";
+    const marketImpact = matchedCard?.marketImpact ?? null;
+    const sourceLabel = item.sourceLabel ?? null;
+    const sourceUrl = safeExternalHref(item.sourceUrl);
+    return [
+      {
+        key: `${item.cardId ?? "linked"}-${index}`,
+        title: item.title,
+        summary,
+        whyItMatters,
+        marketImpact,
+        marketScope: scope,
+        primaryRegion,
+        importanceLabel: matchedCard?.importanceLabel ?? "high",
+        storyState: matchedCard?.storyState ?? "ONGOING",
+        evidenceCount: matchedCard?.evidenceCount ?? (sourceUrl ? 1 : 0),
+        publishedAt: item.publishedAt ?? matchedCard?.publishedAt ?? null,
+        sourceLabel,
+        sourceUrl,
+        detailHref: storyDetailHref(scope),
+      } satisfies StoryClusterItem,
+    ];
+  });
+
+  if (linkedClusters.length) {
+    return linkedClusters.slice(0, 3);
+  }
+
+  const rankedFallback = [...krCards, ...globalCards, ...disclosureCards]
+    .sort((left, right) => right.rankingScore - left.rankingScore)
+    .slice(0, 3);
+
+  return rankedFallback.map((card) => ({
+    key: card.id,
+    title: card.title,
+    summary: card.oneLineSummary,
+    whyItMatters: card.whyItMatters,
+    marketImpact: card.marketImpact,
+    marketScope: card.marketScope,
+    primaryRegion: card.primaryRegion,
+    importanceLabel: card.importanceLabel,
+    storyState: card.storyState,
+    evidenceCount: card.evidenceCount,
+    publishedAt: card.publishedAt,
+    sourceLabel: null,
+    sourceUrl: null,
+    detailHref: storyDetailHref(card.marketScope),
+  }));
 }
 
 function buildReportParagraphs(summary: string) {
@@ -175,6 +281,95 @@ function CardSection({
   );
 }
 
+function StoryClusterBoard({ items }: Readonly<{ items: StoryClusterItem[] }>) {
+  return (
+    <Card className="border-border/50 bg-card/95 shadow-lg backdrop-blur-sm">
+      <CardHeader className="pb-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1.5">
+            <Badge variant="outline" className="h-5 w-fit px-2 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+              Today Story Board
+            </Badge>
+            <CardTitle className="text-xl font-bold tracking-tight">오늘 핵심 스토리</CardTitle>
+            <CardDescription className="text-sm leading-relaxed">
+              먼저 서사를 잡고, 아래 브리핑에서 해석을 이어서 읽는 구조로 정리했습니다.
+            </CardDescription>
+          </div>
+          <Badge variant="outline" className="h-6 px-2.5 font-medium text-muted-foreground">
+            상위 {items.length}개
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-2">
+        {items.length ? (
+          <div className="grid gap-4 lg:grid-cols-3">
+            {items.map((item) => (
+              <article key={item.key} className="rounded-2xl border border-border/50 bg-card/80 p-5 ring-1 ring-border/30">
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="secondary">{importanceLabelText(item.importanceLabel)}</Badge>
+                  <Badge variant="outline">{storyStateLabel(item.storyState)}</Badge>
+                  <Badge variant="outline">{marketScopeLabel(item.marketScope)}</Badge>
+                </div>
+                <h3 className="mt-4 text-lg font-bold leading-7 tracking-tight text-foreground">{item.title}</h3>
+                {item.summary ? <p className="mt-2 text-sm leading-6 text-muted-foreground">{item.summary}</p> : null}
+
+                <div className="mt-4 space-y-3 rounded-2xl border border-border/50 bg-muted/25 p-4">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-muted-foreground">왜 중요한가</p>
+                    <p className="mt-1 text-sm leading-6 text-foreground/90">{item.whyItMatters}</p>
+                  </div>
+                  {item.marketImpact ? (
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-muted-foreground">KRX 영향</p>
+                      <p className="mt-1 text-sm leading-6 text-foreground/90">{item.marketImpact}</p>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>{item.primaryRegion === "GLOBAL" ? "글로벌 변수" : "한국 증시"}</span>
+                  <span>·</span>
+                  <span>근거 {item.evidenceCount}건</span>
+                  {item.publishedAt ? (
+                    <>
+                      <span>·</span>
+                      <span>{formatMaybeDate(item.publishedAt)}</span>
+                    </>
+                  ) : null}
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <Link
+                    href={item.detailHref}
+                    className="inline-flex items-center rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground"
+                  >
+                    관련 카드 보기
+                  </Link>
+                  {item.sourceUrl ? (
+                    <a
+                      href={item.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs font-semibold text-foreground underline decoration-border underline-offset-4 hover:text-primary"
+                    >
+                      {item.sourceLabel ?? "원문 보기"}
+                    </a>
+                  ) : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="핵심 스토리를 아직 만들지 못했습니다"
+            description="상위 뉴스 카드가 모이면 이 영역에 오늘 시장 서사를 먼저 정리합니다."
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function SummaryBriefingBoard({ briefing }: Readonly<{ briefing: MarketNewsBriefing }>) {
   const summaryParagraphs = buildReportParagraphs(briefing.summary);
   const keyPoints = dedupeBriefingPoints(briefing.keyPoints);
@@ -189,11 +384,11 @@ function SummaryBriefingBoard({ briefing }: Readonly<{ briefing: MarketNewsBrief
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1.5">
             <Badge variant="outline" className="h-5 w-fit px-2 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
-              실시간 종합 리포트
+              Secondary Synthesis
             </Badge>
-            <CardTitle className="text-xl font-bold tracking-tight">종합 시장 리포트</CardTitle>
+            <CardTitle className="text-xl font-bold tracking-tight">스토리 종합 브리핑</CardTitle>
             <CardDescription className="text-sm leading-relaxed">
-              새 중요 뉴스가 반영될 때마다 종합 탭 기준으로 핵심 흐름을 서술형 리포트로 다시 정리합니다.
+              위 핵심 스토리를 AI가 서술형으로 다시 묶어 현재 해석을 보조합니다.
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -209,7 +404,7 @@ function SummaryBriefingBoard({ briefing }: Readonly<{ briefing: MarketNewsBrief
       <CardContent className="pt-2">
         <article className="mx-auto max-w-4xl space-y-8">
           <header className="border-b border-border/40 pb-6">
-            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-muted-foreground">오늘의 결론</p>
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-muted-foreground">서술형 정리</p>
             <h3 className="mt-3 text-3xl font-black leading-tight tracking-tight text-foreground sm:text-4xl">{briefing.headline}</h3>
             <div className="mt-4 flex flex-wrap gap-2 text-xs text-muted-foreground">
               <span>{formatMaybeDate(briefing.updatedAt)}</span>
@@ -227,7 +422,7 @@ function SummaryBriefingBoard({ briefing }: Readonly<{ briefing: MarketNewsBrief
           </header>
 
           <section className="space-y-4">
-            <h4 className="text-sm font-bold uppercase tracking-[0.18em] text-muted-foreground">시장 해설</h4>
+            <h4 className="text-sm font-bold uppercase tracking-[0.18em] text-muted-foreground">스토리 해설</h4>
             <div className="space-y-5">
               {(summaryParagraphs.length ? summaryParagraphs : [briefing.summary]).map((paragraph, index) => (
                 <p key={`${index}-${paragraph}`} className="text-[15px] leading-8 text-foreground/90 sm:text-base sm:leading-8">
@@ -313,7 +508,7 @@ function SummaryBriefingBoard({ briefing }: Readonly<{ briefing: MarketNewsBrief
         <div className="mt-8 rounded-2xl border border-border/50 bg-card/60 p-5 ring-1 ring-border/30">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h4 className="text-sm font-bold tracking-tight text-foreground">리포트 메모</h4>
+              <h4 className="text-sm font-bold tracking-tight text-foreground">브리핑 메모</h4>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
                 이 리포트는 상위 뉴스 카드와 공시를 묶어 현재 해석에 필요한 맥락만 다시 서술합니다.
               </p>
@@ -478,9 +673,15 @@ export function NewsTabDashboard({
   const krPageStart = krCards.length ? krPage * krPageSize + 1 : 0;
   const krPageEnd = Math.min((krPage + 1) * krPageSize, krCards.length);
   const pagedKrCards = krCards.slice(krPage * krPageSize, krPage * krPageSize + krPageSize);
+  const storyClusters = buildStoryClusters({
+    krCards,
+    globalCards,
+    disclosureCards,
+    linkedHeadlines: dedupeBriefingLinks(briefing.linkedHeadlines),
+  });
   const activeSummary =
     activeTab === "summary"
-      ? "실시간 브리핑이 가장 중요한 흐름과 근거 링크를 계속 다시 정리합니다."
+      ? "핵심 스토리를 먼저 보여주고, AI 브리핑은 그 뒤에서 현재 해석을 다시 묶습니다."
       : activeTab === "kr"
         ? "국내 시장 직접 영향 뉴스를 시간순으로 누적한 피드"
         : activeTab === "global"
@@ -550,7 +751,10 @@ export function NewsTabDashboard({
 
       {activeTab === "summary" ? (
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-          <SummaryBriefingBoard briefing={briefing} />
+          <div className="space-y-5">
+            <StoryClusterBoard items={storyClusters} />
+            <SummaryBriefingBoard briefing={briefing} />
+          </div>
 
           <aside className="space-y-5 xl:sticky xl:top-6 xl:self-start">
             <RailSection title="시장 표면 상태" eyebrow="표면 스냅샷">

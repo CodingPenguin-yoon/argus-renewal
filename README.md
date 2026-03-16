@@ -13,7 +13,7 @@ KRX 해석형 MVP를 위한 모노레포입니다.
 - `http://localhost:3000/krx/dashboard` (기본 진입. 앱 전체 허브인 대시보드로, 60초 브리프·핵심 드라이버·경고 포인트·다음 탭 게이트웨이를 제공합니다.)
 - `http://localhost:3000/krx/insights` (AI 인사이트. 주장·근거·반대 근거·해석 변경 조건을 AI 게이지와 함께 읽는 해석 탭입니다.)
 - `http://localhost:3000/krx` (시장 신호 메인)
-- `http://localhost:3000/krx/news` (시장 뉴스. 열려 있는 탭에서 60초마다 자동 갱신되며, 종합은 실시간 AI 브리핑을 다문단 리포트와 근거 링크로 정리합니다.)
+- `http://localhost:3000/krx/news` (시장 뉴스. 열려 있는 탭에서 60초마다 자동 갱신되며, 종합은 먼저 오늘 핵심 스토리를 보여주고 그 뒤에 AI 브리핑과 근거 링크를 붙입니다.)
 - `http://localhost:3000/krx/macro-calendar` (매크로 캘린더. 한국 증시에 파급력이 큰 해외 촉매와 발표 일정을 보여주며, 이벤트 공백도 해석형 empty state로 안내합니다.)
 - `http://localhost:3000/krx/watchlist` (보조)
 
