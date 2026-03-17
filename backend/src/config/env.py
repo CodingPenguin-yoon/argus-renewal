@@ -78,6 +78,20 @@ class Settings(BaseSettings):
     fred_max_retries: int = 3
     fred_backoff_seconds: float = 1.0
 
+    polygon_provider: str = "disabled"
+    polygon_base_url: str = "https://api.polygon.io"
+    polygon_api_key: Optional[str] = None
+    polygon_forex_conversion_path: str = "/v1/conversion/{from}/{to}"
+    polygon_forex_snapshot_path: str = "/v2/snapshot/locale/global/markets/forex/tickers"
+    polygon_forex_ticker: str = "C:USDKRW"
+    polygon_forex_from_symbol: str = "USD"
+    polygon_forex_to_symbol: str = "KRW"
+    polygon_wti_futures_enabled: bool = False
+    polygon_wti_futures_symbol: Optional[str] = None
+    polygon_timeout_seconds: float = 20.0
+    polygon_max_retries: int = 3
+    polygon_backoff_seconds: float = 1.0
+
     raw_ingestion_timeout_seconds: float = 20.0
     raw_ingestion_max_retries: int = 3
     raw_ingestion_backoff_seconds: float = 1.0
@@ -105,14 +119,10 @@ class Settings(BaseSettings):
 
     raw_ingestion_schedule_days: int = 1
     raw_ingestion_schedule_include_dart: bool = True
-    raw_ingestion_schedule_include_company_news: bool = True
-    raw_ingestion_schedule_include_theme_news: bool = True
+    raw_ingestion_schedule_include_market_news: bool = True
     raw_ingestion_schedule_disclosure_providers: Optional[str] = None
-    raw_ingestion_schedule_company_news_providers: Optional[str] = None
-    raw_ingestion_schedule_theme_news_providers: Optional[str] = None
-    raw_ingestion_schedule_company_ids: Optional[str] = None
-    raw_ingestion_schedule_company_names: Optional[str] = None
-    raw_ingestion_schedule_theme_keywords: Optional[str] = None
+    raw_ingestion_schedule_market_news_providers: Optional[str] = None
+    raw_ingestion_schedule_market_news_keywords: str = "주식,코스피,코스닥,환율,금리"
     raw_ingestion_automation_timezone: str = "Asia/Seoul"
     raw_ingestion_automation_weekdays: str = "0,1,2,3,4"
     raw_ingestion_automation_market_open_time: str = "09:00"
@@ -122,6 +132,7 @@ class Settings(BaseSettings):
     raw_ingestion_automation_post_close_interval_minutes: int = 5
     raw_ingestion_automation_off_hours_interval_minutes: int = 10
     raw_ingestion_automation_holiday_dates: Optional[str] = None
+    raw_ingestion_automation_normalize_include_llm: bool = False
     raw_ingestion_automation_refresh_mode: str = "smart"
 
     event_pipeline_enabled: bool = True
@@ -161,6 +172,16 @@ class Settings(BaseSettings):
     news_product_representative_evidence_limit: int = 3
     news_product_refresh_ttl_seconds: int = 300
     news_product_datalab_window_days: int = 7
+    news_product_batch_triage_enabled: bool = False
+    news_product_batch_triage_provider: str = "disabled"
+    news_product_batch_triage_base_url: Optional[str] = None
+    news_product_batch_triage_api_key: Optional[str] = None
+    news_product_batch_triage_model: Optional[str] = None
+    news_product_batch_triage_timeout_seconds: float = 20.0
+    news_product_batch_triage_max_retries: int = 2
+    news_product_batch_triage_backoff_seconds: float = 1.0
+    news_product_batch_triage_batch_size: int = 15
+    news_product_batch_triage_upgrade_legacy_rows: bool = True
     news_product_editorial_ai_enabled: bool = False
     news_product_editorial_ai_provider: str = "disabled"
     news_product_editorial_ai_base_url: Optional[str] = None
