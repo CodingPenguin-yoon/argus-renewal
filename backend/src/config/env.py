@@ -78,19 +78,19 @@ class Settings(BaseSettings):
     fred_max_retries: int = 3
     fred_backoff_seconds: float = 1.0
 
-    polygon_provider: str = "disabled"
-    polygon_base_url: str = "https://api.polygon.io"
-    polygon_api_key: Optional[str] = None
-    polygon_forex_conversion_path: str = "/v1/conversion/{from}/{to}"
-    polygon_forex_snapshot_path: str = "/v2/snapshot/locale/global/markets/forex/tickers"
-    polygon_forex_ticker: str = "C:USDKRW"
-    polygon_forex_from_symbol: str = "USD"
-    polygon_forex_to_symbol: str = "KRW"
-    polygon_wti_futures_enabled: bool = False
-    polygon_wti_futures_symbol: Optional[str] = None
-    polygon_timeout_seconds: float = 20.0
-    polygon_max_retries: int = 3
-    polygon_backoff_seconds: float = 1.0
+    massive_provider: str = "disabled"
+    massive_base_url: str = "https://api.massive.com"
+    massive_api_key: Optional[str] = None
+    massive_forex_conversion_path: str = "/v1/conversion/{from}/{to}"
+    massive_forex_snapshot_path: str = "/v2/snapshot/locale/global/markets/forex/tickers"
+    massive_forex_ticker: str = "C:USDKRW"
+    massive_forex_from_symbol: str = "USD"
+    massive_forex_to_symbol: str = "KRW"
+    massive_wti_futures_enabled: bool = False
+    massive_wti_futures_symbol: Optional[str] = None
+    massive_timeout_seconds: float = 20.0
+    massive_max_retries: int = 3
+    massive_backoff_seconds: float = 1.0
 
     raw_ingestion_timeout_seconds: float = 20.0
     raw_ingestion_max_retries: int = 3

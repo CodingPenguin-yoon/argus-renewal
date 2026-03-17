@@ -21,30 +21,30 @@
 - `FRED_PROVIDER=api`
 - `FRED_API_KEY`
 
-### Polygon 거시 reference 예약 블록
+### Massive 거시 reference 예약 블록
 - 아직 runtime에 연결되지 않았습니다. 지금 바로 채울 값은 아닙니다.
-- 나중에 Polygon adapter를 붙일 때 채울 예정인 최소 블록은 아래입니다.
-  - `POLYGON_PROVIDER`
-  - `POLYGON_BASE_URL`
-  - `POLYGON_API_KEY`
-  - `POLYGON_FOREX_CONVERSION_PATH`
-  - `POLYGON_FOREX_SNAPSHOT_PATH`
-  - `POLYGON_FOREX_TICKER`
-  - `POLYGON_FOREX_FROM_SYMBOL`
-  - `POLYGON_FOREX_TO_SYMBOL`
-  - `POLYGON_WTI_FUTURES_ENABLED`
-  - `POLYGON_WTI_FUTURES_SYMBOL`
-  - `POLYGON_TIMEOUT_SECONDS`
-  - `POLYGON_MAX_RETRIES`
-  - `POLYGON_BACKOFF_SECONDS`
-- 공식 문서 기준으로 Polygon은 `apiKey` 인증, forex conversion, forex snapshot은 확실하지만 WTI/futures는 beta/coming soon이어서 이 블록도 예약 상태로만 둡니다.
+- 나중에 Massive adapter를 붙일 때 채울 예정인 최소 블록은 아래입니다.
+  - `MASSIVE_PROVIDER`
+  - `MASSIVE_BASE_URL`
+  - `MASSIVE_API_KEY`
+  - `MASSIVE_FOREX_CONVERSION_PATH`
+  - `MASSIVE_FOREX_SNAPSHOT_PATH`
+  - `MASSIVE_FOREX_TICKER`
+  - `MASSIVE_FOREX_FROM_SYMBOL`
+  - `MASSIVE_FOREX_TO_SYMBOL`
+  - `MASSIVE_WTI_FUTURES_ENABLED`
+  - `MASSIVE_WTI_FUTURES_SYMBOL`
+  - `MASSIVE_TIMEOUT_SECONDS`
+  - `MASSIVE_MAX_RETRIES`
+  - `MASSIVE_BACKOFF_SECONDS`
+- 공식 문서 기준으로 Massive는 `api.massive.com`, `apiKey` 인증, forex conversion, forex snapshot은 확실하지만 WTI/futures는 beta/coming soon이어서 이 블록도 예약 상태로만 둡니다.
 
 ### 지금은 비워도 되는 값
 - `KIS_MARKET_BREADTH_*`
 - `KIS_NIGHT_FUTURES_*`
 - `KRX_DERIVATIVES_REFERENCE_*`
 - `FRED_FILE_PATH`
-- `POLYGON_*`
+- `MASSIVE_*`
 
 ## 섹터별 정리
 
@@ -101,10 +101,10 @@
 ### 거시 금리 reference
 - `FRED_*`
   - 현재는 `DEXKOUS`, `DCOILWTICO`, `DGS10`, `FEDFUNDS`를 씁니다.
-- `POLYGON_*`
+- `MASSIVE_*`
   - 현재는 예약 블록만 있습니다.
   - 실제 runtime은 아직 `FRED_*`만 macro reference source로 사용합니다.
-  - 향후 `USD/KRW` 같은 fresher FX와 Polygon futures beta를 붙일 때 쓰게 됩니다.
+  - 향후 `USD/KRW` 같은 fresher FX와 Massive futures beta를 붙일 때 쓰게 됩니다.
 
 ### 회사 리포트
 - `COMPANY_REPORT_*`
@@ -135,14 +135,14 @@
   - `FRED_PROVIDER=api`
   - `FRED_API_KEY`
 
-### Polygon
+### Massive
 - 아직 채우지 않습니다.
-- `.env.example`에 있는 `POLYGON_*`는 adapter 구현 전에 자리만 잡아둔 예약 블록입니다.
+- `.env.example`에 있는 `MASSIVE_*`는 adapter 구현 전에 자리만 잡아둔 예약 블록입니다.
 
 ## 주의
 - 현재 코드는 `KIS_ACCESS_TOKEN` 자동 발급/갱신을 하지 않습니다.
 - KIS는 유효한 bearer token을 직접 넣어야 합니다.
 - `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON`가 비어 있으면 국내 파생 API 모드가 비활성 처리됩니다.
-- `POLYGON_*`는 현재 코드가 읽지 않습니다. 값을 넣어도 아직 runtime에는 영향이 없습니다.
-- Polygon 공식 문서 기준 forex conversion/snapshot은 안정적으로 문서화돼 있지만, WTI/futures는 beta/coming soon이라 `POLYGON_WTI_FUTURES_*`는 실제 adapter 구현 전까지 비워두는 편이 안전합니다.
+- `MASSIVE_*`는 현재 코드가 읽지 않습니다. 값을 넣어도 아직 runtime에는 영향이 없습니다.
+- Massive 공식 문서 기준 forex conversion/snapshot은 안정적으로 문서화돼 있지만, WTI/futures는 beta/coming soon이라 `MASSIVE_WTI_FUTURES_*`는 실제 adapter 구현 전까지 비워두는 편이 안전합니다.
 - 실제 `backend/.env`에 섹션이 빠져 있으면 `.env.example`의 같은 블록을 복사해 추가하면 됩니다.
