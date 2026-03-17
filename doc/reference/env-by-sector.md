@@ -37,7 +37,9 @@
   - `MASSIVE_TIMEOUT_SECONDS`
   - `MASSIVE_MAX_RETRIES`
   - `MASSIVE_BACKOFF_SECONDS`
-- 공식 문서 기준으로 Massive는 `api.massive.com`, `apiKey` 인증, forex conversion, forex snapshot은 확실하지만 WTI/futures는 beta/coming soon이어서 이 블록도 예약 상태로만 둡니다.
+- Massive Basic은 historical/reference-oriented 접근으로 보는 편이 안전합니다.
+- env 값을 넣어도 runtime wiring이 없어서 지금은 활성화되지 않습니다.
+- 공식 문서 기준 WTI/futures는 beta/coming soon 성격이어서 이 블록도 예약 상태로만 둡니다.
 
 ### 지금은 비워도 되는 값
 - `KIS_MARKET_BREADTH_*`
@@ -100,11 +102,14 @@
 
 ### 거시 금리 reference
 - `FRED_*`
+  - 현재 runtime macro reference source입니다.
   - 현재는 `DEXKOUS`, `DCOILWTICO`, `DGS10`, `FEDFUNDS`를 씁니다.
+  - daily/monthly reference 용도이며, 실시간 trading feed는 아닙니다.
 - `MASSIVE_*`
   - 현재는 예약 블록만 있습니다.
   - 실제 runtime은 아직 `FRED_*`만 macro reference source로 사용합니다.
-  - 향후 `USD/KRW` 같은 fresher FX와 Massive futures beta를 붙일 때 쓰게 됩니다.
+  - env 존재만으로는 활성화되지 않습니다.
+  - 향후 Massive adapter가 생기면 historical/reference 후보로 다시 검토합니다.
 
 ### 회사 리포트
 - `COMPANY_REPORT_*`
@@ -138,11 +143,14 @@
 ### Massive
 - 아직 채우지 않습니다.
 - `.env.example`에 있는 `MASSIVE_*`는 adapter 구현 전에 자리만 잡아둔 예약 블록입니다.
+- Massive Basic을 써도 real-time quote/conversion/snapshot entitlement를 전제하지 않습니다.
 
 ## 주의
 - 현재 코드는 `KIS_ACCESS_TOKEN` 자동 발급/갱신을 하지 않습니다.
 - KIS는 유효한 bearer token을 직접 넣어야 합니다.
 - `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON`가 비어 있으면 국내 파생 API 모드가 비활성 처리됩니다.
 - `MASSIVE_*`는 현재 코드가 읽지 않습니다. 값을 넣어도 아직 runtime에는 영향이 없습니다.
-- Massive 공식 문서 기준 forex conversion/snapshot은 안정적으로 문서화돼 있지만, WTI/futures는 beta/coming soon이라 `MASSIVE_WTI_FUTURES_*`는 실제 adapter 구현 전까지 비워두는 편이 안전합니다.
+- Massive Basic은 historical/reference-oriented로 표현하는 편이 안전하고, conversion entitlement도 Basic에서 보장된다고 쓰지 않습니다.
+- Massive 공식 문서 기준 WTI/futures는 beta/coming soon이라 `MASSIVE_WTI_FUTURES_*`는 실제 adapter 구현 전까지 비워두는 편이 안전합니다.
+- 의미 있는 활성화 확인은 env 값이 아니라 route output, source label, UI provenance로 봅니다.
 - 실제 `backend/.env`에 섹션이 빠져 있으면 `.env.example`의 같은 블록을 복사해 추가하면 됩니다.

@@ -11,9 +11,10 @@
 - `AI 인사이트`에 `시장 심리 / 변동성 온도 / AI 확신도` 게이지를 추가했고 접근성 속성을 보강했습니다.
 - 사용자 표면 canonical 경로를 `/krx/dashboard`, `/krx/insights`, `/krx/macro-calendar`로 정리하고, 기존 경로는 redirect로 유지했습니다.
 - 오늘 작업의 배경과 의사결정을 쉬운 말로 설명하는 `doc/troubleshooting/` 문서를 추가했습니다.
-- 다음 라운드 source 전략으로 `파생=KIS`, `환율/WTI·에너지/미국채 10년물/미국 금리=FRED` 기준 문서와 rollout plan을 추가했습니다.
+- 다음 라운드 source 전략으로 `파생 및 market-data-first 영역=KIS`, `현재 runtime macro reference=FRED` 기준 문서와 rollout plan을 정리했습니다.
 - backend에 FRED macro reference route를 추가했고, `DEXKOUS`, `DCOILWTICO`, `DGS10`, `FEDFUNDS`를 `disabled | file | api` 모드로 읽는 1차 contract를 고정했습니다.
 - `대시보드`와 `AI 인사이트`는 이제 `/api/krx/macro-reference/cards`를 읽고, FRED 카드가 있으면 기존 macro news 기반 `환율`, `유가/에너지`, `금리` 표면보다 우선 사용합니다.
+- 이 FRED 카드는 daily/monthly reference 용도이며, 실시간 trading feed를 뜻하지 않습니다.
 - `시장 신호`는 KIS/KRX provenance를 사람이 읽는 라벨로 노출하고, 파생 탭과 신호 카드에서 source badge를 직접 확인할 수 있습니다.
 - derivatives summary contract는 `KIS_DOMESTIC_DERIVATIVES` 기반 `pre_open_futures`를 내려주고, 파생 탭은 개장 전 선물 변동률을 우선 표시합니다.
 - `KIS_DOMESTIC_DERIVATIVES` payload에 market-wide summary가 있으면 `derivatives_daily_metrics` row를 함께 적재하고, KRX row가 없을 때 derivatives summary API가 이 데이터를 fallback source로 사용합니다.
@@ -23,17 +24,21 @@
 - `KisDomesticDerivativesService`는 공식 KIS `inquire-price` 응답 형태인 `output1/output2/output3` object payload를 직접 읽고, snapshot row와 nested summary candidate를 함께 해석할 수 있습니다.
 - live KIS 경로는 이제 `KIS_DOMESTIC_DERIVATIVES_QUERY_PARAMS_JSON` 안에 `FID_INPUT_ISCD`가 없으면 비활성 처리되고, `FID_COND_MRKT_DIV_CODE`가 없으면 기본값 `F`를 사용합니다.
 - `FID_INPUT_ISCD=AUTO_KOSPI200_FRONT` sentinel을 넣으면 한국투자 공식 지수선물 master 파일 `fo_idx_code_mts.mst.zip`를 읽어 최근월 KOSPI200 선물 short code를 자동 결정합니다.
+- `.env.example`의 `MASSIVE_*`는 예약 블록만 있고, runtime은 아직 Massive를 읽지 않습니다.
+- 테스트상 env 존재만으로는 Massive가 활성화되지 않으며, 실제 활성화 증빙은 route output과 UI provenance입니다.
 
 ## In Progress
 - KIS domestic ingest는 시작됐고, 최근월 KOSPI200 선물 symbol은 공식 master 파일 기반 sentinel로 자동화됐습니다.
+- KIS를 WTI 및 likely FX consistency source로 확장할 operational 타당성을 검토 중이지만, WTI symbol coverage 확인 전까지는 FRED reference를 유지합니다.
 
 ## Next
 1. 필요 시 KIS sentinel 범위를 KOSPI200 외 다른 기초자산이나 옵션 계약으로 확장
 2. 필요 시 FRED reference 지표를 `DGS2`, `SOFR`까지 확장
+3. KIS WTI symbol coverage를 확인하고, FX consistency 이전 여부를 판단
 
 ## Risks
 - legacy redirect는 당분간 유지되므로, 외부 링크나 북마크는 새 경로와 구 경로가 공존할 수 있습니다.
 - 아카이브 문서는 과거 설계 의도이므로 현재 구조 설명으로 재사용하면 안 됩니다.
 
 ## Last Updated
-- 2026-03-16
+- 2026-03-17
