@@ -18,7 +18,7 @@ describe("krx dashboard page route", () => {
       marketToneLine: "외국인 선물과 뉴스 표면이 함께 상방으로 기울고 있습니다.",
       keyTakeaways: ["외국인 선물 매수 지속", "뉴스 표면은 반도체와 환율 이슈 중심"],
       reportHeadline: "오늘의 종합 리포트",
-      reportSummary: "시장 신호, 뉴스 표면, 매크로 캘린더를 한 번에 읽는 허브입니다.",
+      reportSummary: "파생·수급, 뉴스 이벤트, 매크로 촉매를 한 번에 읽는 허브입니다.",
       reportUpdatedAt: "2026-03-15T02:10:00Z",
       reportLinks: [
         {
@@ -57,7 +57,7 @@ describe("krx dashboard page route", () => {
       gatewayPanels: [
         {
           key: "market-signal",
-          title: "시장 신호",
+          title: "파생·수급",
           href: "/krx",
           summary: "수급과 파생을 함께 봅니다.",
           metricLabel: "신뢰도",
@@ -128,13 +128,14 @@ describe("krx dashboard page route", () => {
     render(await KrxDashboardPage());
 
     expect(screen.getByRole("heading", { name: "대시보드" })).toBeInTheDocument();
+    expect(screen.getByText("지금 뭐가 중요한지 60초 안에 먼저 정리하는 cockpit입니다.")).toBeInTheDocument();
     expect(screen.getByText("핵심 드라이버 3개")).toBeInTheDocument();
-    expect(screen.getByText("60초 브리프")).toBeInTheDocument();
+    expect(screen.getByText("한 줄 브리프")).toBeInTheDocument();
     expect(screen.getByText("거시 미니 위젯")).toBeInTheDocument();
     expect(screen.getByText("WTI·에너지")).toBeInTheDocument();
     expect(screen.getByText("경고 포인트")).toBeInTheDocument();
     expect(screen.getByText("오늘 먼저 볼 탭")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /시장 신호/ })).toHaveAttribute("href", "/krx");
+    expect(screen.getByRole("link", { name: /파생·수급/ })).toHaveAttribute("href", "/krx");
     expect(screen.getByRole("link", { name: /매크로 캘린더/ })).toHaveAttribute("href", "/krx/macro-calendar");
     expect(screen.getByText("FOMC 위원 발언")).toBeInTheDocument();
   });

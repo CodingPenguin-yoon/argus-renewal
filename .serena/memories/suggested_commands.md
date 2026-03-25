@@ -1,0 +1,1 @@
+Project commands: `git status --short`, `rg PATTERN PATH`, `cd backend && pytest -q`, `cd backend && python3 -m py_compile src/krx/news/service.py`, `cd frontend && pnpm vitest run src/app/krx/news/page.test.tsx`, `cd backend && python3 -m uvicorn src.main:app --reload --host 0.0.0.0 --port 4000`.

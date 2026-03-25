@@ -537,11 +537,8 @@ def _build_sync_scheduled_payload(settings) -> dict[str, Any]:
     service = create_raw_document_ingestion_service(settings)
     days = max(1, settings.raw_ingestion_schedule_days)
     disclosure_providers = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_disclosure_providers", None))
-    company_news_providers = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_company_news_providers", None))
-    theme_news_providers = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_theme_news_providers", None))
-    company_ids = _parse_csv_int_values(getattr(settings, "raw_ingestion_schedule_company_ids", None))
-    company_names = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_company_names", None))
-    theme_keywords = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_theme_keywords", None))
+    market_news_providers = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_market_news_providers", None))
+    market_news_keywords = _parse_csv_values(getattr(settings, "raw_ingestion_schedule_market_news_keywords", None))
 
     results = []
     if disclosure_providers:
@@ -550,26 +547,13 @@ def _build_sync_scheduled_payload(settings) -> dict[str, Any]:
     elif getattr(settings, "raw_ingestion_schedule_include_dart", False):
         results.append(service.sync_dart_disclosures_last_days(days=days, backfill=False))
 
-    if (getattr(settings, "raw_ingestion_schedule_include_company_news", False) or company_news_providers) and (
-        company_ids or company_names
-    ):
+    if getattr(settings, "raw_ingestion_schedule_include_market_news", False) or market_news_providers:
         results.extend(
-            service.sync_news_candidates_for_companies_last_days(
-                company_ids=company_ids,
-                company_names=company_names,
+            service.sync_market_news_last_days(
+                keywords=market_news_keywords,
                 days=days,
                 backfill=False,
-                providers=company_news_providers or None,
-            )
-        )
-
-    if (getattr(settings, "raw_ingestion_schedule_include_theme_news", False) or theme_news_providers) and theme_keywords:
-        results.extend(
-            service.sync_news_candidates_for_themes_last_days(
-                keywords=theme_keywords,
-                days=days,
-                backfill=False,
-                providers=theme_news_providers or None,
+                providers=market_news_providers or None,
             )
         )
 
@@ -582,11 +566,8 @@ def _build_sync_scheduled_payload(settings) -> dict[str, Any]:
         "run_count": len(results),
         "schedule_days": days,
         "disclosure_providers": disclosure_providers,
-        "company_news_providers": company_news_providers,
-        "theme_news_providers": theme_news_providers,
-        "company_ids": company_ids,
-        "company_names": company_names,
-        "theme_keywords": theme_keywords,
+        "market_news_providers": market_news_providers,
+        "market_news_keywords": market_news_keywords,
         "success_count": len(success_runs),
         "disabled_count": len(disabled_runs),
         "failed_count": len(failed_runs),
@@ -726,7 +707,7 @@ def _run_news_automation(*, now: datetime | None = None) -> None:
     normalize_payload = _build_normalize_events_payload(
         settings,
         limit=DEFAULT_NEWS_AUTOMATION_NORMALIZE_LIMIT,
-        include_llm=None,
+        include_llm=settings.raw_ingestion_automation_normalize_include_llm,
     )
     if normalize_payload.get("status") == "FAILED" or normalize_payload.get("failed_count"):
         _print_json(

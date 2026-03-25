@@ -144,6 +144,7 @@ describe("NewsTabDashboard", () => {
     expect(screen.getByText("스토리 종합 브리핑")).toBeInTheDocument();
     expect(screen.getByText("스토리 해설")).toBeInTheDocument();
     expect(screen.getByText("오늘 체크할 변수")).toBeInTheDocument();
+    expect(screen.getByText("신뢰 참고")).toBeInTheDocument();
     expect(screen.getByText("참고 기사와 공시")).toBeInTheDocument();
     expect(screen.getByText("외국인 수급과 환율 변수를 함께 봐야 하는 장세입니다.")).toBeInTheDocument();
     expect(screen.getAllByText("외국인 순매수 확대로 반도체 대형주 강세").length).toBeGreaterThanOrEqual(1);
@@ -193,6 +194,7 @@ describe("NewsTabDashboard", () => {
     );
 
     expect(screen.getAllByText("오늘 핵심 스토리").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("운영 메타데이터는 보조 정보로만 표시합니다.").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByRole("link", { name: "안전하지 않은 링크 기사" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "원문 링크 없는 중요 기사" })).not.toBeInTheDocument();
     expect(screen.getAllByText("안전하지 않은 링크 기사").length).toBeGreaterThanOrEqual(1);

@@ -7,7 +7,14 @@ from fastapi.testclient import TestClient
 
 from src.config.env import get_settings
 from src.krx.company_master.db import get_connection, utcnow_iso
+from src.krx.news.batch_triage_ai import (
+    NewsBatchTriageRequestItem,
+    NewsBatchTriageResponseItem,
+)
 from src.krx.news.editorial_ai import (
+    NewsEditorialAIBriefingRequest,
+    NewsEditorialAIBriefingResponse,
+    NewsEditorialAICompareRequest,
     NewsEditorialAIRequest,
     NewsEditorialAIResponse,
     OpenAICompatibleNewsEditorialAIProvider,
@@ -49,8 +56,17 @@ class StubDatalabProvider:
 class StubEditorialAIProvider:
     provider_name = "stub_editorial_ai"
 
-    def __init__(self, response_by_title: dict[str, NewsEditorialAIResponse] | None = None) -> None:
+    def __init__(
+        self,
+        response_by_title: dict[str, NewsEditorialAIResponse] | None = None,
+        response_by_cluster_key: dict[str, NewsEditorialAIResponse] | None = None,
+        briefing_response: NewsEditorialAIBriefingResponse | None = None,
+    ) -> None:
         self.response_by_title = response_by_title or {}
+        self.response_by_cluster_key = response_by_cluster_key or {}
+        self.briefing_response = briefing_response
+        self.compare_requests: list[NewsEditorialAICompareRequest] = []
+        self.briefing_requests: list[NewsEditorialAIBriefingRequest] = []
 
     def is_enabled(self) -> tuple[bool, str | None]:
         return True, None
@@ -58,8 +74,45 @@ class StubEditorialAIProvider:
     def model_name(self) -> str | None:
         return "stub-model"
 
+    def compare(self, request: NewsEditorialAICompareRequest) -> dict[str, NewsEditorialAIResponse]:
+        self.compare_requests.append(request)
+        responses: dict[str, NewsEditorialAIResponse] = {}
+        for candidate in request.candidates:
+            if candidate.cluster_key in self.response_by_cluster_key:
+                responses[candidate.cluster_key] = self.response_by_cluster_key[candidate.cluster_key]
+                continue
+            if candidate.title in self.response_by_title:
+                responses[candidate.cluster_key] = self.response_by_title[candidate.title]
+        return responses
+
     def enrich(self, request: NewsEditorialAIRequest) -> NewsEditorialAIResponse | None:
-        return self.response_by_title.get(request.title)
+        return self.response_by_cluster_key.get(request.cluster_key) or self.response_by_title.get(request.title)
+
+    def compose_briefing(self, request: NewsEditorialAIBriefingRequest) -> NewsEditorialAIBriefingResponse | None:
+        self.briefing_requests.append(request)
+        return self.briefing_response
+
+
+class StubBatchTriageProvider:
+    provider_name = "stub_batch_triage"
+
+    def __init__(self, response_by_raw_document_id: dict[int, NewsBatchTriageResponseItem] | None = None) -> None:
+        self.response_by_raw_document_id = response_by_raw_document_id or {}
+        self.requests: list[list[NewsBatchTriageRequestItem]] = []
+
+    def is_enabled(self) -> tuple[bool, str | None]:
+        return True, None
+
+    def model_name(self) -> str | None:
+        return "stub-batch-model"
+
+    def triage(self, request_items: list[NewsBatchTriageRequestItem]) -> dict[int, NewsBatchTriageResponseItem]:
+        self.requests.append(list(request_items))
+        return {
+            raw_document_id: response
+            for raw_document_id, response in self.response_by_raw_document_id.items()
+            if any(item.raw_document_id == raw_document_id for item in request_items)
+        }
 
 
 def _make_db_path(tmp_path: Path) -> str:
@@ -71,6 +124,9 @@ def _make_news_service(
     *,
     scores: dict[str, float] | None = None,
     disabled_reason: str | None = None,
+    batch_triage_provider=None,
+    batch_triage_batch_size: int = 15,
+    batch_triage_upgrade_legacy_rows: bool = True,
     editorial_provider=None,
     editorial_candidate_limit: int = 8,
     editorial_min_score: float = 0.55,
@@ -78,12 +134,15 @@ def _make_news_service(
     return NewsProductService(
         db_path=db_path,
         datalab_provider=StubDatalabProvider(scores=scores, disabled_reason=disabled_reason),
+        batch_triage_provider=batch_triage_provider,
         editorial_ai_provider=editorial_provider,
         lookback_days=7,
         card_limit=12,
         representative_evidence_limit=3,
         refresh_ttl_seconds=300,
         datalab_window_days=7,
+        batch_triage_batch_size=batch_triage_batch_size,
+        batch_triage_upgrade_legacy_rows=batch_triage_upgrade_legacy_rows,
         editorial_ai_candidate_limit=editorial_candidate_limit,
         editorial_ai_min_editorial_score=editorial_min_score,
     )
@@ -417,8 +476,444 @@ def test_market_news_product_ranking_prefers_confirmed_high_quality_events(tmp_p
     assert cards[0]["ranking_score"] > cards[1]["ranking_score"]
 
 
+def test_market_news_product_reuses_persisted_triage_for_dashboard(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    raw_document_id = _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-PERSIST-001",
+        title="코스피 수급 개선, 외국인 순매수 확대",
+        summary="국내 증시 수급 개선 기사",
+        publisher="매일경제",
+        source_url="https://example.com/persisted-triage",
+        canonical_url="https://example.com/persisted-triage",
+        query_text="코스피 증시",
+    )
+
+    news_service = _make_news_service(db_path, scores={"group-1": 42.0})
+    news_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT triage_metadata_json
+            FROM news_batch_triage
+            WHERE raw_document_id = ?
+            """,
+            (raw_document_id,),
+        ).fetchone()
+        assert row is not None
+        triage_metadata = json.loads(row["triage_metadata_json"])
+        triage_metadata.update(
+            {
+                "event_type": triage_metadata.get("event_type") or "macro",
+                "event_subtype": triage_metadata.get("event_subtype") or "generic",
+                "impact_horizon": triage_metadata.get("impact_horizon") or "short",
+                "source_type": triage_metadata.get("source_type") or "CURATED_NEWS",
+                "canonical_anchor": False,
+            }
+        )
+        connection.execute(
+            """
+            UPDATE news_batch_triage
+            SET
+                market_scope = 'global_market',
+                primary_region = 'GLOBAL',
+                impact_direction = 'negative',
+                market_importance_prelim = 'high',
+                reason_short = '글로벌 변수',
+                triage_metadata_json = ?,
+                updated_at = ?
+            WHERE raw_document_id = ?
+            """,
+            (
+                json.dumps(triage_metadata, ensure_ascii=False, sort_keys=True),
+                utcnow_iso(),
+                raw_document_id,
+            ),
+        )
+
+    news_service.refresh_materialized(force=True)
+    kr_cards = news_service.list_cards(region="KR", limit=10)
+    global_cards = news_service.list_cards(region="GLOBAL", limit=10)
+
+    assert kr_cards == []
+    assert global_cards
+    assert global_cards[0]["title"] == "코스피 수급 개선, 외국인 순매수 확대"
+    assert global_cards[0]["primary_region"] == "GLOBAL"
+    assert global_cards[0]["market_scope"] == "global_market"
+
+
+def test_market_news_product_refresh_preserves_existing_triage_rows(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    raw_document_id = _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-PERSIST-002",
+        title="코스피 반도체 밸류체인 개선",
+        summary="기존 triage row가 재생성 때 유지돼야 한다.",
+        publisher="매일경제",
+        source_url="https://example.com/persisted-row",
+        canonical_url="https://example.com/persisted-row",
+        query_text="코스피 증시",
+    )
+
+    news_service = _make_news_service(db_path, scores={"group-1": 37.0})
+    news_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        first_row = connection.execute(
+            """
+            SELECT batch_key, created_at, updated_at
+            FROM news_batch_triage
+            WHERE raw_document_id = ?
+            """,
+            (raw_document_id,),
+        ).fetchone()
+
+    assert first_row is not None
+
+    news_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        second_row = connection.execute(
+            """
+            SELECT batch_key, created_at, updated_at
+            FROM news_batch_triage
+            WHERE raw_document_id = ?
+            """,
+            (raw_document_id,),
+        ).fetchone()
+        row_count = connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM news_batch_triage
+            WHERE raw_document_id = ?
+            """,
+            (raw_document_id,),
+        ).fetchone()
+
+    assert second_row is not None
+    assert row_count is not None
+    assert row_count["count"] == 1
+    assert second_row["batch_key"] == first_row["batch_key"]
+    assert second_row["created_at"] == first_row["created_at"]
+
+
+def test_market_news_product_batch_triage_persists_llm_rows(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    first_raw_document_id = _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-BATCH-001",
+        title="미국 CPI 둔화에 나스닥 선물 강세",
+        summary="글로벌 위험선호 개선 기사",
+        publisher="매일경제",
+        source_url="https://example.com/batch-1",
+        canonical_url="https://example.com/batch-1",
+        query_text="미국 CPI",
+    )
+    second_raw_document_id = _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-BATCH-002",
+        title="코스피 수급 안정, 외국인 순매수 확대",
+        summary="국내 증시 수급 개선 기사",
+        publisher="매일경제",
+        source_url="https://example.com/batch-2",
+        canonical_url="https://example.com/batch-2",
+        query_text="코스피 증시",
+    )
+    batch_provider = StubBatchTriageProvider(
+        response_by_raw_document_id={
+            first_raw_document_id: NewsBatchTriageResponseItem(
+                raw_document_id=first_raw_document_id,
+                market_scope="global_market",
+                primary_region="GLOBAL",
+                importance_label="high",
+                impact_direction="positive",
+                reason_short="미국 물가 둔화가 글로벌 위험선호를 자극했습니다.",
+                confidence=0.84,
+                raw_output={"raw_document_id": first_raw_document_id, "market_scope": "global_market"},
+            ),
+            second_raw_document_id: NewsBatchTriageResponseItem(
+                raw_document_id=second_raw_document_id,
+                market_scope="kr_market",
+                primary_region="KR",
+                importance_label="high",
+                impact_direction="positive",
+                reason_short="국내 수급 개선 신호가 지수 해석에 직접 연결됩니다.",
+                confidence=0.77,
+                raw_output={"raw_document_id": second_raw_document_id, "market_scope": "kr_market"},
+            ),
+        }
+    )
+    news_service = _make_news_service(db_path, batch_triage_provider=batch_provider)
+
+    news_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT raw_document_id, market_scope, primary_region, triage_metadata_json
+            FROM news_batch_triage
+            ORDER BY raw_document_id ASC
+            """
+        ).fetchall()
+
+    assert len(batch_provider.requests) == 1
+    assert {item.raw_document_id for item in batch_provider.requests[0]} == {
+        first_raw_document_id,
+        second_raw_document_id,
+    }
+    assert len(rows) == 2
+    first_metadata = json.loads(rows[0]["triage_metadata_json"])
+    second_metadata = json.loads(rows[1]["triage_metadata_json"])
+    assert rows[0]["market_scope"] == "global_market"
+    assert rows[0]["primary_region"] == "GLOBAL"
+    assert first_metadata["triage_method"] == "llm_batch"
+    assert first_metadata["triage_provider"] == "stub_batch_triage"
+    assert first_metadata["triage_model"] == "stub-batch-model"
+    assert abs(float(first_metadata["triage_confidence"]) - 0.84) < 1e-6
+    assert rows[1]["market_scope"] == "kr_market"
+    assert second_metadata["triage_method"] == "llm_batch"
+
+
+def test_market_news_product_batch_triage_upgrades_legacy_rows(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    raw_document_id = _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-LEGACY-001",
+        title="미국 CPI 둔화에 나스닥 선물 강세",
+        summary="글로벌 위험선호 개선 기사",
+        publisher="매일경제",
+        source_url="https://example.com/legacy-batch",
+        canonical_url="https://example.com/legacy-batch",
+        query_text="미국 CPI",
+    )
+    baseline_service = _make_news_service(db_path)
+    baseline_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT triage_metadata_json
+            FROM news_batch_triage
+            WHERE raw_document_id = ?
+            """,
+            (raw_document_id,),
+        ).fetchone()
+        assert row is not None
+        triage_metadata = json.loads(row["triage_metadata_json"])
+        triage_metadata.pop("triage_method", None)
+        triage_metadata.pop("triage_provider", None)
+        triage_metadata.pop("triage_model", None)
+        triage_metadata.pop("triage_confidence", None)
+        triage_metadata.pop("triage_raw_output", None)
+        connection.execute(
+            """
+            UPDATE news_batch_triage
+            SET triage_metadata_json = ?, market_scope = 'ignore', primary_region = 'KR', updated_at = ?
+            WHERE raw_document_id = ?
+            """,
+            (json.dumps(triage_metadata, ensure_ascii=False, sort_keys=True), utcnow_iso(), raw_document_id),
+        )
+
+    batch_provider = StubBatchTriageProvider(
+        response_by_raw_document_id={
+            raw_document_id: NewsBatchTriageResponseItem(
+                raw_document_id=raw_document_id,
+                market_scope="global_market",
+                primary_region="GLOBAL",
+                importance_label="high",
+                impact_direction="positive",
+                reason_short="글로벌 이벤트로 다시 분류했습니다.",
+                confidence=0.88,
+                raw_output={"raw_document_id": raw_document_id},
+            )
+        }
+    )
+    news_service = _make_news_service(db_path, batch_triage_provider=batch_provider)
+    news_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        upgraded_row = connection.execute(
+            """
+            SELECT market_scope, primary_region, triage_metadata_json
+            FROM news_batch_triage
+            WHERE raw_document_id = ?
+            """,
+            (raw_document_id,),
+        ).fetchone()
+
+    assert upgraded_row is not None
+    upgraded_metadata = json.loads(upgraded_row["triage_metadata_json"])
+    assert upgraded_row["market_scope"] == "global_market"
+    assert upgraded_row["primary_region"] == "GLOBAL"
+    assert upgraded_metadata["triage_method"] == "llm_batch"
+    assert upgraded_metadata["triage_provider"] == "stub_batch_triage"
+
+
+def test_market_news_product_batch_triage_fallback_marks_provenance(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    first_raw_document_id = _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-FALLBACK-001",
+        title="코스피 수급 안정, 외국인 순매수 확대",
+        summary="국내 증시 수급 개선 기사",
+        publisher="매일경제",
+        source_url="https://example.com/fallback-1",
+        canonical_url="https://example.com/fallback-1",
+        query_text="코스피 증시",
+    )
+    second_raw_document_id = _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-FALLBACK-002",
+        title="반도체 업종 혼조, 실적 발표 대기",
+        summary="업종 단위 기사",
+        publisher="매일경제",
+        source_url="https://example.com/fallback-2",
+        canonical_url="https://example.com/fallback-2",
+        query_text="반도체 업종",
+    )
+    batch_provider = StubBatchTriageProvider(
+        response_by_raw_document_id={
+            first_raw_document_id: NewsBatchTriageResponseItem(
+                raw_document_id=first_raw_document_id,
+                market_scope="kr_market",
+                primary_region="KR",
+                importance_label="high",
+                impact_direction="positive",
+                reason_short="국내 수급 개선 신호입니다.",
+                confidence=0.73,
+                raw_output={"raw_document_id": first_raw_document_id},
+            )
+        }
+    )
+    news_service = _make_news_service(db_path, batch_triage_provider=batch_provider)
+
+    news_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT raw_document_id, triage_metadata_json
+            FROM news_batch_triage
+            ORDER BY raw_document_id ASC
+            """
+        ).fetchall()
+
+    metadata_by_raw_document_id = {
+        int(row["raw_document_id"]): json.loads(row["triage_metadata_json"])
+        for row in rows
+    }
+    assert metadata_by_raw_document_id[first_raw_document_id]["triage_method"] == "llm_batch"
+    assert metadata_by_raw_document_id[second_raw_document_id]["triage_method"] == "llm_batch_fallback"
+    assert metadata_by_raw_document_id[second_raw_document_id]["triage_provider"] is None
+
+
+def test_market_news_product_batch_triage_keeps_duplicate_cluster_key(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    primary_raw_document_id = _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-DUPE-PRIMARY",
+        title="미국 CPI 둔화에 나스닥 선물 강세",
+        summary="글로벌 위험선호 개선 기사",
+        publisher="매일경제",
+        source_url="https://example.com/duplicate-primary",
+        canonical_url="https://example.com/duplicate-primary",
+        query_text="미국 CPI",
+    )
+    duplicate_raw_document_id = _insert_raw_document(
+        db_path,
+        provider="NAVER_NEWS",
+        document_type="NEWS_CANDIDATE",
+        title="미국 CPI 둔화에 나스닥 선물 강세",
+        summary="같은 이슈를 다른 출처가 다시 보도했다.",
+        publisher="매경",
+        source_url="https://example.com/duplicate-secondary",
+        canonical_url="https://example.com/duplicate-primary",
+        query_text="미국 CPI",
+        is_duplicate=1,
+        duplicate_of_document_id=primary_raw_document_id,
+    )
+    batch_provider = StubBatchTriageProvider(
+        response_by_raw_document_id={
+            primary_raw_document_id: NewsBatchTriageResponseItem(
+                raw_document_id=primary_raw_document_id,
+                market_scope="global_market",
+                primary_region="GLOBAL",
+                importance_label="high",
+                impact_direction="positive",
+                reason_short="주요 글로벌 매크로 뉴스입니다.",
+                confidence=0.9,
+                raw_output={"raw_document_id": primary_raw_document_id},
+            ),
+            duplicate_raw_document_id: NewsBatchTriageResponseItem(
+                raw_document_id=duplicate_raw_document_id,
+                market_scope="kr_market",
+                primary_region="KR",
+                importance_label="medium",
+                impact_direction="mixed",
+                reason_short="중복 기사라도 응답이 달라질 수 있습니다.",
+                confidence=0.42,
+                raw_output={"raw_document_id": duplicate_raw_document_id},
+            ),
+        }
+    )
+    news_service = _make_news_service(db_path, batch_triage_provider=batch_provider)
+
+    news_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT raw_document_id, cluster_key
+            FROM news_batch_triage
+            WHERE raw_document_id IN (?, ?)
+            ORDER BY raw_document_id ASC
+            """,
+            (primary_raw_document_id, duplicate_raw_document_id),
+        ).fetchall()
+
+    assert len(rows) == 2
+    assert rows[0]["cluster_key"] == rows[1]["cluster_key"]
+
+
 def test_market_news_product_applies_editorial_ai_enrichment(tmp_path: Path) -> None:
     db_path = _make_db_path(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-EDITORIAL-BASE",
+        title="코스피 수급 안정, 프로그램 매수 유입",
+        summary="기존 한국 증시 대표 카드",
+        publisher="매일경제",
+        source_url="https://example.com/editorial-base",
+        canonical_url="https://example.com/editorial-base",
+        query_text="코스피 증시",
+    )
+    _make_news_service(db_path, scores={"group-1": 35.0}).refresh_materialized(force=True)
 
     _insert_raw_document(
         db_path,
@@ -447,12 +942,13 @@ def test_market_news_product_applies_editorial_ai_enrichment(tmp_path: Path) -> 
             "confidence": 0.81,
         },
     )
+    editorial_provider = StubEditorialAIProvider(
+        response_by_title={"코스피 반도체주 강세, 외국인 순매수 확대": response}
+    )
     news_service = _make_news_service(
         db_path,
-        scores={"group-1": 61.0},
-        editorial_provider=StubEditorialAIProvider(
-            response_by_title={"코스피 반도체주 강세, 외국인 순매수 확대": response}
-        ),
+        scores={"group-1": 61.0, "group-2": 42.0},
+        editorial_provider=editorial_provider,
         editorial_candidate_limit=3,
         editorial_min_score=0.2,
     )
@@ -460,6 +956,10 @@ def test_market_news_product_applies_editorial_ai_enrichment(tmp_path: Path) -> 
 
     cards = news_service.list_cards(region="KR", limit=10)
 
+    assert len(editorial_provider.compare_requests) == 1
+    compare_request = editorial_provider.compare_requests[0]
+    assert any(surface.surface_key == "KR" for surface in compare_request.current_surfaces)
+    assert any(candidate.title == "코스피 반도체주 강세, 외국인 순매수 확대" for candidate in compare_request.candidates)
     assert cards
     assert cards[0]["story_state"] == "ONGOING"
     assert cards[0]["importance_label"] == "high"
@@ -467,6 +967,642 @@ def test_market_news_product_applies_editorial_ai_enrichment(tmp_path: Path) -> 
     assert abs(float(cards[0]["ai_confidence"]) - 0.81) < 1e-6
     assert abs(float(cards[0]["ranking_score"]) - float(cards[0]["editorial_score"])) < 1e-6
     assert cards[0]["provenance"]["ai_provider"] == "stub_editorial_ai"
+
+
+def test_market_news_product_allows_negative_editorial_boost(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-EDITORIAL-NEG",
+        title="코스피 수급 안정, 프로그램 매수 유입",
+        summary="기존 대비 새로움이 낮은 기사",
+        publisher="매일경제",
+        source_url="https://example.com/editorial-neg",
+        canonical_url="https://example.com/editorial-neg",
+        query_text="코스피 증시",
+    )
+
+    editorial_provider = StubEditorialAIProvider(
+        response_by_title={
+            "코스피 수급 안정, 프로그램 매수 유입": NewsEditorialAIResponse(
+                story_state="ONGOING",
+                importance_label="medium",
+                editorial_reason="이미 반영된 흐름이라 우선순위를 낮춥니다.",
+                editorial_boost=-0.05,
+                confidence=0.72,
+                raw_output={
+                    "story_state": "ONGOING",
+                    "importance_label": "medium",
+                    "editorial_reason": "이미 반영된 흐름이라 우선순위를 낮춥니다.",
+                    "editorial_boost": -0.05,
+                    "confidence": 0.72,
+                },
+            )
+        }
+    )
+    news_service = _make_news_service(
+        db_path,
+        scores={"group-1": 48.0},
+        editorial_provider=editorial_provider,
+        editorial_candidate_limit=2,
+        editorial_min_score=0.1,
+    )
+
+    news_service.refresh_materialized(force=True)
+    cards = news_service.list_cards(region="KR", limit=10)
+
+    assert cards
+    provenance = cards[0]["provenance"]
+    assert abs(float(provenance["editorial_boost"]) - (-0.05)) < 1e-6
+    assert float(cards[0]["ranking_score"]) < float(provenance["base_editorial_score"])
+
+
+def test_market_news_product_state_json_captures_lead_editorial_metadata(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-STATE-001",
+        title="코스피 반도체주 강세, 외국인 순매수 확대",
+        summary="핵심 섹터와 수급이 동시에 개선됐다.",
+        publisher="매일경제",
+        source_url="https://example.com/state-json",
+        canonical_url="https://example.com/state-json",
+        query_text="반도체 증시",
+    )
+
+    editorial_provider = StubEditorialAIProvider(
+        response_by_title={
+            "코스피 반도체주 강세, 외국인 순매수 확대": NewsEditorialAIResponse(
+                story_state="ONGOING",
+                importance_label="high",
+                editorial_reason="핵심 섹터와 외국인 수급이 겹쳐 대표 카드로 유지합니다.",
+                editorial_boost=0.04,
+                confidence=0.83,
+                raw_output={
+                    "story_state": "ONGOING",
+                    "importance_label": "high",
+                    "editorial_reason": "핵심 섹터와 외국인 수급이 겹쳐 대표 카드로 유지합니다.",
+                    "editorial_boost": 0.04,
+                    "confidence": 0.83,
+                },
+            )
+        }
+    )
+    news_service = _make_news_service(
+        db_path,
+        scores={"group-1": 56.0},
+        editorial_provider=editorial_provider,
+        editorial_candidate_limit=2,
+        editorial_min_score=0.1,
+    )
+
+    news_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT state_json
+            FROM market_surface_state
+            WHERE surface_key = 'KR'
+            """
+        ).fetchone()
+
+    assert row is not None
+    state_payload = json.loads(row["state_json"])
+    assert state_payload["lead_title"] == "코스피 반도체주 강세, 외국인 순매수 확대"
+    assert state_payload["lead_story_state"] == "ONGOING"
+    assert state_payload["lead_importance_label"] == "high"
+    assert state_payload["lead_editorial_reason"] == "핵심 섹터와 외국인 수급이 겹쳐 대표 카드로 유지합니다."
+    assert abs(float(state_payload["lead_ai_confidence"]) - 0.83) < 1e-6
+    assert state_payload["lead_ai_provider"] == "stub_editorial_ai"
+    assert state_payload["lead_ai_model"] == "stub-model"
+
+
+def test_market_news_product_history_tracks_same_lead_metadata_updates(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-HISTORY-001",
+        title="코스피 수급 안정, 프로그램 매수 유입",
+        summary="대표 카드가 유지되는 흐름",
+        publisher="매일경제",
+        source_url="https://example.com/history-json",
+        canonical_url="https://example.com/history-json",
+        query_text="코스피 증시",
+    )
+
+    first_editorial_provider = StubEditorialAIProvider(
+        response_by_title={
+            "코스피 수급 안정, 프로그램 매수 유입": NewsEditorialAIResponse(
+                story_state="ONGOING",
+                importance_label="medium",
+                editorial_reason="장중 수급 흐름이 유지됩니다.",
+                editorial_boost=0.01,
+                confidence=0.62,
+                raw_output={
+                    "story_state": "ONGOING",
+                    "importance_label": "medium",
+                    "editorial_reason": "장중 수급 흐름이 유지됩니다.",
+                    "editorial_boost": 0.01,
+                    "confidence": 0.62,
+                },
+            )
+        }
+    )
+    _make_news_service(
+        db_path,
+        scores={"group-1": 44.0},
+        editorial_provider=first_editorial_provider,
+        editorial_candidate_limit=2,
+        editorial_min_score=0.1,
+    ).refresh_materialized(force=True)
+
+    second_editorial_provider = StubEditorialAIProvider(
+        response_by_title={
+            "코스피 수급 안정, 프로그램 매수 유입": NewsEditorialAIResponse(
+                story_state="ONGOING",
+                importance_label="high",
+                editorial_reason="프로그램 매수 강도가 더 커져 대표 카드 설명을 갱신합니다.",
+                editorial_boost=0.03,
+                confidence=0.79,
+                raw_output={
+                    "story_state": "ONGOING",
+                    "importance_label": "high",
+                    "editorial_reason": "프로그램 매수 강도가 더 커져 대표 카드 설명을 갱신합니다.",
+                    "editorial_boost": 0.03,
+                    "confidence": 0.79,
+                },
+            )
+        }
+    )
+    _make_news_service(
+        db_path,
+        scores={"group-1": 44.0},
+        editorial_provider=second_editorial_provider,
+        editorial_candidate_limit=2,
+        editorial_min_score=0.1,
+    ).refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        state_row = connection.execute(
+            """
+            SELECT active_candidate_key, state_json
+            FROM market_surface_state
+            WHERE surface_key = 'KR'
+            """
+        ).fetchone()
+        history_rows = connection.execute(
+            """
+            SELECT candidate_key, change_type, snapshot_json
+            FROM market_surface_history
+            WHERE surface_key = 'KR'
+            ORDER BY id
+            """
+        ).fetchall()
+
+    assert state_row is not None
+    assert len(history_rows) == 2
+    assert history_rows[0]["change_type"] == "refresh"
+    assert history_rows[1]["change_type"] == "metadata_update"
+    assert history_rows[0]["candidate_key"] == history_rows[1]["candidate_key"] == state_row["active_candidate_key"]
+
+    final_state_payload = json.loads(state_row["state_json"])
+    metadata_update_payload = json.loads(history_rows[1]["snapshot_json"])
+    assert final_state_payload["lead_importance_label"] == "high"
+    assert metadata_update_payload["lead_importance_label"] == "high"
+    assert metadata_update_payload["lead_editorial_reason"] == "프로그램 매수 강도가 더 커져 대표 카드 설명을 갱신합니다."
+
+
+def test_market_news_product_persists_live_briefing_payload(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-BRIEFING-001",
+        title="코스피 반도체주 강세, 외국인 순매수 확대",
+        summary="핵심 섹터와 외국인 수급이 동시에 개선됐다.",
+        publisher="매일경제",
+        source_url="https://example.com/briefing-kr",
+        canonical_url="https://example.com/briefing-kr",
+        query_text="반도체 증시",
+    )
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-BRIEFING-002",
+        title="연준 발언 경계에 달러 강세 재확인",
+        summary="원화와 외국인 수급에 부담이 될 수 있다.",
+        publisher="매일경제",
+        source_url="https://example.com/briefing-global",
+        canonical_url="https://example.com/briefing-global",
+        query_text="연준 증시",
+    )
+
+    editorial_provider = StubEditorialAIProvider(
+        briefing_response=NewsEditorialAIBriefingResponse(
+            headline="장중 핵심 브리핑",
+            summary="국내 수급 개선과 글로벌 달러 강세가 함께 시장 해석을 움직이고 있습니다.",
+            key_points=["반도체와 외국인 수급 개선", "달러 강세로 환율 민감도 확대"],
+            confidence=0.79,
+            raw_output={"headline": "장중 핵심 브리핑"},
+        )
+    )
+    news_service = _make_news_service(
+        db_path,
+        scores={"group-1": 61.0, "group-2": 33.0},
+        editorial_provider=editorial_provider,
+        editorial_candidate_limit=3,
+        editorial_min_score=0.1,
+    )
+
+    news_service.refresh_materialized(force=True)
+    dashboard = news_service.get_dashboard()
+
+    with get_connection(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT state_json
+            FROM market_surface_state
+            WHERE surface_key = 'SUMMARY_BRIEFING'
+            """
+        ).fetchone()
+
+    assert row is not None
+    assert len(editorial_provider.briefing_requests) == 1
+    assert dashboard["briefing"]["headline"] == "장중 핵심 브리핑"
+    assert dashboard["briefing"]["generation_method"] == "llm"
+    assert dashboard["briefing"]["ai_provider"] == "stub_editorial_ai"
+    assert dashboard["briefing"]["linked_headlines"]
+    assert dashboard["briefing"]["linked_headlines"][0]["source_url"] == "https://example.com/briefing-kr"
+
+    state_payload = json.loads(row["state_json"])
+    assert state_payload["headline"] == "장중 핵심 브리핑"
+    assert state_payload["generation_method"] == "llm"
+    assert state_payload["linked_headlines"]
+
+
+def test_market_news_product_briefing_falls_back_to_rule_based_links(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-BRIEFING-FALLBACK-001",
+        title="코스피 수급 안정, 프로그램 매수 유입",
+        summary="국내 지수 해석에 직접 연결되는 흐름이다.",
+        publisher="매일경제",
+        source_url="https://example.com/briefing-fallback",
+        canonical_url="https://example.com/briefing-fallback",
+        query_text="코스피 증시",
+    )
+
+    news_service = _make_news_service(db_path, scores={"group-1": 41.0})
+    news_service.refresh_materialized(force=True)
+    dashboard = news_service.get_dashboard()
+
+    assert dashboard["briefing"]["generation_method"] == "rule_based"
+    assert dashboard["briefing"]["headline"] == "지금 시장 리포트"
+    assert "\n\n" in dashboard["briefing"]["summary"]
+    assert "현재 시장 해석의 중심은" not in dashboard["briefing"]["summary"]
+    assert "흐름으로 바로 연결되고 있습니다" not in dashboard["briefing"]["summary"]
+    assert dashboard["briefing"]["linked_headlines"]
+    assert dashboard["briefing"]["linked_headlines"][0]["source_url"] == "https://example.com/briefing-fallback"
+
+
+def test_market_news_product_briefing_keeps_story_without_safe_url(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-BRIEFING-UNSAFE-001",
+        title="코스피 변동성 확대, 장중 수급 경계",
+        summary="국내 시장 해석에는 중요하지만 원문 링크는 안전하지 않습니다.",
+        publisher="매일경제",
+        source_url="javascript:alert('xss')",
+        canonical_url="javascript:alert('xss')",
+        query_text="코스피 변동성",
+    )
+
+    news_service = _make_news_service(db_path, scores={"group-1": 52.0})
+    news_service.refresh_materialized(force=True)
+    dashboard = news_service.get_dashboard()
+
+    assert dashboard["briefing"]["linked_headlines"]
+    assert dashboard["briefing"]["linked_headlines"][0]["title"] == "코스피 변동성 확대, 장중 수급 경계"
+    assert dashboard["briefing"]["linked_headlines"][0]["source_url"] is None
+    assert dashboard["briefing"]["linked_headlines"][0]["source_label"] == "매일경제"
+
+
+def test_market_news_product_summary_briefing_history_tracks_state_changes(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-BRIEFING-HISTORY-001",
+        title="반도체 수급 개선과 코스피 강세",
+        summary="국내 수급 개선이 시장 해석 중심입니다.",
+        publisher="매일경제",
+        source_url="https://example.com/briefing-history-1",
+        canonical_url="https://example.com/briefing-history-1",
+        query_text="반도체 증시",
+    )
+
+    first_provider = StubEditorialAIProvider(
+        briefing_response=NewsEditorialAIBriefingResponse(
+            headline="1차 브리핑",
+            summary="첫 번째 브리핑입니다.",
+            key_points=["반도체 수급 개선"],
+            confidence=0.61,
+            raw_output={"headline": "1차 브리핑"},
+        )
+    )
+    _make_news_service(
+        db_path,
+        scores={"group-1": 56.0},
+        editorial_provider=first_provider,
+        editorial_candidate_limit=3,
+        editorial_min_score=0.1,
+    ).refresh_materialized(force=True)
+
+    second_provider = StubEditorialAIProvider(
+        briefing_response=NewsEditorialAIBriefingResponse(
+            headline="2차 브리핑",
+            summary="두 번째 브리핑입니다.",
+            key_points=["반도체 수급 개선", "장중 강세 지속"],
+            confidence=0.77,
+            raw_output={"headline": "2차 브리핑"},
+        )
+    )
+    _make_news_service(
+        db_path,
+        scores={"group-1": 56.0},
+        editorial_provider=second_provider,
+        editorial_candidate_limit=3,
+        editorial_min_score=0.1,
+    ).refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        history_rows = connection.execute(
+            """
+            SELECT change_type, snapshot_json
+            FROM market_surface_history
+            WHERE surface_key = 'SUMMARY_BRIEFING'
+            ORDER BY id
+            """
+        ).fetchall()
+
+    assert len(history_rows) == 2
+    assert history_rows[0]["change_type"] == "metadata_update"
+    assert history_rows[1]["change_type"] == "metadata_update"
+    assert json.loads(history_rows[0]["snapshot_json"])["headline"] == "1차 브리핑"
+    assert json.loads(history_rows[1]["snapshot_json"])["headline"] == "2차 브리핑"
+
+
+def test_market_news_product_refresh_rolls_back_if_briefing_generation_fails(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-ROLLBACK-001",
+        title="코스피 반등 시도, 외국인 선물 순매수",
+        summary="기존 상태를 먼저 만든다.",
+        publisher="매일경제",
+        source_url="https://example.com/rollback-1",
+        canonical_url="https://example.com/rollback-1",
+        query_text="코스피 반등",
+    )
+
+    baseline_service = _make_news_service(db_path, scores={"group-1": 47.0})
+    baseline_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        baseline_state_rows = connection.execute(
+            """
+            SELECT surface_key, active_candidate_key, state_json
+            FROM market_surface_state
+            ORDER BY surface_key
+            """
+        ).fetchall()
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-ROLLBACK-002",
+        title="환율 경계감에 장중 변동성 재확대",
+        summary="두 번째 refresh는 briefing 단계에서 실패한다.",
+        publisher="매일경제",
+        source_url="https://example.com/rollback-2",
+        canonical_url="https://example.com/rollback-2",
+        query_text="환율 변동성",
+    )
+
+    class FailingBriefingNewsService(NewsProductService):
+        def _build_summary_briefing_payload(self, *, ordered_candidates_by_surface, coverage, updated_at):
+            raise RuntimeError("briefing generation exploded")
+
+    failing_service = FailingBriefingNewsService(
+        db_path=db_path,
+        datalab_provider=StubDatalabProvider(scores={"group-1": 47.0, "group-2": 32.0}),
+        batch_triage_provider=None,
+        editorial_ai_provider=None,
+        lookback_days=7,
+        card_limit=12,
+        representative_evidence_limit=3,
+        refresh_ttl_seconds=300,
+        datalab_window_days=7,
+        batch_triage_batch_size=15,
+        batch_triage_upgrade_legacy_rows=True,
+        editorial_ai_candidate_limit=8,
+        editorial_ai_min_editorial_score=0.55,
+    )
+
+    failing_service.refresh_materialized(force=True)
+
+    with get_connection(db_path) as connection:
+        after_rows = connection.execute(
+            """
+            SELECT surface_key, active_candidate_key, state_json
+            FROM market_surface_state
+            ORDER BY surface_key
+            """
+        ).fetchall()
+
+    assert [tuple(row) for row in after_rows] == [tuple(row) for row in baseline_state_rows]
+
+
+def test_market_news_product_summary_briefing_persists_llm_payload(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-BRIEF-KR-001",
+        title="코스피 반도체주 강세, 외국인 순매수 확대",
+        summary="국내 핵심 섹터와 수급이 동시에 개선됐다.",
+        publisher="매일경제",
+        source_url="https://example.com/brief-kr",
+        canonical_url="https://example.com/brief-kr",
+        query_text="반도체 증시",
+    )
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-BRIEF-GLOBAL-001",
+        title="연준 발언 여파로 달러 강세, 원화 변동성 확대",
+        summary="글로벌 변수로 환율과 외국인 수급 부담이 커졌다.",
+        publisher="매일경제",
+        source_url="https://example.com/brief-global",
+        canonical_url="https://example.com/brief-global",
+        query_text="환율 증시",
+    )
+
+    editorial_provider = StubEditorialAIProvider(
+        briefing_response=NewsEditorialAIBriefingResponse(
+            headline="외국인 수급과 환율 변수를 함께 봐야 하는 장세입니다.",
+            summary=(
+                "국내에서는 반도체와 외국인 수급이 지수를 끌어올리고 있습니다.\n\n"
+                "동시에 달러 강세가 원화 변동성과 외국인 흐름을 흔들 수 있어 상단은 열려 있지만 변동성 관리가 필요합니다.\n\n"
+                "따라서 장중에는 반도체 주도 흐름이 이어지는지와 환율 반응이 함께 확인돼야 합니다."
+            ),
+            key_points=[
+                "반도체와 외국인 순매수가 국내 주도 흐름입니다.",
+                "환율 변수는 장중 변동성 확대 요인입니다.",
+                "환율 변수는 장중 변동성 확대 요인입니다.",
+            ],
+            confidence=0.82,
+            raw_output={"headline": "외국인 수급과 환율 변수를 함께 봐야 하는 장세입니다."},
+        )
+    )
+    news_service = _make_news_service(
+        db_path,
+        scores={"group-1": 61.0, "group-2": 39.0},
+        editorial_provider=editorial_provider,
+        editorial_candidate_limit=3,
+        editorial_min_score=0.1,
+    )
+
+    news_service.refresh_materialized(force=True)
+    dashboard = news_service.get_dashboard()
+
+    with get_connection(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT state_json
+            FROM market_surface_state
+            WHERE surface_key = 'SUMMARY_BRIEFING'
+            """
+        ).fetchone()
+
+    assert len(editorial_provider.briefing_requests) == 1
+    assert row is not None
+    state_payload = json.loads(row["state_json"])
+    assert state_payload["generation_method"] == "llm"
+    assert state_payload["ai_provider"] == "stub_editorial_ai"
+    assert state_payload["headline"] == "외국인 수급과 환율 변수를 함께 봐야 하는 장세입니다."
+    assert "\n\n" in state_payload["summary"]
+    assert state_payload["key_points"] == [
+        "반도체와 외국인 순매수가 국내 주도 흐름입니다.",
+        "환율 변수는 장중 변동성 확대 요인입니다.",
+    ]
+    assert len(state_payload["linked_headlines"]) >= 2
+    assert dashboard["briefing"]["headline"] == state_payload["headline"]
+    assert dashboard["briefing"]["linked_headlines"][0]["source_url"]
+
+
+
+def test_market_news_product_summary_briefing_falls_back_without_ai(tmp_path: Path) -> None:
+    db_path = _make_db_path(tmp_path)
+
+    _insert_raw_document(
+        db_path,
+        provider="MK_RSS",
+        document_type="NEWS_CANDIDATE",
+        provider_document_id="MK-BRIEF-FALLBACK-001",
+        title="코스피 수급 안정, 프로그램 매수 유입",
+        summary="국내 시장 수급이 안정되는 기사",
+        publisher="매일경제",
+        source_url="https://example.com/brief-fallback",
+        canonical_url="https://example.com/brief-fallback",
+        query_text="코스피 증시",
+    )
+
+    news_service = _make_news_service(db_path, scores={"group-1": 48.0})
+    news_service.refresh_materialized(force=True)
+    dashboard = news_service.get_dashboard()
+
+    assert dashboard["briefing"]["generation_method"] == "rule_based"
+    assert dashboard["briefing"]["headline"] == "지금 시장 리포트"
+    assert "\n\n" in dashboard["briefing"]["summary"]
+    assert dashboard["briefing"]["linked_headlines"]
+    assert dashboard["briefing"]["linked_headlines"][0]["source_url"] == "https://example.com/brief-fallback"
+
+
+def test_market_news_product_fallback_summary_avoids_filing_style_global_titles(tmp_path: Path) -> None:
+    news_service = _make_news_service(_make_db_path(tmp_path))
+
+    briefing = news_service._build_fallback_summary_briefing(
+        cards_by_surface={
+            "KR": [
+                {
+                    "id": "kr-1",
+                    "title": "개미 이달들어 벌써 17조 담아…月최대 순매수 가나",
+                    "one_line_summary": "개인 매수세가 지수 하단을 떠받치며 수급 해석의 중심이 되고 있습니다.",
+                    "why_it_matters": "개인 매수세가 지수 하단을 떠받치며 수급 해석의 중심이 되고 있습니다.",
+                    "market_impact": "수급 하단 지지 여부를 확인할 필요가 있습니다.",
+                    "market_scope": "kr_market",
+                    "primary_region": "KR",
+                    "published_at": "2026-03-15T06:00:00Z",
+                    "updated_at": "2026-03-15T06:01:00Z",
+                    "evidence": [],
+                }
+            ],
+            "GLOBAL": [
+                {
+                    "id": "global-1",
+                    "title": "증권발행실적보고서(집합투자증권)(삼성미국서학개미증권자투자신탁H[주식])",
+                    "one_line_summary": "해외 투자 심리와 자금 흐름을 읽을 때 참고할 수 있는 관련 공시입니다.",
+                    "why_it_matters": "해외 투자 심리와 자금 흐름을 읽을 때 참고할 수 있는 관련 공시입니다.",
+                    "market_impact": "환율과 위험선호 변화를 해석할 때 보조 신호가 됩니다.",
+                    "market_scope": "global_market",
+                    "primary_region": "GLOBAL",
+                    "published_at": "2026-03-15T06:05:00Z",
+                    "updated_at": "2026-03-15T06:06:00Z",
+                    "evidence": [],
+                }
+            ],
+            "DISCLOSURE": [],
+        },
+        coverage={
+            "summary": "핵심 소스 반영 중",
+        },
+        updated_at="2026-03-15T06:10:00Z",
+    )
+
+    assert "증권발행실적보고서" not in briefing["summary"]
+    assert "해외 투자 심리와 자금 흐름" in briefing["summary"]
+
 
 
 def test_market_news_product_canonical_dart_event_prefers_primary_disclosure_evidence(tmp_path: Path) -> None:
@@ -816,11 +1952,16 @@ class _RecordingHTTPClient:
                         "message": {
                             "content": json_module.dumps(
                                 {
-                                    "story_state": "NEW",
-                                    "importance_label": "medium",
-                                    "editorial_reason": "stub",
-                                    "editorial_boost": 0.01,
-                                    "confidence": 0.8,
+                                    "items": [
+                                        {
+                                            "cluster_key": "cluster-1",
+                                            "story_state": "NEW",
+                                            "importance_label": "medium",
+                                            "editorial_reason": "stub",
+                                            "editorial_boost": 0.01,
+                                            "confidence": 0.8,
+                                        }
+                                    ]
                                 }
                             )
                         }

@@ -31,7 +31,7 @@ pnpm --filter frontend dev
 ## 주요 경로
 - `/krx/dashboard` 대시보드
 - `/krx/insights` AI 인사이트
-- `/krx` 시장 신호
+- `/krx` 파생·수급(display label, canonical route 유지)
 - `/krx/news` 시장 뉴스
 - `/krx/macro-calendar` 매크로 캘린더
 - `/krx/watchlist` 관심종목(보조)
@@ -43,7 +43,7 @@ pnpm --filter frontend dev
 
 ## 성능 정책
 - `/krx/news`는 `force-dynamic`과 클라이언트 폴링을 유지합니다.
-- 시장 신호와 파생 관련 `/api/krx/*` fetch, `AI 인사이트`의 macro news fetch는 30초 재검증을 사용합니다.
+- 파생·수급(`/krx`)과 파생 관련 `/api/krx/*` fetch, `AI 인사이트`의 macro news fetch는 30초 재검증을 사용합니다.
 - 상단 GNB는 안정 탭만 적극 prefetch하고 `시장 뉴스`는 prefetch하지 않습니다.
 
 ## 검증

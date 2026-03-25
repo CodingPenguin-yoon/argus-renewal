@@ -10,7 +10,7 @@ export function TopNav({ market }: { market: MarketCode }) {
   const navItems = [
     { href: marketOverviewPath(market), label: "대시보드", prefetch: true },
     { href: marketInsightsPath(market), label: "AI 인사이트", prefetch: true },
-    { href: marketHref(market), label: "시장 신호", prefetch: true },
+    { href: marketHref(market), label: "파생·수급", prefetch: true },
     { href: marketHref(market, "/news"), label: "시장 뉴스", prefetch: false },
     { href: marketMacroCalendarPath(market), label: "매크로 캘린더", prefetch: true },
   ];

@@ -464,7 +464,7 @@ export async function getOverviewTabData(): Promise<OverviewTabData> {
   const gatewayPanels = [
     {
       key: "market-signal" as const,
-      title: "시장 신호",
+      title: "파생·수급",
       href: "/krx",
       summary: firstNonEmpty(marketSignal.summary.explanationText, marketCard?.interpretationLine),
       metricLabel: "신뢰도",

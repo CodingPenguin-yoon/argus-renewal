@@ -128,12 +128,14 @@ class RawDocumentIngestionService:
                 fetch_batch=self._fetch_mk_rss_batch,
                 build_company_requests=self._build_mk_rss_company_requests,
                 build_theme_requests=self._build_mk_rss_theme_requests,
+                build_market_requests=self._build_mk_rss_market_requests,
             ),
             NewsProviderDescriptor(
                 provider="NAVER_NEWS",
                 fetch_batch=self._fetch_naver_news_batch,
                 build_company_requests=self._build_naver_company_requests,
                 build_theme_requests=self._build_naver_theme_requests,
+                build_market_requests=self._build_naver_market_requests,
             ),
         )
         return {
@@ -177,10 +179,8 @@ class RawDocumentIngestionService:
         window_end: datetime,
         cursor: str | None,
     ):
-        if request.query_text is None:
-            raise ValueError("MK_RSS request must include query_text")
         return self.mk_rss_provider.fetch_news(
-            query=request.query_text,
+            query=request.query_text or "",
             window_start=window_start,
             window_end=window_end,
             cursor=cursor,
@@ -273,6 +273,20 @@ class RawDocumentIngestionService:
             )
         ]
 
+    def _build_mk_rss_market_requests(self, _keywords: list[str]) -> list[DocumentSyncRequest]:
+        return [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="MK_RSS",
+                source_kind="SYSTEM",
+                source_key="KR_MARKET_FEED",
+                source_label="KR market feed",
+                query_template=None,
+                query_text="",
+                company_id=None,
+            )
+        ]
+
     def _build_naver_company_requests(self, target: dict[str, Any]) -> list[DocumentSyncRequest]:
         requests = [
             DocumentSyncRequest(
@@ -314,6 +328,22 @@ class RawDocumentIngestionService:
                 query_text=self.naver_provider.build_theme_query(keyword=keyword),
                 company_id=None,
             )
+        ]
+
+    def _build_naver_market_requests(self, keywords: list[str]) -> list[DocumentSyncRequest]:
+        normalized_keywords = [keyword.strip() for keyword in keywords if keyword.strip()]
+        return [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="NAVER_NEWS",
+                source_kind="SYSTEM",
+                source_key=keyword,
+                source_label=keyword,
+                query_template=self.naver_provider.theme_query_template,
+                query_text=self.naver_provider.build_theme_query(keyword=keyword),
+                company_id=None,
+            )
+            for keyword in normalized_keywords
         ]
 
     def sync_dart_disclosures_last_days(self, *, days: int, backfill: bool = False) -> IngestionRunResult:
@@ -467,6 +497,52 @@ class RawDocumentIngestionService:
                             fetch_batch=descriptor.fetch_batch,
                         )
                     )
+
+        return results
+
+    def sync_market_news_last_days(
+        self,
+        *,
+        keywords: list[str],
+        days: int,
+        backfill: bool = False,
+        providers: list[str] | None = None,
+    ) -> list[IngestionRunResult]:
+        now = datetime.now(timezone.utc)
+        window_start = now - timedelta(days=max(days, 1))
+        return self.sync_market_news_window(
+            keywords=keywords,
+            window_start=window_start,
+            window_end=now,
+            backfill=backfill,
+            providers=providers,
+        )
+
+    def sync_market_news_window(
+        self,
+        *,
+        keywords: list[str],
+        window_start: datetime,
+        window_end: datetime,
+        backfill: bool,
+        providers: list[str] | None = None,
+    ) -> list[IngestionRunResult]:
+        normalized_keywords = [keyword.strip() for keyword in keywords if keyword.strip()]
+        results: list[IngestionRunResult] = []
+        selected_descriptors = self._select_news_provider_descriptors(providers)
+
+        for descriptor in selected_descriptors:
+            requests = descriptor.build_market_requests(normalized_keywords)
+            for request in requests:
+                results.append(
+                    self._run_document_sync(
+                        request=request,
+                        window_start=window_start,
+                        window_end=window_end,
+                        backfill=backfill,
+                        fetch_batch=descriptor.fetch_batch,
+                    )
+                )
 
         return results
 

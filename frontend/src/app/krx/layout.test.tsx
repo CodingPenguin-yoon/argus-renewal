@@ -8,12 +8,12 @@ vi.mock("@/krx/components/layout/async-header", () => ({
     <>
       <header>
         <nav>
-          <a href="/krx">시장 신호</a>
+          <a href="/krx">파생·수급</a>
           <a href="/krx/watchlist">관심종목</a>
         </nav>
       </header>
       <section>
-        <h1>실시간 상태</h1>
+        <h1>공통 상태 헤더</h1>
       </section>
     </>
   ),
@@ -28,9 +28,9 @@ describe("krx layout", () => {
     const component = await KrxLayout({ children: <div>route body</div> });
     render(component);
 
-    expect(screen.getByRole("link", { name: "시장 신호" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "파생·수급" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "관심종목" })).toBeInTheDocument();
-    expect(screen.getByText("실시간 상태")).toBeInTheDocument();
+    expect(screen.getByText("공통 상태 헤더")).toBeInTheDocument();
     expect(screen.getByText("route body")).toBeInTheDocument();
   });
 });

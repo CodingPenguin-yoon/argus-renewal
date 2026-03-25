@@ -519,7 +519,7 @@ describe("overview and macro aggregators", () => {
       next: { revalidate: 3600 },
     });
     expect(result.marketToneLine).toContain("상방");
-    expect(result.gatewayPanels.map((item) => item.title)).toEqual(["시장 신호", "시장 뉴스", "매크로 캘린더"]);
+    expect(result.gatewayPanels.map((item) => item.title)).toEqual(["파생·수급", "시장 뉴스", "매크로 캘린더"]);
     expect(result.reportLinks[0]?.title).toBe("글로벌 1");
     expect(result.globalHighlights[0]?.title).toBe("연준 발언");
   });

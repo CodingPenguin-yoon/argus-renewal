@@ -137,10 +137,12 @@ describe("krx insights page route", () => {
     expect(screen.getByText("근거")).toBeInTheDocument();
     expect(screen.getByText("반대 근거")).toBeInTheDocument();
     expect(screen.getByText("해석이 바뀌는 조건")).toBeInTheDocument();
-    expect(screen.getAllByText("파생 기준점")).toHaveLength(2);
-    expect(screen.getByText("달러 강세 재확인")).toBeInTheDocument();
-    expect(screen.getByText("OPEC 코멘트")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "매크로 캘린더 보기" })).toHaveAttribute("href", "/krx/macro-calendar");
+    expect(screen.getByText("오늘 확인 포인트")).toBeInTheDocument();
+    expect(screen.getByText("보조 참고 카드")).toBeInTheDocument();
+    expect(screen.getByText("파생 기준점")).toBeInTheDocument();
+    expect(screen.queryByText("달러 강세 재확인")).not.toBeInTheDocument();
+    expect(screen.queryByText("OPEC 코멘트")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "매크로 캘린더 보기" })).not.toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "시장 심리" })).toHaveAttribute("aria-valuetext", "상방 우위");
     expect(screen.getByRole("progressbar", { name: "AI 확신도" })).toBeInTheDocument();
   });

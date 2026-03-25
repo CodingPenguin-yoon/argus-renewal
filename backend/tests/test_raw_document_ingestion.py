@@ -75,6 +75,19 @@ def _build_custom_factory_extension(_settings) -> RawIngestionFactoryExtension:
                 company_id=None,
             )
         ],
+        build_market_requests=lambda keywords: [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="CUSTOM_FACTORY_RSS",
+                source_kind="SYSTEM",
+                source_key=keyword,
+                source_label=keyword,
+                query_template="rss:{keyword}",
+                query_text=f"rss:{keyword}",
+                company_id=None,
+            )
+            for keyword in keywords
+        ],
     )
     return RawIngestionFactoryExtension(news_provider_descriptors=(custom_descriptor,))
 
@@ -382,6 +395,88 @@ def test_mk_rss_provider_filters_feed_and_stores_rows(tmp_path: Path) -> None:
     assert row["query_text"] == "금리"
     payload = json.loads(row["raw_payload_json"])
     assert payload["no"] == "11986837"
+
+
+def test_sync_market_news_window_uses_feed_wide_mk_rss_request(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "raw-ingestion-mk-market.db")
+
+    feed_xml = """<?xml version='1.0' encoding='UTF-8'?>
+<rss version="2.0">
+  <channel>
+    <title>매일경제 : 증권</title>
+    <item>
+      <no>11986837</no>
+      <title><![CDATA[금리 인상 우려에 증시 변동성 확대]]></title>
+      <link><![CDATA[https://www.mk.co.kr/news/stock/11986837]]></link>
+      <category><![CDATA[증권]]></category>
+      <author>매일경제</author>
+      <pubDate>Sun, 08 Mar 2026 09:04:19 +0900</pubDate>
+      <description><![CDATA[금리 부담으로 투자 심리가 흔들렸다.]]></description>
+    </item>
+    <item>
+      <no>11986821</no>
+      <title><![CDATA[조선 업황 개선 기대]]></title>
+      <link><![CDATA[https://www.mk.co.kr/news/stock/11986821]]></link>
+      <category><![CDATA[증권]]></category>
+      <author>매일경제</author>
+      <pubDate>Sun, 08 Mar 2026 08:52:06 +0900</pubDate>
+      <description><![CDATA[수주 회복 기대감이 반영됐다.]]></description>
+    </item>
+  </channel>
+</rss>
+"""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.host == "www.mk.co.kr":
+            return httpx.Response(
+                status_code=200,
+                text=feed_xml,
+                headers={"Content-Type": "application/rss+xml; charset=utf-8"},
+            )
+        return httpx.Response(status_code=404)
+
+    http_client = httpx.Client(transport=httpx.MockTransport(_handler))
+    service = _make_service(
+        db_path=db_path,
+        dart_provider=_make_disabled_dart_provider(),
+        mk_rss_provider=MkRssNewsProvider(
+            enabled=True,
+            feed_urls=["https://www.mk.co.kr/rss/50200011/"],
+            http_client=http_client,
+        ),
+        bigkinds_provider=_make_disabled_bigkinds_provider(),
+        naver_provider=_make_disabled_naver_provider(),
+    )
+
+    try:
+        start, end = _window()
+        results = service.sync_market_news_window(
+            keywords=["주식", "코스피", "환율"],
+            window_start=start,
+            window_end=end,
+            backfill=False,
+            providers=["MK_RSS"],
+        )
+    finally:
+        http_client.close()
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.provider == "MK_RSS"
+    assert result.status == "SUCCESS"
+    assert result.inserted_count == 2
+
+    with get_connection(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT query_text, COUNT(*) AS document_count
+            FROM raw_documents
+            WHERE provider = 'MK_RSS'
+            GROUP BY query_text
+            """
+        ).fetchall()
+
+    assert [dict(row) for row in rows] == [{"query_text": "", "document_count": 2}]
 
 
 def test_duplicate_detection_across_news_providers(tmp_path: Path) -> None:
@@ -765,6 +860,19 @@ def test_custom_news_provider_descriptor_can_be_injected(tmp_path: Path) -> None
                 company_id=None,
             )
         ],
+        build_market_requests=lambda keywords: [
+            DocumentSyncRequest(
+                job_name="raw_documents_sync_news",
+                provider="CUSTOM_RSS",
+                source_kind="SYSTEM",
+                source_key=keyword,
+                source_label=keyword,
+                query_template="rss:{keyword}",
+                query_text=f"rss:{keyword}",
+                company_id=None,
+            )
+            for keyword in keywords
+        ],
     )
 
     service = RawDocumentIngestionService(
@@ -960,6 +1068,19 @@ def test_news_without_published_at_uses_observed_at(tmp_path: Path) -> None:
                         company_id=None,
                     )
                 ],
+                build_market_requests=lambda keywords: [
+                    DocumentSyncRequest(
+                        job_name="raw_documents_sync_news",
+                        provider="MK_RSS",
+                        source_kind="SYSTEM",
+                        source_key=keyword,
+                        source_label=keyword,
+                        query_template="rss:{keyword}",
+                        query_text=f"rss:{keyword}",
+                        company_id=None,
+                    )
+                    for keyword in keywords
+                ],
             ),
         ),
     )
@@ -1003,6 +1124,7 @@ def test_factory_extension_loader_accepts_dict_payload() -> None:
                     ),
                     build_company_requests=lambda _target: [],
                     build_theme_requests=lambda _keyword: [],
+                    build_market_requests=lambda _keywords: [],
                 ),
             )
         }
@@ -1318,12 +1440,9 @@ def test_probe_trend_provider_returns_score_samples(monkeypatch: pytest.MonkeyPa
 def test_sync_scheduled_returns_non_zero_when_any_run_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = SimpleNamespace(
         raw_ingestion_schedule_days=1,
-        raw_ingestion_schedule_company_ids=None,
-        raw_ingestion_schedule_company_names=None,
-        raw_ingestion_schedule_theme_keywords=None,
+        raw_ingestion_schedule_market_news_keywords="주식,코스피,코스닥",
         raw_ingestion_schedule_include_dart=True,
-        raw_ingestion_schedule_include_company_news=False,
-        raw_ingestion_schedule_include_theme_news=False,
+        raw_ingestion_schedule_include_market_news=False,
     )
 
     class _FakeService:
@@ -1354,18 +1473,87 @@ def test_sync_scheduled_returns_non_zero_when_any_run_failed(monkeypatch: pytest
     assert error.value.code == 1
 
 
+def test_sync_scheduled_uses_default_market_keywords_when_targets_are_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = SimpleNamespace(
+        raw_ingestion_schedule_days=1,
+        raw_ingestion_schedule_disclosure_providers=None,
+        raw_ingestion_schedule_market_news_providers=None,
+        raw_ingestion_schedule_market_news_keywords="주식,코스피,코스닥",
+        raw_ingestion_schedule_include_dart=True,
+        raw_ingestion_schedule_include_market_news=True,
+    )
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def _result(provider: str, source_kind: str, source_key: str | None):
+        return SimpleNamespace(
+            run_id=1,
+            status="SUCCESS",
+            provider=provider,
+            source_kind=source_kind,
+            source_key=source_key,
+            processed_count=1,
+            inserted_count=1,
+            duplicate_count=0,
+            failed_count=0,
+            cursor_before=None,
+            cursor_after=None,
+            error_message=None,
+        )
+
+    class _FakeService:
+        def sync_dart_disclosures_last_days(self, *, days: int, backfill: bool):
+            calls.append(("sync_dart_disclosures_last_days", {"days": days, "backfill": backfill}))
+            return _result("DART", "SYSTEM", "DISCLOSURES")
+
+        def sync_market_news_last_days(
+            self,
+            *,
+            keywords: list[str],
+            days: int,
+            backfill: bool,
+            providers: list[str] | None = None,
+        ):
+            calls.append(
+                (
+                    "sync_market_news_last_days",
+                    {
+                        "keywords": keywords,
+                        "days": days,
+                        "backfill": backfill,
+                        "providers": providers,
+                    },
+                )
+            )
+            return [_result("NAVER_NEWS", "THEME", keyword) for keyword in keywords]
+
+    monkeypatch.setattr(ingestion_cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(ingestion_cli, "create_raw_document_ingestion_service", lambda _settings: _FakeService())
+
+    payload = ingestion_cli._build_sync_scheduled_payload(settings)
+
+    assert calls == [
+        ("sync_dart_disclosures_last_days", {"days": 1, "backfill": False}),
+        (
+            "sync_market_news_last_days",
+            {
+                "keywords": ["주식", "코스피", "코스닥"],
+                "days": 1,
+                "backfill": False,
+                "providers": None,
+            },
+        ),
+    ]
+    assert payload["market_news_keywords"] == ["주식", "코스피", "코스닥"]
+
+
 def test_sync_scheduled_uses_configured_provider_filters(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = SimpleNamespace(
         raw_ingestion_schedule_days=2,
         raw_ingestion_schedule_disclosure_providers="DART,CUSTOM_DISCLOSURE",
-        raw_ingestion_schedule_company_news_providers="CUSTOM_RSS",
-        raw_ingestion_schedule_theme_news_providers="CUSTOM_RSS,NAVER_NEWS",
-        raw_ingestion_schedule_company_ids="101",
-        raw_ingestion_schedule_company_names=None,
-        raw_ingestion_schedule_theme_keywords="금리",
+        raw_ingestion_schedule_market_news_providers="CUSTOM_RSS,NAVER_NEWS",
+        raw_ingestion_schedule_market_news_keywords="주식,금리",
         raw_ingestion_schedule_include_dart=False,
-        raw_ingestion_schedule_include_company_news=False,
-        raw_ingestion_schedule_include_theme_news=False,
+        raw_ingestion_schedule_include_market_news=False,
     )
     calls: list[tuple[str, dict[str, object]]] = []
 
@@ -1395,30 +1583,7 @@ def test_sync_scheduled_uses_configured_provider_filters(monkeypatch: pytest.Mon
             )
             return _result(provider, "SYSTEM", "DISCLOSURES")
 
-        def sync_news_candidates_for_companies_last_days(
-            self,
-            *,
-            company_ids: list[int],
-            company_names: list[str] | None,
-            days: int,
-            backfill: bool,
-            providers: list[str] | None = None,
-        ):
-            calls.append(
-                (
-                    "sync_news_candidates_for_companies_last_days",
-                    {
-                        "company_ids": company_ids,
-                        "company_names": company_names,
-                        "days": days,
-                        "backfill": backfill,
-                        "providers": providers,
-                    },
-                )
-            )
-            return [_result("CUSTOM_RSS", "COMPANY", "id:101:company")]
-
-        def sync_news_candidates_for_themes_last_days(
+        def sync_market_news_last_days(
             self,
             *,
             keywords: list[str],
@@ -1428,7 +1593,7 @@ def test_sync_scheduled_uses_configured_provider_filters(monkeypatch: pytest.Mon
         ):
             calls.append(
                 (
-                    "sync_news_candidates_for_themes_last_days",
+                    "sync_market_news_last_days",
                     {
                         "keywords": keywords,
                         "days": days,
@@ -1454,19 +1619,9 @@ def test_sync_scheduled_uses_configured_provider_filters(monkeypatch: pytest.Mon
             {"provider": "CUSTOM_DISCLOSURE", "days": 2, "backfill": False},
         ),
         (
-            "sync_news_candidates_for_companies_last_days",
+            "sync_market_news_last_days",
             {
-                "company_ids": [101],
-                "company_names": [],
-                "days": 2,
-                "backfill": False,
-                "providers": ["CUSTOM_RSS"],
-            },
-        ),
-        (
-            "sync_news_candidates_for_themes_last_days",
-            {
-                "keywords": ["금리"],
+                "keywords": ["주식", "금리"],
                 "days": 2,
                 "backfill": False,
                 "providers": ["CUSTOM_RSS", "NAVER_NEWS"],
@@ -1579,6 +1734,7 @@ def test_run_news_automation_skips_when_tick_is_not_due(monkeypatch: pytest.Monk
         raw_ingestion_automation_post_close_interval_minutes=5,
         raw_ingestion_automation_off_hours_interval_minutes=10,
         raw_ingestion_automation_holiday_dates=None,
+        raw_ingestion_automation_normalize_include_llm=False,
         raw_ingestion_automation_refresh_mode="smart",
     )
 
@@ -1627,6 +1783,7 @@ def test_run_news_automation_runs_sync_normalize_and_refresh_when_due(monkeypatc
         raw_ingestion_automation_post_close_interval_minutes=5,
         raw_ingestion_automation_off_hours_interval_minutes=10,
         raw_ingestion_automation_holiday_dates=None,
+        raw_ingestion_automation_normalize_include_llm=False,
         raw_ingestion_automation_refresh_mode="smart",
     )
 
@@ -1660,7 +1817,7 @@ def test_run_news_automation_runs_sync_normalize_and_refresh_when_due(monkeypatc
         ("sync", {"settings": settings}),
         (
             "normalize",
-            {"settings": settings, "limit": 200, "include_llm": None},
+            {"settings": settings, "limit": 200, "include_llm": False},
         ),
         ("refresh", {"settings": settings, "force": False}),
     ]
@@ -1690,6 +1847,7 @@ def test_run_news_automation_can_skip_refresh(monkeypatch: pytest.MonkeyPatch) -
         raw_ingestion_automation_post_close_interval_minutes=5,
         raw_ingestion_automation_off_hours_interval_minutes=10,
         raw_ingestion_automation_holiday_dates=None,
+        raw_ingestion_automation_normalize_include_llm=False,
         raw_ingestion_automation_refresh_mode="skip",
     )
 
@@ -1712,6 +1870,44 @@ def test_run_news_automation_can_skip_refresh(monkeypatch: pytest.MonkeyPatch) -
     assert captured[0]["refresh"] == {"status": "SKIPPED", "mode": "skip"}
 
 
+def test_run_news_automation_can_opt_into_llm_normalize(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, object]] = []
+    calls: list[tuple[str, dict[str, object]]] = []
+    settings = SimpleNamespace(
+        raw_ingestion_automation_timezone="Asia/Seoul",
+        raw_ingestion_automation_weekdays="0,1,2,3,4",
+        raw_ingestion_automation_market_open_time="09:00",
+        raw_ingestion_automation_market_close_time="15:30",
+        raw_ingestion_automation_post_close_end_time="18:00",
+        raw_ingestion_automation_market_open_interval_minutes=1,
+        raw_ingestion_automation_post_close_interval_minutes=5,
+        raw_ingestion_automation_off_hours_interval_minutes=10,
+        raw_ingestion_automation_holiday_dates=None,
+        raw_ingestion_automation_normalize_include_llm=True,
+        raw_ingestion_automation_refresh_mode="smart",
+    )
+
+    monkeypatch.setattr(ingestion_cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(ingestion_cli, "_build_sync_scheduled_payload", lambda _settings: {"failed_count": 0})
+
+    def _fake_normalize_payload(passed_settings, *, limit: int, include_llm: bool | None):
+        calls.append(("normalize", {"settings": passed_settings, "limit": limit, "include_llm": include_llm}))
+        return {"status": "SUCCESS", "processed_count": 1, "include_llm": include_llm}
+
+    monkeypatch.setattr(ingestion_cli, "_build_normalize_events_payload", _fake_normalize_payload)
+    monkeypatch.setattr(
+        ingestion_cli,
+        "_refresh_news_product_materialization",
+        lambda *_args, **_kwargs: {"status": "SUCCESS", "force": False},
+    )
+    monkeypatch.setattr(ingestion_cli, "_print_json", lambda payload: captured.append(payload))
+
+    ingestion_cli._run_news_automation(now=datetime(2026, 3, 16, 0, 1, tzinfo=timezone.utc))
+
+    assert calls == [("normalize", {"settings": settings, "limit": 200, "include_llm": True})]
+    assert captured[0]["normalize"]["include_llm"] is True
+
+
 def test_run_news_automation_runs_on_holiday_due_tick_with_off_hours_cadence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1727,6 +1923,7 @@ def test_run_news_automation_runs_on_holiday_due_tick_with_off_hours_cadence(
         raw_ingestion_automation_post_close_interval_minutes=5,
         raw_ingestion_automation_off_hours_interval_minutes=10,
         raw_ingestion_automation_holiday_dates="2026-03-16",
+        raw_ingestion_automation_normalize_include_llm=False,
         raw_ingestion_automation_refresh_mode="smart",
     )
 

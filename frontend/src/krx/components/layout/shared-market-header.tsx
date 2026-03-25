@@ -27,26 +27,26 @@ function relatedTabLabel(relatedTabLink: string) {
   if (relatedTabLink.includes("/macro-calendar") || relatedTabLink.includes("/global-events")) return "매크로 캘린더";
   if (relatedTabLink.includes("/news")) return "시장 뉴스";
   if (relatedTabLink.includes("/insights") || relatedTabLink.includes("/macro")) return "AI 인사이트";
-  return "시장 신호";
+  return "파생·수급";
 }
 
 export function SharedMarketHeader({ data }: { data: AppHeader }) {
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 pt-6 md:pt-8">
+    <div className="mx-auto w-full max-w-6xl px-4 pt-4 md:pt-5">
       <section
         aria-labelledby="market-status-title"
-        className="rounded-[28px] border border-slate-200/80 bg-white/92 p-4 shadow-[0_18px_48px_-32px_rgba(15,23,42,0.35)]"
+        className="rounded-[24px] border border-slate-200/80 bg-white/88 p-4 shadow-[0_14px_36px_-28px_rgba(15,23,42,0.28)]"
       >
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
-            <p className="text-xs font-semibold tracking-[0.18em] text-slate-500">MARKET STATUS</p>
-            <h1 id="market-status-title" className="mt-2 text-lg font-black tracking-tight text-slate-950 md:text-xl">
-              실시간 상태
+            <p className="text-[11px] font-semibold tracking-[0.18em] text-slate-500">STATUS SHELL</p>
+            <h1 id="market-status-title" className="mt-1 text-base font-black tracking-tight text-slate-950 md:text-lg">
+              공통 상태 헤더
             </h1>
-            <p className="mt-2 text-sm leading-6 text-slate-600">{data.sourceCoverage.summary}</p>
-            <p className="mt-1 text-xs leading-5 text-slate-500">
-              이 영역은 장 상태, 커버리지, 속보만 빠르게 확인하는 공통 셸입니다. 메인 해석은 각 탭에서 읽습니다.
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              장 상태, 소스 커버리지, 속보만 짧게 확인하는 공통 셸입니다. 메인 해석은 각 탭 첫 섹션에서 읽습니다.
             </p>
+            <p className="mt-1 text-xs leading-5 text-slate-500">{data.sourceCoverage.summary}</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 md:justify-end">
@@ -59,9 +59,9 @@ export function SharedMarketHeader({ data }: { data: AppHeader }) {
         </div>
 
         {data.sourceCoverage.items.length ? (
-          <div className="mt-4 flex flex-wrap gap-2 text-xs" data-testid="source-coverage">
+          <div className="mt-3 flex flex-wrap gap-2 text-xs" data-testid="source-coverage">
             {data.sourceCoverage.items.map((item) => (
-              <span key={item.key} className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">
+              <span key={item.key} className="rounded-full border border-slate-200 bg-slate-50/80 px-2.5 py-1 text-slate-700">
                 {item.label} · {coverageStatusLabel(item.status)}
               </span>
             ))}

@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { Badge } from "@/krx/components/ui/badge";
 import { formatKoreanDate } from "@/krx/lib/utils";
 import type { AppHeader, MacroTabData } from "@/krx/types/domain";
@@ -18,12 +16,6 @@ function coverageVariant(state: AppHeader["sourceCoverage"]["state"]) {
   if (state === "full") return "positive";
   if (state === "partial") return "high";
   return "low";
-}
-
-function coverageStatusLabel(status: AppHeader["sourceCoverage"]["items"][number]["status"]) {
-  if (status === "available") return "정상";
-  if (status === "partial") return "부분";
-  return "지연";
 }
 
 function toneClasses(tone: "positive" | "neutral" | "negative") {
@@ -153,6 +145,25 @@ function triggerLines(data: MacroTabData) {
   return lines.slice(0, 2);
 }
 
+function checkpointLines(data: MacroTabData) {
+  const lines: string[] = [];
+  const negativeCard = data.referenceCards.find((item) => item.tone === "negative");
+  const positiveCard = data.referenceCards.find((item) => item.tone === "positive");
+  const nextEvent = data.globalHighlights[0] ?? null;
+
+  if (negativeCard) {
+    lines.push(`${negativeCard.label} 방향이 더 악화되는지 다시 확인해야 합니다.`);
+  }
+  if (positiveCard) {
+    lines.push(`${positiveCard.label} 신호가 유지되면 현재 해석이 더 강화될 수 있습니다.`);
+  }
+  if (nextEvent) {
+    lines.push(`${nextEvent.title} 전후로 한국장 영향 경로가 실제로 열리는지 확인합니다.`);
+  }
+
+  return lines.slice(0, 3);
+}
+
 export function MacroDashboard({
   data,
   headerData,
@@ -168,6 +179,7 @@ export function MacroDashboard({
   const evidenceLines = headerData.supportingPoints.slice(0, 3);
   const counterLines = counterpointLines(data);
   const triggerItems = triggerLines(data);
+  const checkpointItems = checkpointLines(data);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 md:py-8">
@@ -239,17 +251,20 @@ export function MacroDashboard({
             </div>
 
             <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/25 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-100/70">소스 커버리지</p>
-              <p className="mt-2 text-sm leading-6 text-slate-200">{headerData.sourceCoverage.summary}</p>
-              {headerData.sourceCoverage.items.length ? (
-                <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                  {headerData.sourceCoverage.items.map((item) => (
-                    <span key={item.key} className="rounded-full border border-white/10 bg-white/7 px-2.5 py-1 text-slate-100">
-                      {item.label} · {coverageStatusLabel(item.status)}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-100/70">오늘 확인 포인트</p>
+                <Badge variant={coverageVariant(headerData.sourceCoverage.state)}>
+                  소스 {headerData.sourceCoverage.availableSources}/{headerData.sourceCoverage.expectedSources}
+                </Badge>
+              </div>
+              <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-100">
+                {checkpointItems.map((line) => (
+                  <li key={line} className="rounded-xl border border-white/10 bg-white/6 px-3 py-2">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-3 text-xs leading-5 text-slate-300">{headerData.sourceCoverage.summary}</p>
             </div>
           </article>
 
@@ -293,8 +308,11 @@ export function MacroDashboard({
             </section>
 
             <section className="rounded-[24px] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/80">참고 카드</p>
-              <h2 className="mt-3 text-xl font-semibold tracking-tight text-white">거시 참고 카드</h2>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/80">Reference</p>
+              <h2 className="mt-3 text-xl font-semibold tracking-tight text-white">보조 참고 카드</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                이 영역은 해석을 보강하는 참고 카드만 남깁니다. 뉴스 리스트와 캘린더 상세는 각 전용 탭에서 이어집니다.
+              </p>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 {data.referenceCards.map((item) => (
                   <article key={item.key} className="rounded-2xl border border-white/10 bg-slate-950/20 px-4 py-4">
@@ -314,133 +332,6 @@ export function MacroDashboard({
               </div>
             </section>
           </div>
-        </div>
-      </section>
-
-      <section className="rounded-[28px] border border-slate-200/80 bg-[linear-gradient(140deg,rgba(255,255,255,0.98),rgba(241,245,249,0.94)_55%,rgba(191,219,254,0.24))] p-6 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.45)] sm:p-7">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div className="space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">거시 체크</p>
-            <h2 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">거시 체크리스트</h2>
-            <p className="max-w-3xl text-base leading-7 text-slate-700">
-              환율, 원유, 금리, 지정학, 파생 흐름을 기준점으로 빠르게 훑는 참고 섹션입니다.
-            </p>
-          </div>
-          <div className="inline-flex w-fit rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-600 shadow-sm">
-            기준 {formatMaybeDate(data.updatedAt)}
-          </div>
-        </div>
-
-        <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          {data.referenceCards.map((item) => (
-            <article key={item.key} className="rounded-2xl border border-slate-200/80 bg-white/90 px-4 py-4">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-sm font-semibold text-slate-950">{item.label}</h2>
-                <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${toneClasses(item.tone)}`}>
-                  {item.tone === "positive" ? "우호" : item.tone === "negative" ? "경계" : "중립"}
-                </span>
-              </div>
-              <p className="mt-3 text-sm leading-6 text-slate-700">{item.summary}</p>
-              <div className="mt-4 flex items-center justify-between gap-3 text-xs text-slate-500">
-                <span>{item.sourceLabel}</span>
-                <span>{formatMaybeDate(item.updatedAt)}</span>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-[1.1fr_1fr]">
-        <article className="rounded-[28px] border border-slate-200/80 bg-white/95 p-6 shadow-[0_20px_70px_-50px_rgba(15,23,42,0.45)]">
-          <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 pb-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">Derivatives Snapshot</p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">파생 기준점</h2>
-            </div>
-            <p className="text-xs text-slate-500">{formatMaybeDate(data.derivativesSummary.lastUpdatedAt)}</p>
-          </div>
-
-          <p className="mt-5 text-base leading-8 text-slate-700">{data.derivativesSummary.explanationText}</p>
-
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/85 px-4 py-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">PCR</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-950">
-                {data.derivativesSummary.pcr !== null ? data.derivativesSummary.pcr.toFixed(2) : "-"}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/85 px-4 py-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">야간 선물</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-950">
-                {data.derivativesSummary.nightFutures.changeRate !== null
-                  ? `${data.derivativesSummary.nightFutures.changeRate.toFixed(2)}%`
-                  : "-"}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/85 px-4 py-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">IV</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-950">
-                {data.derivativesSummary.impliedVolatility !== null
-                  ? data.derivativesSummary.impliedVolatility.toFixed(1)
-                  : "-"}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/85 px-4 py-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">외국인 선물</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-950">
-                {data.derivativesSummary.foreignFuturesNetPosition !== null
-                  ? data.derivativesSummary.foreignFuturesNetPosition.toLocaleString("ko-KR")
-                  : "-"}
-              </p>
-            </div>
-          </div>
-        </article>
-
-        <div className="space-y-6">
-          <section className="rounded-[28px] border border-slate-200/80 bg-white/95 p-6 shadow-[0_20px_70px_-50px_rgba(15,23,42,0.45)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">최근 매크로</p>
-            <h2 className="mt-2 text-xl font-semibold text-slate-950">최근 매크로 뉴스</h2>
-            <ul className="mt-4 space-y-3">
-              {data.macroNews.map((item) => (
-                <li key={item.id} className="rounded-2xl border border-slate-200/80 bg-slate-50/85 px-4 py-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-                      {item.category}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">{item.whyItMatters}</p>
-                  <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
-                    <span>{item.source}</span>
-                    <span>{formatMaybeDate(item.publishedAt)}</span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section className="rounded-[28px] border border-slate-200/80 bg-white/95 p-6 shadow-[0_20px_70px_-50px_rgba(15,23,42,0.45)]">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">연결 흐름</p>
-                <h2 className="mt-2 text-xl font-semibold text-slate-950">매크로 캘린더 연결</h2>
-              </div>
-              <Link href="/krx/macro-calendar" className="text-sm font-semibold text-amber-700">
-                매크로 캘린더 보기
-              </Link>
-            </div>
-            <ul className="mt-4 space-y-3">
-              {data.globalHighlights.map((item) => (
-                <li key={item.id} className="rounded-2xl border border-slate-200/80 bg-slate-50/85 px-4 py-4">
-                  <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">{item.whyItMattersKo}</p>
-                  <p className="mt-3 text-xs text-slate-500">
-                    {item.country} · {item.source.name} · {formatMaybeDate(item.updatedAt ?? item.eventTimeKst)}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </section>
         </div>
       </section>
     </div>

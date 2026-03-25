@@ -140,9 +140,10 @@ describe("krx macro calendar page route", () => {
     expect(screen.getByRole("tab", { name: "실적" })).toHaveAttribute("href", "/krx/macro-calendar?tab=earnings");
     expect(screen.queryByRole("tab", { name: "홈" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "세부" })).not.toBeInTheDocument();
+    expect(screen.getByText("한국장 매크로 보드")).toBeInTheDocument();
     expect(screen.getByText("이번 주 핵심 촉매")).toBeInTheDocument();
     expect(screen.getByText("다음 24시간 주목 이벤트")).toBeInTheDocument();
-    expect(screen.getByText("한국 시장 영향 해석")).toBeInTheDocument();
+    expect(screen.getByText("한국장 전이 경로")).toBeInTheDocument();
     expect(screen.queryByText(/sync|cli|backfill/i)).not.toBeInTheDocument();
   });
 
@@ -176,5 +177,16 @@ describe("krx macro calendar page route", () => {
     expect(screen.getByText("이번 주 대형 글로벌 촉매가 아직 보이지 않습니다")).toBeInTheDocument();
     expect(screen.getByText("다음 24시간 대형 글로벌 촉매 없음")).toBeInTheDocument();
     expect(screen.getAllByText(/내부 수급, 환율, 외국인 선물 변화 비중/).length).toBeGreaterThan(0);
+  });
+
+  it("shows structured fallback cards when live price-board sources are unavailable", async () => {
+    vi.mocked(getGlobalEventsTabData).mockResolvedValue(buildFixture({ includeEarnings: false }));
+
+    const component = await KrxMacroCalendarPage();
+    render(component);
+
+    expect(screen.getByText("USD/KRW 현물 미연동")).toBeInTheDocument();
+    expect(screen.getByText("WTI 현물 미연동")).toBeInTheDocument();
+    expect(screen.getByText("미국채 가격·금리 보드 미연동")).toBeInTheDocument();
   });
 });

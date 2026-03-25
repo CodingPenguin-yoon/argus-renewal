@@ -97,14 +97,10 @@ KRX 뉴스/공시 소스 수집 레이어입니다.
 - `NAVER_NEWS_THEME_QUERY_TEMPLATE`
 - `RAW_INGESTION_SCHEDULE_DAYS`
 - `RAW_INGESTION_SCHEDULE_INCLUDE_DART`
-- `RAW_INGESTION_SCHEDULE_INCLUDE_COMPANY_NEWS`
-- `RAW_INGESTION_SCHEDULE_INCLUDE_THEME_NEWS`
+- `RAW_INGESTION_SCHEDULE_INCLUDE_MARKET_NEWS`
 - `RAW_INGESTION_SCHEDULE_DISCLOSURE_PROVIDERS` (comma separated provider keys, legacy `INCLUDE_DART`보다 우선)
-- `RAW_INGESTION_SCHEDULE_COMPANY_NEWS_PROVIDERS` (comma separated provider keys)
-- `RAW_INGESTION_SCHEDULE_THEME_NEWS_PROVIDERS` (comma separated provider keys)
-- `RAW_INGESTION_SCHEDULE_COMPANY_IDS` (comma separated IDs)
-- `RAW_INGESTION_SCHEDULE_COMPANY_NAMES` (comma separated names)
-- `RAW_INGESTION_SCHEDULE_THEME_KEYWORDS` (comma separated keywords)
+- `RAW_INGESTION_SCHEDULE_MARKET_NEWS_PROVIDERS` (comma separated provider keys)
+- `RAW_INGESTION_SCHEDULE_MARKET_NEWS_KEYWORDS` (comma separated keywords, NAVER_NEWS market query bundle)
 - `RAW_INGESTION_AUTOMATION_TIMEZONE`
 - `RAW_INGESTION_AUTOMATION_WEEKDAYS`
 - `RAW_INGESTION_AUTOMATION_MARKET_OPEN_TIME`
@@ -114,7 +110,20 @@ KRX 뉴스/공시 소스 수집 레이어입니다.
 - `RAW_INGESTION_AUTOMATION_POST_CLOSE_INTERVAL_MINUTES`
 - `RAW_INGESTION_AUTOMATION_OFF_HOURS_INTERVAL_MINUTES`
 - `RAW_INGESTION_AUTOMATION_HOLIDAY_DATES` (comma separated `YYYY-MM-DD`, KST 기준 휴장일 override)
+- `RAW_INGESTION_AUTOMATION_NORMALIZE_INCLUDE_LLM` (`true|false`, default `false`)
 - `RAW_INGESTION_AUTOMATION_REFRESH_MODE` (`smart|force|skip`)
+
+### News Product Batch Triage
+- `NEWS_PRODUCT_BATCH_TRIAGE_ENABLED`
+- `NEWS_PRODUCT_BATCH_TRIAGE_PROVIDER`
+- `NEWS_PRODUCT_BATCH_TRIAGE_BASE_URL`
+- `NEWS_PRODUCT_BATCH_TRIAGE_API_KEY`
+- `NEWS_PRODUCT_BATCH_TRIAGE_MODEL`
+- `NEWS_PRODUCT_BATCH_TRIAGE_TIMEOUT_SECONDS`
+- `NEWS_PRODUCT_BATCH_TRIAGE_MAX_RETRIES`
+- `NEWS_PRODUCT_BATCH_TRIAGE_BACKOFF_SECONDS`
+- `NEWS_PRODUCT_BATCH_TRIAGE_BATCH_SIZE`
+- `NEWS_PRODUCT_BATCH_TRIAGE_UPGRADE_LEGACY_ROWS`
 
 ### Event Pipeline
 - `EVENT_PIPELINE_ENABLED`
@@ -182,7 +191,8 @@ python3 -m src.krx.source_ingestion.cli import-company-financial-snapshots --com
 
 `sync-scheduled` 동작:
 - `RAW_INGESTION_SCHEDULE_*` 환경변수로 대상/범위를 읽어 incremental sync를 실행
-- provider CSV 설정이 있으면 legacy boolean보다 우선해서 해당 provider만 실행
+- scheduled news sync는 `RAW_INGESTION_SCHEDULE_MARKET_NEWS_KEYWORDS`를 기본 시장-wide query bundle로 사용해 KR 뉴스를 먼저 모으고, 이후 batch triage가 걸러낸다.
+- provider CSV 설정이 있으면 `RAW_INGESTION_SCHEDULE_INCLUDE_MARKET_NEWS`보다 우선해서 해당 provider만 실행
 - run 중 하나라도 `FAILED`면 프로세스 exit code를 `1`로 종료 (cron/alert 연동용)
 - `SKIPPED_DISABLED`(credential/flag 미설정)는 실패로 간주하지 않음
 
@@ -192,6 +202,8 @@ python3 -m src.krx.source_ingestion.cli import-company-financial-snapshots --com
 - 장중(09:00~15:30, Mon-Fri)은 매 분 실행, 장 마감 후(15:30~18:00)는 5분 cadence, 그 외 시간/주말은 10분 cadence로 내부 skip 또는 실행을 결정한다.
 - `RAW_INGESTION_AUTOMATION_HOLIDAY_DATES`에 오늘 날짜가 있으면 장중 시간이어도 closed-market으로 취급하고 off-hours cadence를 사용한다.
 - due tick이면 `sync-scheduled`와 같은 raw sync 범위를 실행한 뒤, event pipeline이 enabled일 때 정규화를 돌리고, 마지막에 news product materialization refresh를 수행한다.
+- automation 경로의 normalize는 `RAW_INGESTION_AUTOMATION_NORMALIZE_INCLUDE_LLM=false`가 기본이라서 event freshness는 유지하되 문서별 event LLM fan-out은 만들지 않는다.
+- 뉴스 탭 1차 판단은 `news_batch_triage`에 저장되며, `NEWS_PRODUCT_BATCH_TRIAGE_ENABLED=true`일 때는 누락되었거나 legacy provenance가 없는 row를 batch LLM으로 한 번 업그레이드한다.
 - refresh는 `RAW_INGESTION_AUTOMATION_REFRESH_MODE`로 제어한다.
   - `smart`: 새 source가 있거나 TTL이 지났을 때만 refresh
   - `force`: 매 due tick마다 강제 refresh

@@ -241,6 +241,8 @@ describe("krx market signal page route", () => {
     expect(screen.getByRole("tab", { name: "체크포인트" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "홈" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "세부" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "파생·수급" })).toBeInTheDocument();
+    expect(screen.getByText("누가 어떤 방향으로 베팅하고 있나?")).toBeInTheDocument();
     expect(screen.getByText("요약 보드")).toBeInTheDocument();
     expect(screen.getByText("팩트")).toBeInTheDocument();
     expect(screen.getByText("수급")).toBeInTheDocument();
@@ -251,7 +253,7 @@ describe("krx market signal page route", () => {
     expect(screen.getByText("파생 상방 우위가 유지됩니다.")).toBeInTheDocument();
     expect(screen.getByText("프로그램 수급 지속 여부를 먼저 확인해야 합니다.")).toBeInTheDocument();
     expect(screen.getByText("+4,600")).toBeInTheDocument();
-    expect(screen.getByText("0.91")).toBeInTheDocument();
+    expect(screen.getAllByText("0.91").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Put/Call 비율 압력")).toBeInTheDocument();
     expect(screen.getAllByText("KIS 수급").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("KRX 파생 기준").length).toBeGreaterThanOrEqual(1);
@@ -268,6 +270,7 @@ describe("krx market signal page route", () => {
 
     expect(screen.getByRole("tab", { name: "파생상품" })).toHaveAttribute("href", "/krx?subtab=derivatives");
     expect(screen.getByText("파생 한줄 결론")).toBeInTheDocument();
+    expect(screen.getByText("누적 · 오늘 · 다음 세션")).toBeInTheDocument();
     expect(screen.getByText("핵심 파생 카드")).toBeInTheDocument();
     expect(screen.getByText("추이 차트")).toBeInTheDocument();
     expect(screen.getByText("세부 지표")).toBeInTheDocument();

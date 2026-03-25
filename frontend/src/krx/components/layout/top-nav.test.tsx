@@ -30,13 +30,13 @@ describe("krx top nav", () => {
 
     expect(screen.getByRole("link", { name: "대시보드" })).toHaveAttribute("href", "/krx/dashboard");
     expect(screen.getByRole("link", { name: "AI 인사이트" })).toHaveAttribute("href", "/krx/insights");
-    expect(screen.getByRole("link", { name: "시장 신호" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "파생·수급" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "시장 뉴스" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "매크로 캘린더" })).toHaveAttribute("href", "/krx/macro-calendar");
     expect(screen.queryByRole("link", { name: "파생" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "대시보드" })).toHaveAttribute("data-prefetch", "true");
     expect(screen.getByRole("link", { name: "AI 인사이트" })).toHaveAttribute("data-prefetch", "true");
-    expect(screen.getByRole("link", { name: "시장 신호" })).toHaveAttribute("data-prefetch", "true");
+    expect(screen.getByRole("link", { name: "파생·수급" })).toHaveAttribute("data-prefetch", "true");
     expect(screen.getByRole("link", { name: "시장 뉴스" })).toHaveAttribute("data-prefetch", "false");
     expect(screen.getByRole("link", { name: "매크로 캘린더" })).toHaveAttribute("data-prefetch", "true");
   });

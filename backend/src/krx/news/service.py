@@ -7,6 +7,7 @@ import json
 import logging
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from ..company_master.db import get_connection, utcnow_iso
 from ..provider_registry import (
@@ -16,8 +17,17 @@ from ..provider_registry import (
     list_provider_definitions,
     resolve_provider_definition,
 )
+from .batch_triage_ai import (
+    DisabledNewsBatchTriageProvider,
+    NewsBatchTriageProvider,
+    NewsBatchTriageRequestItem,
+)
 from .editorial_ai import (
     DisabledNewsEditorialAIProvider,
+    NewsEditorialAIBriefingLink,
+    NewsEditorialAIBriefingRequest,
+    NewsEditorialAICompareRequest,
+    NewsEditorialAICurrentSurface,
     NewsEditorialAIProvider,
     NewsEditorialAIRequest,
 )
@@ -249,23 +259,29 @@ class NewsProductService:
         *,
         db_path: str,
         datalab_provider: NaverDatalabTrendProvider,
+        batch_triage_provider: NewsBatchTriageProvider | None = None,
         editorial_ai_provider: NewsEditorialAIProvider | None = None,
         lookback_days: int = 7,
         card_limit: int = 12,
         representative_evidence_limit: int = 3,
         refresh_ttl_seconds: int = 300,
         datalab_window_days: int = 7,
+        batch_triage_batch_size: int = 15,
+        batch_triage_upgrade_legacy_rows: bool = True,
         editorial_ai_candidate_limit: int = 8,
         editorial_ai_min_editorial_score: float = 0.55,
     ) -> None:
         self.db_path = db_path
         self.datalab_provider = datalab_provider
+        self.batch_triage_provider = batch_triage_provider or DisabledNewsBatchTriageProvider()
         self.editorial_ai_provider = editorial_ai_provider or DisabledNewsEditorialAIProvider()
         self.lookback_days = max(1, lookback_days)
         self.card_limit = max(1, card_limit)
         self.representative_evidence_limit = max(1, representative_evidence_limit)
         self.refresh_ttl_seconds = max(30, refresh_ttl_seconds)
         self.datalab_window_days = max(1, datalab_window_days)
+        self.batch_triage_batch_size = max(1, batch_triage_batch_size)
+        self.batch_triage_upgrade_legacy_rows = batch_triage_upgrade_legacy_rows
         self.editorial_ai_candidate_limit = max(0, editorial_ai_candidate_limit)
         self.editorial_ai_min_editorial_score = _clamp(editorial_ai_min_editorial_score)
 
@@ -372,6 +388,13 @@ class NewsProductService:
             global_cards = self._load_cards(connection, surface_key="GLOBAL", limit=self.card_limit)
             disclosure_cards = self._load_cards(connection, surface_key="DISCLOSURE", limit=self.card_limit)
             coverage = self._load_coverage(connection)
+            briefing = self._load_summary_briefing(
+                connection,
+                kr_cards=kr_cards,
+                global_cards=global_cards,
+                disclosure_cards=disclosure_cards,
+                coverage=coverage,
+            )
             header_context = self._build_header_context(
                 kr_cards=kr_cards,
                 global_cards=global_cards,
@@ -381,6 +404,7 @@ class NewsProductService:
                 "kr_cards": kr_cards,
                 "global_cards": global_cards,
                 "disclosure_cards": disclosure_cards,
+                "briefing": briefing,
                 "header_context": header_context,
                 "coverage": coverage,
             }
@@ -394,7 +418,7 @@ class NewsProductService:
             SELECT payload_json
             FROM market_surface_candidates
             WHERE surface_key = ?
-            ORDER BY ranking_score DESC, COALESCE(published_at, updated_at) DESC, id DESC
+            ORDER BY ranking_score DESC, COALESCE(published_at, updated_at) DESC, candidate_key ASC
             LIMIT ?
             """,
             (surface_key, limit),
@@ -426,6 +450,42 @@ class NewsProductService:
             "updated_at": None,
             "items": [],
         }
+
+    def _load_summary_briefing(
+        self,
+        connection,
+        *,
+        kr_cards: list[dict[str, Any]],
+        global_cards: list[dict[str, Any]],
+        disclosure_cards: list[dict[str, Any]],
+        coverage: dict[str, Any],
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            SELECT state_json
+            FROM market_surface_state
+            WHERE surface_key = 'SUMMARY_BRIEFING'
+            """
+        ).fetchone()
+        payload = _json_load(row["state_json"]) if row is not None else None
+        if isinstance(payload, dict):
+            return payload
+        return self._build_fallback_summary_briefing(
+            cards_by_surface={
+                "KR": kr_cards,
+                "GLOBAL": global_cards,
+                "DISCLOSURE": disclosure_cards,
+            },
+            coverage=coverage,
+            updated_at=self._latest_timestamp(
+                [
+                    coverage.get("updated_at"),
+                    kr_cards[0]["updated_at"] if kr_cards else None,
+                    global_cards[0]["updated_at"] if global_cards else None,
+                    disclosure_cards[0]["updated_at"] if disclosure_cards else None,
+                ]
+            ),
+        )
 
     def _build_header_context(
         self,
@@ -517,14 +577,22 @@ class NewsProductService:
         provider_definitions = list_provider_definitions(connection)
         raw_documents = self._load_recent_raw_documents(connection, cutoff_iso)
         latest_runs = self._load_latest_runs(connection)
-        clusters, triage_rows = self._build_clusters(
+        current_surfaces = self._load_current_surface_cards(connection)
+        triage_rows = self._resolve_recent_triage_rows(
+            connection,
             raw_documents=raw_documents,
+            provider_definitions=provider_definitions,
+        )
+        clusters = self._build_clusters(
+            raw_documents=raw_documents,
+            triage_rows=triage_rows,
             provider_definitions=provider_definitions,
         )
         attention_scores, datalab_status = self._resolve_attention_scores(clusters)
         editorial_ai_enrichments = self._resolve_editorial_ai_enrichments(
             clusters=clusters,
             attention_scores=attention_scores,
+            current_surfaces=current_surfaces,
         )
         coverage_payload = self._build_coverage(
             raw_documents=raw_documents,
@@ -537,11 +605,11 @@ class NewsProductService:
         self._replace_materialized(
             connection,
             clusters=clusters,
-            triage_rows=triage_rows,
             attention_scores=attention_scores,
             editorial_ai_enrichments=editorial_ai_enrichments,
             coverage_payload=coverage_payload,
             now=now,
+            raw_document_count=len(raw_documents),
             provider_definitions=provider_definitions,
         )
 
@@ -593,62 +661,44 @@ class NewsProductService:
             for row in rows
         }
 
+    def _load_current_surface_cards(self, connection) -> dict[str, dict[str, Any]]:
+        rows = connection.execute(
+            """
+            SELECT ms.surface_key, ms.active_candidate_key, mc.payload_json
+            FROM market_surface_state ms
+            LEFT JOIN market_surface_candidates mc ON mc.candidate_key = ms.active_candidate_key
+            WHERE ms.surface_key IN ('KR', 'GLOBAL', 'DISCLOSURE')
+            """
+        ).fetchall()
+        current_surfaces: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            payload = _json_load(row["payload_json"]) if row["payload_json"] else {}
+            current_surfaces[str(row["surface_key"])] = {
+                "active_candidate_key": row["active_candidate_key"],
+                "payload": payload if isinstance(payload, dict) else {},
+            }
+        return current_surfaces
+
     def _build_clusters(
         self,
         *,
         raw_documents: list[dict[str, Any]],
+        triage_rows: list[dict[str, Any]],
         provider_definitions: dict[str, ProviderDefinition],
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    ) -> list[dict[str, Any]]:
         clusters: dict[str, dict[str, Any]] = {}
-        cluster_key_by_raw_id: dict[int, str] = {}
-        triage_rows: list[dict[str, Any]] = []
-        batch_key = utcnow_iso()
+        triage_by_raw_document_id = {
+            int(row["raw_document_id"]): self._inflate_triage_row(
+                row=row,
+                provider_definitions=provider_definitions,
+            )
+            for row in triage_rows
+        }
 
         for row in raw_documents:
-            triage = self._triage_document(row=row, provider_definitions=provider_definitions)
             raw_document_id = int(row["id"])
-            duplicate_of = int(row["duplicate_of_document_id"]) if row["duplicate_of_document_id"] is not None else None
-            if duplicate_of is not None and duplicate_of in cluster_key_by_raw_id:
-                cluster_key = cluster_key_by_raw_id[duplicate_of]
-            else:
-                cluster_key = self._cluster_key_for(row=row, triage=triage)
-            cluster_key_by_raw_id[raw_document_id] = cluster_key
-
-            triage_rows.append(
-                {
-                    "raw_document_id": raw_document_id,
-                    "batch_key": batch_key,
-                    "cluster_key": cluster_key,
-                    "provider": row["provider"],
-                    "document_type": row.get("document_type") or "",
-                    "market_scope": triage["market_scope"],
-                    "primary_region": triage["primary_region"],
-                    "market_importance_prelim": triage["importance_label"],
-                    "impact_direction": triage["impact_direction"],
-                    "reason_short": triage["reason_short"],
-                    "affected_companies_json": json.dumps(
-                        {
-                            "names": triage["direct_company_names"],
-                            "tickers": triage["direct_company_tickers"],
-                        },
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
-                    "related_sectors_json": json.dumps(triage["sector_tags"], ensure_ascii=False, sort_keys=True),
-                    "keyword_tags_json": json.dumps(triage["keyword_tags"], ensure_ascii=False, sort_keys=True),
-                    "triage_metadata_json": json.dumps(
-                        {
-                            "event_type": triage["event_type"],
-                            "event_subtype": triage["event_subtype"],
-                            "impact_horizon": triage["impact_horizon"],
-                            "source_type": triage["source_type"],
-                            "canonical_anchor": triage["storage_policy"] == "CANONICAL_EVENT",
-                        },
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
-                }
-            )
+            triage = triage_by_raw_document_id[raw_document_id]
+            cluster_key = str(triage["cluster_key"])
 
             cluster = clusters.get(cluster_key)
             if cluster is None:
@@ -714,7 +764,375 @@ class NewsProductService:
                 }
             )
 
-        return self._finalize_clusters(list(clusters.values()), provider_definitions), triage_rows
+        return self._finalize_clusters(list(clusters.values()), provider_definitions)
+
+    def _resolve_recent_triage_rows(
+        self,
+        connection,
+        *,
+        raw_documents: list[dict[str, Any]],
+        provider_definitions: dict[str, ProviderDefinition],
+    ) -> list[dict[str, Any]]:
+        raw_document_ids = [int(row["id"]) for row in raw_documents]
+        existing_rows = self._load_triage_rows_by_raw_document_id(connection, raw_document_ids=raw_document_ids)
+        batch_triage_enabled, _ = self.batch_triage_provider.is_enabled()
+        needs_refresh_raw_ids = {
+            raw_document_id
+            for raw_document_id, existing_row in existing_rows.items()
+            if batch_triage_enabled and self._triage_row_needs_batch_upgrade(existing_row)
+        }
+        cluster_key_by_raw_id = {
+            raw_document_id: str(row["cluster_key"])
+            for raw_document_id, row in existing_rows.items()
+            if raw_document_id not in needs_refresh_raw_ids
+        }
+        pending_rows = [
+            row
+            for row in raw_documents
+            if int(row["id"]) not in existing_rows or int(row["id"]) in needs_refresh_raw_ids
+        ]
+        new_rows = self._build_triage_rows(
+            raw_documents=pending_rows,
+            provider_definitions=provider_definitions,
+            cluster_key_by_raw_id=cluster_key_by_raw_id,
+            batch_triage_enabled=batch_triage_enabled,
+        )
+        for triage_row in new_rows:
+            existing_rows[int(triage_row["raw_document_id"])] = triage_row
+
+        if new_rows:
+            self._upsert_triage_rows(connection, triage_rows=new_rows)
+
+        return [existing_rows[int(row["id"])] for row in raw_documents if int(row["id"]) in existing_rows]
+
+    def _triage_row_needs_batch_upgrade(self, row: dict[str, Any]) -> bool:
+        if not self.batch_triage_upgrade_legacy_rows:
+            return False
+        triage_metadata = self._triage_metadata_from_row(row)
+        triage_method = str(triage_metadata.get("triage_method") or "").strip().lower()
+        return triage_method in {"", "deterministic_pending_batch"}
+
+    def _build_triage_rows(
+        self,
+        *,
+        raw_documents: list[dict[str, Any]],
+        provider_definitions: dict[str, ProviderDefinition],
+        cluster_key_by_raw_id: dict[int, str],
+        batch_triage_enabled: bool,
+    ) -> list[dict[str, Any]]:
+        if not raw_documents:
+            return []
+
+        deterministic_triage_by_raw_id: dict[int, dict[str, Any]] = {}
+        request_items: list[NewsBatchTriageRequestItem] = []
+        for row in raw_documents:
+            raw_document_id = int(row["id"])
+            triage = self._triage_document(row=row, provider_definitions=provider_definitions)
+            deterministic_triage_by_raw_id[raw_document_id] = triage
+            if batch_triage_enabled:
+                request_items.append(self._build_batch_triage_request_item(row=row, triage=triage))
+
+        batch_decisions: dict[int, dict[str, Any]] = {}
+        if batch_triage_enabled and request_items:
+            for start_index in range(0, len(request_items), self.batch_triage_batch_size):
+                request_batch = request_items[start_index : start_index + self.batch_triage_batch_size]
+                try:
+                    response_batch = self.batch_triage_provider.triage(request_batch)
+                except Exception as error:  # noqa: BLE001
+                    logger.warning(
+                        "news_batch_triage_ai_failed",
+                        extra={"batch_size": len(request_batch), "error": str(error)},
+                    )
+                    response_batch = {}
+                for raw_document_id, decision in response_batch.items():
+                    batch_decisions[int(raw_document_id)] = {
+                        "market_scope": decision.market_scope,
+                        "primary_region": decision.primary_region,
+                        "importance_label": decision.importance_label,
+                        "impact_direction": decision.impact_direction,
+                        "reason_short": decision.reason_short,
+                        "triage_method": "llm_batch",
+                        "triage_confidence": float(decision.confidence),
+                        "triage_provider": self.batch_triage_provider.provider_name,
+                        "triage_model": self.batch_triage_provider.model_name(),
+                        "triage_raw_output": decision.raw_output,
+                    }
+
+        triage_rows: list[dict[str, Any]] = []
+        for row in raw_documents:
+            raw_document_id = int(row["id"])
+            triage = dict(deterministic_triage_by_raw_id[raw_document_id])
+            decision = batch_decisions.get(raw_document_id)
+            if decision is not None:
+                triage.update(
+                    {
+                        "market_scope": decision["market_scope"],
+                        "primary_region": decision["primary_region"],
+                        "importance_label": decision["importance_label"],
+                        "impact_direction": decision["impact_direction"],
+                        "reason_short": decision["reason_short"] or triage["reason_short"],
+                    }
+                )
+            duplicate_of = int(row["duplicate_of_document_id"]) if row["duplicate_of_document_id"] is not None else None
+            if duplicate_of is not None and duplicate_of in cluster_key_by_raw_id:
+                cluster_key = cluster_key_by_raw_id[duplicate_of]
+            else:
+                cluster_key = self._cluster_key_for(row=row, triage=triage)
+            cluster_key_by_raw_id[raw_document_id] = cluster_key
+
+            triage_method = "deterministic_pending_batch"
+            if batch_triage_enabled:
+                triage_method = "llm_batch_fallback"
+            triage_metadata = {
+                "triage_method": triage_method,
+                "triage_confidence": 0.0,
+                "triage_provider": None,
+                "triage_model": None,
+                "triage_raw_output": None,
+            }
+            if decision is not None:
+                triage_metadata = decision
+            triage_rows.append(
+                self._serialize_triage_row(
+                    row=row,
+                    triage=triage,
+                    cluster_key=cluster_key,
+                    triage_metadata=triage_metadata,
+                )
+            )
+
+        return triage_rows
+
+    def _load_triage_rows_by_raw_document_id(
+        self,
+        connection,
+        *,
+        raw_document_ids: list[int],
+    ) -> dict[int, dict[str, Any]]:
+        if not raw_document_ids:
+            return {}
+        placeholders = ",".join("?" for _ in raw_document_ids)
+        rows = connection.execute(
+            f"""
+            SELECT *
+            FROM news_batch_triage
+            WHERE raw_document_id IN ({placeholders})
+            """,
+            raw_document_ids,
+        ).fetchall()
+        return {
+            int(row["raw_document_id"]): dict(row)
+            for row in rows
+        }
+
+    def _serialize_triage_row(
+        self,
+        *,
+        row: dict[str, Any],
+        triage: dict[str, Any],
+        cluster_key: str,
+        triage_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = utcnow_iso()
+        row_metadata = {
+            "event_type": triage["event_type"],
+            "event_subtype": triage["event_subtype"],
+            "impact_horizon": triage["impact_horizon"],
+            "source_type": triage["source_type"],
+            "canonical_anchor": triage["storage_policy"] == "CANONICAL_EVENT",
+            "triage_method": "deterministic_pending_batch",
+            "triage_confidence": 0.0,
+            "triage_provider": None,
+            "triage_model": None,
+            "triage_raw_output": None,
+        }
+        if triage_metadata:
+            row_metadata.update(triage_metadata)
+        return {
+            "raw_document_id": int(row["id"]),
+            "batch_key": now,
+            "cluster_key": cluster_key,
+            "provider": row["provider"],
+            "document_type": row.get("document_type") or "",
+            "market_scope": triage["market_scope"],
+            "primary_region": triage["primary_region"],
+            "market_importance_prelim": triage["importance_label"],
+            "impact_direction": triage["impact_direction"],
+            "reason_short": triage["reason_short"],
+            "affected_companies_json": json.dumps(
+                {
+                    "names": triage["direct_company_names"],
+                    "tickers": triage["direct_company_tickers"],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            "related_sectors_json": json.dumps(triage["sector_tags"], ensure_ascii=False, sort_keys=True),
+            "keyword_tags_json": json.dumps(triage["keyword_tags"], ensure_ascii=False, sort_keys=True),
+            "triage_metadata_json": json.dumps(row_metadata, ensure_ascii=False, sort_keys=True),
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def _inflate_triage_row(
+        self,
+        *,
+        row: dict[str, Any],
+        provider_definitions: dict[str, ProviderDefinition],
+    ) -> dict[str, Any]:
+        affected_companies = _json_load(row.get("affected_companies_json")) or {}
+        if not isinstance(affected_companies, dict):
+            affected_companies = {}
+        triage_metadata = self._triage_metadata_from_row(row)
+        storage_policy = self._storage_policy_for(
+            provider_definitions,
+            provider=str(row["provider"]),
+            document_type=str(row.get("document_type") or ""),
+            canonical_anchor=bool(triage_metadata.get("canonical_anchor")),
+        )
+        return {
+            "cluster_key": str(row["cluster_key"]),
+            "market_scope": str(row["market_scope"]),
+            "primary_region": str(row["primary_region"]),
+            "importance_label": str(row["market_importance_prelim"]),
+            "impact_direction": str(row["impact_direction"]),
+            "reason_short": str(row.get("reason_short") or ""),
+            "direct_company_names": list(affected_companies.get("names") or []),
+            "direct_company_tickers": list(affected_companies.get("tickers") or []),
+            "sector_tags": list(_json_load(row.get("related_sectors_json")) or []),
+            "keyword_tags": list(_json_load(row.get("keyword_tags_json")) or []),
+            "event_type": str(triage_metadata.get("event_type") or "macro"),
+            "event_subtype": str(triage_metadata.get("event_subtype") or "generic"),
+            "impact_horizon": str(triage_metadata.get("impact_horizon") or "short"),
+            "source_type": str(
+                triage_metadata.get("source_type")
+                or resolve_provider_definition(
+                    provider_definitions,
+                    provider_key=str(row["provider"]),
+                    document_type=str(row.get("document_type") or ""),
+                ).source_type
+                or "DISCOVERY_NEWS"
+            ),
+            "trust_score": self._trust_score_for(
+                provider_definitions,
+                provider=str(row["provider"]),
+                document_type=str(row.get("document_type") or ""),
+            ),
+            "storage_policy": storage_policy,
+        }
+
+    def _build_batch_triage_request_item(
+        self,
+        *,
+        row: dict[str, Any],
+        triage: dict[str, Any],
+    ) -> NewsBatchTriageRequestItem:
+        duplicate_of = int(row["duplicate_of_document_id"]) if row["duplicate_of_document_id"] is not None else None
+        return NewsBatchTriageRequestItem(
+            raw_document_id=int(row["id"]),
+            provider=str(row.get("provider") or ""),
+            document_type=str(row.get("document_type") or ""),
+            title=str(row.get("title") or ""),
+            summary=str(row.get("summary") or ""),
+            publisher=str(row.get("publisher") or ""),
+            query_text=str(row.get("query_text") or ""),
+            company_name=str(row.get("company_name") or ""),
+            primary_stock_code=str(row.get("primary_stock_code") or ""),
+            market_classification=str(row.get("market_classification") or ""),
+            is_duplicate=bool(row.get("is_duplicate")),
+            duplicate_of_document_id=duplicate_of,
+            deterministic_scope=str(triage["market_scope"]),
+            deterministic_region=str(triage["primary_region"]),
+            deterministic_importance=str(triage["importance_label"]),
+            deterministic_direction=str(triage["impact_direction"]),
+            deterministic_reason=str(triage["reason_short"]),
+        )
+
+    def _triage_metadata_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        triage_metadata = _json_load(row.get("triage_metadata_json")) or {}
+        if not isinstance(triage_metadata, dict):
+            return {}
+        return triage_metadata
+
+    def _storage_policy_for(
+        self,
+        provider_definitions: dict[str, ProviderDefinition],
+        *,
+        provider: str,
+        document_type: str,
+        canonical_anchor: bool,
+    ) -> str:
+        if canonical_anchor:
+            return "CANONICAL_EVENT"
+        definition = resolve_provider_definition(
+            provider_definitions,
+            provider_key=provider,
+            document_type=document_type,
+        )
+        return definition.storage_policy or "TRANSIENT_DISCOVERY"
+
+    def _upsert_triage_rows(
+        self,
+        connection,
+        *,
+        triage_rows: list[dict[str, Any]],
+    ) -> None:
+        for row in triage_rows:
+            connection.execute(
+                """
+                INSERT INTO news_batch_triage (
+                    raw_document_id,
+                    batch_key,
+                    cluster_key,
+                    provider,
+                    document_type,
+                    market_scope,
+                    primary_region,
+                    market_importance_prelim,
+                    impact_direction,
+                    reason_short,
+                    affected_companies_json,
+                    related_sectors_json,
+                    keyword_tags_json,
+                    triage_metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(raw_document_id) DO UPDATE SET
+                    batch_key = excluded.batch_key,
+                    cluster_key = excluded.cluster_key,
+                    provider = excluded.provider,
+                    document_type = excluded.document_type,
+                    market_scope = excluded.market_scope,
+                    primary_region = excluded.primary_region,
+                    market_importance_prelim = excluded.market_importance_prelim,
+                    impact_direction = excluded.impact_direction,
+                    reason_short = excluded.reason_short,
+                    affected_companies_json = excluded.affected_companies_json,
+                    related_sectors_json = excluded.related_sectors_json,
+                    keyword_tags_json = excluded.keyword_tags_json,
+                    triage_metadata_json = excluded.triage_metadata_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    row["raw_document_id"],
+                    row["batch_key"],
+                    row["cluster_key"],
+                    row["provider"],
+                    row["document_type"],
+                    row["market_scope"],
+                    row["primary_region"],
+                    row["market_importance_prelim"],
+                    row["impact_direction"],
+                    row["reason_short"],
+                    row["affected_companies_json"],
+                    row["related_sectors_json"],
+                    row["keyword_tags_json"],
+                    row["triage_metadata_json"],
+                    row["created_at"],
+                    row["updated_at"],
+                ),
+            )
 
     def _finalize_clusters(
         self,
@@ -841,6 +1259,7 @@ class NewsProductService:
         *,
         clusters: list[dict[str, Any]],
         attention_scores: dict[str, float],
+        current_surfaces: dict[str, dict[str, Any]],
     ) -> dict[str, dict[str, Any]]:
         if self.editorial_ai_candidate_limit <= 0:
             return {}
@@ -869,19 +1288,19 @@ class NewsProductService:
             candidates.append((provisional, cluster))
 
         enrichments: dict[str, dict[str, Any]] = {}
-        for _, cluster in sorted(candidates, key=lambda item: item[0], reverse=True)[: self.editorial_ai_candidate_limit]:
-            request = self._build_editorial_ai_request(
-                cluster=cluster,
-                attention_score=attention_scores.get(cluster["cluster_key"], 0.0),
-            )
-            try:
-                response = self.editorial_ai_provider.enrich(request)
-            except Exception as error:  # noqa: BLE001
-                logger.warning("news_editorial_ai_failed", extra={"title": cluster["title"], "error": str(error)})
-                continue
-            if response is None:
-                continue
-            enrichments[cluster["cluster_key"]] = {
+        compare_candidates = sorted(candidates, key=lambda item: item[0], reverse=True)[: self.editorial_ai_candidate_limit]
+        request = self._build_editorial_ai_compare_request(
+            current_surfaces=current_surfaces,
+            candidates=[cluster for _, cluster in compare_candidates],
+            attention_scores=attention_scores,
+        )
+        try:
+            responses = self.editorial_ai_provider.compare(request)
+        except Exception as error:  # noqa: BLE001
+            logger.warning("news_editorial_ai_failed", extra={"candidate_count": len(compare_candidates), "error": str(error)})
+            return {}
+        for cluster_key, response in responses.items():
+            enrichments[cluster_key] = {
                 "story_state": response.story_state,
                 "importance_label": response.importance_label,
                 "editorial_reason": response.editorial_reason,
@@ -925,6 +1344,45 @@ class NewsProductService:
                     "publisher": evidence["publisher"],
                 }
                 for evidence in cluster["evidence"][: self.representative_evidence_limit]
+            ],
+        )
+
+    def _build_editorial_ai_compare_request(
+        self,
+        *,
+        current_surfaces: dict[str, dict[str, Any]],
+        candidates: list[dict[str, Any]],
+        attention_scores: dict[str, float],
+    ) -> NewsEditorialAICompareRequest:
+        current_surface_items: list[NewsEditorialAICurrentSurface] = []
+        for surface_key in ("KR", "GLOBAL", "DISCLOSURE"):
+            current = current_surfaces.get(surface_key, {})
+            payload = current.get("payload") if isinstance(current, dict) else {}
+            if not isinstance(payload, dict) or not payload:
+                continue
+            current_surface_items.append(
+                NewsEditorialAICurrentSurface(
+                    surface_key=surface_key,
+                    lead_card_id=payload.get("id"),
+                    title=str(payload.get("title") or ""),
+                    one_line_summary=str(payload.get("one_line_summary") or ""),
+                    ranking_score=float(payload.get("ranking_score") or 0.0),
+                    importance_label=str(payload.get("importance_label") or "medium"),
+                    story_state=str(payload.get("story_state") or "NEW"),
+                    editorial_reason=payload.get("editorial_reason"),
+                    market_scope=str(payload.get("market_scope") or "ignore"),
+                    primary_region=str(payload.get("primary_region") or ("KR" if surface_key != "GLOBAL" else "GLOBAL")),
+                    published_at=payload.get("published_at"),
+                )
+            )
+        return NewsEditorialAICompareRequest(
+            current_surfaces=current_surface_items,
+            candidates=[
+                self._build_editorial_ai_request(
+                    cluster=cluster,
+                    attention_score=attention_scores.get(cluster["cluster_key"], 0.0),
+                )
+                for cluster in candidates
             ],
         )
 
@@ -1069,11 +1527,11 @@ class NewsProductService:
         connection,
         *,
         clusters: list[dict[str, Any]],
-        triage_rows: list[dict[str, Any]],
         attention_scores: dict[str, float],
         editorial_ai_enrichments: dict[str, dict[str, Any]],
         coverage_payload: dict[str, Any],
         now: str,
+        raw_document_count: int,
         provider_definitions: dict[str, ProviderDefinition],
     ) -> None:
         previous_state = {
@@ -1085,51 +1543,8 @@ class NewsProductService:
                 """
             ).fetchall()
         }
-        connection.execute("DELETE FROM news_batch_triage")
         connection.execute("DELETE FROM market_surface_candidates")
         connection.execute("DELETE FROM market_surface_state")
-
-        for row in triage_rows:
-            connection.execute(
-                """
-                INSERT INTO news_batch_triage (
-                    raw_document_id,
-                    batch_key,
-                    cluster_key,
-                    provider,
-                    document_type,
-                    market_scope,
-                    primary_region,
-                    market_importance_prelim,
-                    impact_direction,
-                    reason_short,
-                    affected_companies_json,
-                    related_sectors_json,
-                    keyword_tags_json,
-                    triage_metadata_json,
-                    created_at,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    row["raw_document_id"],
-                    row["batch_key"],
-                    row["cluster_key"],
-                    row["provider"],
-                    row["document_type"],
-                    row["market_scope"],
-                    row["primary_region"],
-                    row["market_importance_prelim"],
-                    row["impact_direction"],
-                    row["reason_short"],
-                    row["affected_companies_json"],
-                    row["related_sectors_json"],
-                    row["keyword_tags_json"],
-                    row["triage_metadata_json"],
-                    now,
-                    now,
-                ),
-            )
 
         candidates_by_surface: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for cluster in clusters:
@@ -1146,7 +1561,7 @@ class NewsProductService:
                 has_persistent_evidence=cluster["has_persistent_evidence"],
                 quality_flags=cluster["quality_flags"],
             )
-            editorial_boost = _clamp(float(editorial.get("editorial_boost") or 0.0), 0.0, 0.2)
+            editorial_boost = max(-0.08, min(0.12, float(editorial.get("editorial_boost") or 0.0)))
             editorial_score = round(_clamp(base_editorial_score + editorial_boost), 4)
             ranking_score = editorial_score
             story_state = editorial.get("story_state") or self._default_story_state(cluster=cluster, attention_score=attention_score)
@@ -1249,11 +1664,13 @@ class NewsProductService:
                     )
                 )
 
+        ordered_candidates_by_surface: dict[str, list[dict[str, Any]]] = {}
         for surface_key, candidates in candidates_by_surface.items():
             ordered = sorted(
                 candidates,
-                key=lambda item: (-item["ranking_score"], item["published_at"] or "", item["candidate_key"]),
+                key=lambda item: (-item["ranking_score"], _published_sort_rank(item["published_at"]), item["candidate_key"]),
             )
+            ordered_candidates_by_surface[surface_key] = ordered
             for candidate in ordered:
                 connection.execute(
                     """
@@ -1313,15 +1730,8 @@ class NewsProductService:
                 )
 
         state_rows = {
-            surface_key: (
-                sorted(
-                    candidates,
-                    key=lambda item: (-item["ranking_score"], item["published_at"] or "", item["candidate_key"]),
-                )[0]
-                if candidates
-                else None
-            )
-            for surface_key, candidates in candidates_by_surface.items()
+            surface_key: (ordered_candidates[0] if ordered_candidates else None)
+            for surface_key, ordered_candidates in ordered_candidates_by_surface.items()
         }
         state_rows.setdefault("KR", None)
         state_rows.setdefault("GLOBAL", None)
@@ -1329,10 +1739,22 @@ class NewsProductService:
 
         for surface_key in ("KR", "GLOBAL", "DISCLOSURE"):
             lead = state_rows[surface_key]
+            lead_payload = _json_load(lead["payload_json"]) if lead else {}
+            lead_provenance = lead_payload.get("provenance", {}) if isinstance(lead_payload, dict) else {}
             state_json = json.dumps(
                 {
                     "surface_key": surface_key,
                     "lead_card_id": lead["card_key"] if lead else None,
+                    "lead_candidate_key": lead["candidate_key"] if lead else None,
+                    "lead_title": lead["title"] if lead else None,
+                    "lead_published_at": lead["published_at"] if lead else None,
+                    "lead_ranking_score": lead["ranking_score"] if lead else None,
+                    "lead_story_state": lead_payload.get("story_state") if isinstance(lead_payload, dict) else None,
+                    "lead_importance_label": lead_payload.get("importance_label") if isinstance(lead_payload, dict) else None,
+                    "lead_editorial_reason": lead_payload.get("editorial_reason") if isinstance(lead_payload, dict) else None,
+                    "lead_ai_confidence": lead_payload.get("ai_confidence") if isinstance(lead_payload, dict) else None,
+                    "lead_ai_provider": lead_provenance.get("ai_provider") if isinstance(lead_provenance, dict) else None,
+                    "lead_ai_model": lead_provenance.get("ai_model") if isinstance(lead_provenance, dict) else None,
                     "count": len(candidates_by_surface.get(surface_key, [])),
                 },
                 ensure_ascii=False,
@@ -1351,7 +1773,9 @@ class NewsProductService:
                 (surface_key, lead["candidate_key"] if lead else None, state_json, now, now),
             )
             previous = previous_state.get(surface_key, {})
-            if previous.get("active_candidate_key") != (lead["candidate_key"] if lead else None):
+            state_changed = previous.get("state_json") != state_json
+            lead_changed = previous.get("active_candidate_key") != (lead["candidate_key"] if lead else None)
+            if state_changed:
                 connection.execute(
                     """
                     INSERT INTO market_surface_history (
@@ -1365,12 +1789,50 @@ class NewsProductService:
                     (
                         surface_key,
                         lead["candidate_key"] if lead else None,
-                        "refresh",
+                        "refresh" if lead_changed else "metadata_update",
                         state_json,
                         now,
                     ),
                 )
 
+        briefing_payload = self._build_summary_briefing_payload(
+            ordered_candidates_by_surface=ordered_candidates_by_surface,
+            coverage=coverage_payload,
+            updated_at=now,
+        )
+        connection.execute(
+            """
+            INSERT INTO market_surface_state (
+                surface_key,
+                active_candidate_key,
+                state_json,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            ("SUMMARY_BRIEFING", None, json.dumps(briefing_payload, ensure_ascii=False, sort_keys=True), now, now),
+        )
+        previous_briefing = previous_state.get("SUMMARY_BRIEFING", {})
+        briefing_state_json = json.dumps(briefing_payload, ensure_ascii=False, sort_keys=True)
+        if previous_briefing.get("state_json") != briefing_state_json:
+            connection.execute(
+                """
+                INSERT INTO market_surface_history (
+                    surface_key,
+                    candidate_key,
+                    change_type,
+                    snapshot_json,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "SUMMARY_BRIEFING",
+                    None,
+                    "metadata_update",
+                    briefing_state_json,
+                    now,
+                ),
+            )
         connection.execute(
             """
             INSERT INTO market_surface_state (
@@ -1400,7 +1862,7 @@ class NewsProductService:
                     {
                         "cluster_count": len(clusters),
                         "provider_count": len(provider_definitions),
-                        "raw_document_count": len(triage_rows),
+                        "raw_document_count": raw_document_count,
                     },
                     ensure_ascii=False,
                     sort_keys=True,
@@ -1409,6 +1871,375 @@ class NewsProductService:
                 now,
             ),
         )
+
+    def _build_summary_briefing_payload(
+        self,
+        *,
+        ordered_candidates_by_surface: dict[str, list[dict[str, Any]]],
+        coverage: dict[str, Any],
+        updated_at: str,
+    ) -> dict[str, Any]:
+        selected_cards = self._select_briefing_cards(ordered_candidates_by_surface)
+        fallback_payload = self._build_fallback_summary_briefing(
+            cards_by_surface={
+                "KR": [card for card in selected_cards if card.get("surface_key") == "KR"],
+                "GLOBAL": [card for card in selected_cards if card.get("surface_key") == "GLOBAL"],
+                "DISCLOSURE": [card for card in selected_cards if card.get("surface_key") == "DISCLOSURE"],
+            },
+            coverage=coverage,
+            updated_at=updated_at,
+        )
+        if not selected_cards:
+            return fallback_payload
+
+        links = self._build_summary_briefing_links(selected_cards)
+        if not links:
+            return fallback_payload
+
+        try:
+            briefing = self.editorial_ai_provider.compose_briefing(
+                NewsEditorialAIBriefingRequest(
+                    updated_at=updated_at,
+                    links=links,
+                )
+            )
+        except Exception as error:  # noqa: BLE001
+            logger.warning(
+                "news_summary_briefing_failed",
+                extra={"link_count": len(links), "error": str(error)},
+            )
+            briefing = None
+
+        if briefing is None:
+            return fallback_payload
+
+        return {
+            "headline": briefing.headline,
+            "summary": briefing.summary,
+            "key_points": self._dedupe_briefing_points(briefing.key_points),
+            "linked_headlines": fallback_payload["linked_headlines"],
+            "updated_at": updated_at,
+            "generation_method": "llm",
+            "ai_confidence": briefing.confidence,
+            "ai_provider": self.editorial_ai_provider.provider_name,
+            "ai_model": self.editorial_ai_provider.model_name(),
+        }
+
+    def _select_briefing_cards(
+        self,
+        ordered_candidates_by_surface: dict[str, list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        selected: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        for surface_key, limit in (("KR", 4), ("GLOBAL", 2), ("DISCLOSURE", 2)):
+            for candidate in ordered_candidates_by_surface.get(surface_key, [])[:limit]:
+                payload = _json_load(candidate.get("payload_json"))
+                if not isinstance(payload, dict):
+                    continue
+                card = {
+                    "surface_key": surface_key,
+                    "card_key": candidate.get("card_key"),
+                    "id": candidate.get("card_key"),
+                    "title": payload.get("title"),
+                    "one_line_summary": payload.get("one_line_summary"),
+                    "why_it_matters": payload.get("why_it_matters"),
+                    "market_impact": payload.get("market_impact"),
+                    "market_scope": payload.get("market_scope"),
+                    "primary_region": payload.get("primary_region"),
+                    "importance_label": payload.get("importance_label"),
+                    "ranking_score": payload.get("ranking_score"),
+                    "published_at": payload.get("published_at"),
+                    "updated_at": payload.get("updated_at"),
+                    "evidence": payload.get("evidence") or [],
+                }
+                dedupe_key = self._briefing_card_dedupe_key(card)
+                if dedupe_key in seen_keys:
+                    continue
+                seen_keys.add(dedupe_key)
+                selected.append(card)
+        return selected
+
+    def _build_summary_briefing_links(self, cards: list[dict[str, Any]]) -> list[NewsEditorialAIBriefingLink]:
+        links: list[NewsEditorialAIBriefingLink] = []
+        seen_keys: set[str] = set()
+        for card in cards:
+            primary_evidence = self._primary_briefing_evidence(card.get("evidence") or [])
+            source_url = None
+            publisher = None
+            if isinstance(primary_evidence, dict):
+                source_url = self._sanitize_briefing_url(
+                    primary_evidence.get("canonical_url") or primary_evidence.get("source_url")
+                )
+                publisher = primary_evidence.get("publisher") or primary_evidence.get("provider")
+            link = NewsEditorialAIBriefingLink(
+                card_id=str(card.get("card_key") or card.get("id") or ""),
+                surface_key=str(card.get("surface_key") or ""),
+                title=str(card.get("title") or "시장 브리핑 링크"),
+                one_line_summary=str(card.get("one_line_summary") or ""),
+                why_it_matters=str(card.get("why_it_matters") or ""),
+                market_scope=str(card.get("market_scope") or "ignore"),
+                primary_region=str(card.get("primary_region") or "KR"),
+                importance_label=str(card.get("importance_label") or "medium"),
+                ranking_score=float(card.get("ranking_score") or 0.0),
+                published_at=card.get("updated_at") or card.get("published_at"),
+                source_url=source_url,
+                publisher=str(publisher) if publisher else None,
+            )
+            dedupe_key = self._briefing_link_dedupe_key(
+                title=link.title,
+                source_url=link.source_url,
+                card_id=link.card_id,
+            )
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            links.append(link)
+        return links
+
+    def _primary_briefing_evidence(self, evidence_items: list[Any]) -> dict[str, Any] | None:
+        first_evidence: dict[str, Any] | None = None
+        for evidence in evidence_items:
+            if not isinstance(evidence, dict):
+                continue
+            if first_evidence is None:
+                first_evidence = evidence
+            sanitized_url = self._sanitize_briefing_url(evidence.get("canonical_url") or evidence.get("source_url"))
+            if sanitized_url:
+                return evidence
+        return first_evidence
+
+    def _sanitize_briefing_url(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        candidate = value.strip()
+        if not candidate:
+            return None
+        parsed = urlparse(candidate)
+        if parsed.scheme not in {"http", "https"}:
+            return None
+        if not parsed.netloc:
+            return None
+        return candidate
+
+    def _briefing_source_label(self, evidence: dict[str, Any] | None) -> str | None:
+        if not isinstance(evidence, dict):
+            return "원문 링크 없음"
+        label = evidence.get("publisher") or evidence.get("provider")
+        if isinstance(label, str) and label.strip():
+            return label.strip()
+        return "원문 링크 없음"
+
+    def _normalize_briefing_text(self, value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        return " ".join(value.split()).strip()
+
+    def _looks_like_filing_style_title(self, value: Any) -> bool:
+        text = self._normalize_briefing_text(value)
+        if not text:
+            return False
+        markers = (
+            "증권발행실적보고서",
+            "주요사항보고서",
+            "사업보고서",
+            "반기보고서",
+            "분기보고서",
+            "투자설명서",
+            "일괄신고추가서류",
+            "집합투자증권",
+        )
+        if any(marker in text for marker in markers):
+            return True
+        return text.count("(") >= 2 and len(text) >= 28
+
+    def _briefing_sentence_value(self, value: Any, *, max_length: int = 110) -> str:
+        text = self._normalize_briefing_text(value)
+        if not text:
+            return ""
+        for token in ("…", "..."):
+            if token in text:
+                text = text.split(token, 1)[0].strip()
+        if len(text) > max_length:
+            text = f"{text[: max_length - 1].rstrip()}…"
+        return text
+
+    def _briefing_surface_detail(
+        self,
+        card: dict[str, Any] | None,
+        *,
+        prefer_title: bool = False,
+    ) -> str:
+        if not isinstance(card, dict):
+            return ""
+
+        candidates: list[Any]
+        if prefer_title:
+            candidates = [
+                card.get("why_it_matters"),
+                card.get("market_impact"),
+                card.get("one_line_summary"),
+                card.get("title"),
+            ]
+        else:
+            candidates = [
+                card.get("why_it_matters"),
+                card.get("market_impact"),
+                card.get("one_line_summary"),
+            ]
+            if not self._looks_like_filing_style_title(card.get("title")):
+                candidates.append(card.get("title"))
+
+        for candidate in candidates:
+            text = self._briefing_sentence_value(candidate)
+            if text:
+                return text
+        return ""
+
+    def _briefing_title_reference(self, card: dict[str, Any] | None, *, max_length: int = 44) -> str | None:
+        if not isinstance(card, dict):
+            return None
+        title = self._briefing_sentence_value(card.get("title"), max_length=max_length)
+        if not title or self._looks_like_filing_style_title(title):
+            return None
+        return title
+
+    def _briefing_card_dedupe_key(self, card: dict[str, Any]) -> str:
+        primary_evidence = self._primary_briefing_evidence(card.get("evidence") or [])
+        source_url = None
+        if isinstance(primary_evidence, dict):
+            source_url = self._sanitize_briefing_url(
+                primary_evidence.get("canonical_url") or primary_evidence.get("source_url")
+            )
+        return self._briefing_link_dedupe_key(
+            title=card.get("title"),
+            source_url=source_url,
+            card_id=card.get("card_key") or card.get("id"),
+        )
+
+    def _briefing_link_dedupe_key(self, *, title: Any, source_url: Any, card_id: Any) -> str:
+        normalized_title = self._normalize_briefing_text(title).casefold()
+        normalized_url = self._normalize_briefing_text(source_url).casefold()
+        normalized_card_id = self._normalize_briefing_text(card_id).casefold()
+        return normalized_url or normalized_title or normalized_card_id
+
+    def _dedupe_briefing_points(self, items: list[Any], *, limit: int = 4) -> list[str]:
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            text = self._normalize_briefing_text(item)
+            if not text:
+                continue
+            normalized = text.casefold()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(text)
+            if len(deduped) >= limit:
+                break
+        return deduped
+
+    def _build_fallback_summary_briefing(
+        self,
+        *,
+        cards_by_surface: dict[str, list[dict[str, Any]]],
+        coverage: dict[str, Any],
+        updated_at: str | None,
+    ) -> dict[str, Any]:
+        kr_cards = cards_by_surface.get("KR", [])
+        global_cards = cards_by_surface.get("GLOBAL", [])
+        disclosure_cards = cards_by_surface.get("DISCLOSURE", [])
+        lead = kr_cards[0] if kr_cards else (global_cards[0] if global_cards else (disclosure_cards[0] if disclosure_cards else None))
+        if lead is None:
+            return {
+                "headline": "실시간 시장 리포트 준비 중",
+                "summary": (
+                    "표시 가능한 시장 이벤트가 아직 충분히 쌓이지 않았습니다.\n\n"
+                    "새 뉴스와 공시가 들어오면 이 영역에서 지금 시장을 움직이는 흐름을 리포트 형식으로 다시 정리합니다."
+                ),
+                "key_points": [coverage.get("summary") or "뉴스 소스가 아직 준비되지 않았습니다."],
+                "linked_headlines": [],
+                "updated_at": updated_at,
+                "generation_method": "rule_based",
+                "ai_confidence": 0.0,
+                "ai_provider": None,
+                "ai_model": None,
+            }
+
+        lead_title = self._briefing_title_reference(lead)
+        lead_summary = self._briefing_surface_detail(lead, prefer_title=True)
+        summary_parts: list[str] = []
+        if lead_summary and lead_title and lead_title not in lead_summary:
+            summary_parts.append(f"오늘 시장은 {lead_summary} 흐름을 중심으로 움직이고 있습니다. 대표 이슈는 {lead_title}입니다.")
+        elif lead_summary:
+            summary_parts.append(f"오늘 시장은 {lead_summary} 흐름을 중심으로 방향을 잡고 있습니다.")
+        elif lead_title:
+            summary_parts.append(f"오늘 시장은 {lead_title} 이슈를 중심으로 움직이고 있습니다.")
+
+        if kr_cards:
+            kr_focus = self._briefing_surface_detail(kr_cards[0])
+            if kr_focus:
+                summary_parts.append(f"국내 시장에서는 {kr_focus} 이슈가 지수 방향과 수급 해석에 직접 연결됩니다.")
+        if global_cards:
+            global_focus = self._briefing_surface_detail(global_cards[0])
+            if global_focus:
+                summary_parts.append(f"글로벌 쪽에서는 {global_focus} 재료를 함께 보면서 환율과 위험선호 변화를 확인할 필요가 있습니다.")
+            else:
+                summary_parts.append("글로벌 쪽에서는 해외 자금 흐름과 위험선호 변화를 함께 보면서 환율 반응을 점검할 필요가 있습니다.")
+        if disclosure_cards:
+            disclosure_focus = self._briefing_surface_detail(disclosure_cards[0])
+            if disclosure_focus:
+                summary_parts.append(f"공시 측면에서는 {disclosure_focus} 내용을 함께 보면서 후속 종목 반응과 자금 흐름을 점검하는 편이 좋습니다.")
+            else:
+                summary_parts.append("공시 측면에서는 추가로 확인된 주요 공시를 함께 보면서 후속 종목 반응과 자금 흐름을 점검하는 편이 좋습니다.")
+        linked_headlines = []
+        seen_link_keys: set[str] = set()
+        for card in (kr_cards[:3] + global_cards[:2] + disclosure_cards[:2]):
+            primary_evidence = self._primary_briefing_evidence(card.get("evidence") or [])
+            source_url = (
+                self._sanitize_briefing_url(primary_evidence.get("canonical_url") or primary_evidence.get("source_url"))
+                if isinstance(primary_evidence, dict)
+                else None
+            )
+            dedupe_key = self._briefing_link_dedupe_key(
+                title=card.get("title"),
+                source_url=source_url,
+                card_id=card.get("id"),
+            )
+            if dedupe_key in seen_link_keys:
+                continue
+            seen_link_keys.add(dedupe_key)
+            linked_headlines.append(
+                {
+                    "card_id": card.get("id"),
+                    "title": card.get("title"),
+                    "summary": card.get("one_line_summary"),
+                    "market_scope": card.get("market_scope"),
+                    "primary_region": card.get("primary_region"),
+                    "published_at": card.get("updated_at") or card.get("published_at"),
+                    "source_url": source_url,
+                    "source_label": self._briefing_source_label(primary_evidence),
+                }
+            )
+        return {
+            "headline": "지금 시장 리포트",
+            "summary": "\n\n".join(part for part in summary_parts if part).strip(),
+            "key_points": self._dedupe_briefing_points(
+                [
+                    kr_cards[0].get("why_it_matters") if kr_cards else None,
+                    kr_cards[0].get("title") if kr_cards else None,
+                    global_cards[0].get("why_it_matters") if global_cards else None,
+                    global_cards[0].get("title") if global_cards else None,
+                    disclosure_cards[0].get("why_it_matters") if disclosure_cards else None,
+                    disclosure_cards[0].get("title") if disclosure_cards else None,
+                ]
+            ),
+            "linked_headlines": linked_headlines,
+            "updated_at": updated_at,
+            "generation_method": "rule_based",
+            "ai_confidence": 0.0,
+            "ai_provider": None,
+            "ai_model": None,
+        }
 
     def _candidate_record(
         self,

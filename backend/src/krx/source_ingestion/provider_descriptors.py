@@ -9,6 +9,7 @@ from .models import ProviderFetchBatch, RawDocumentCandidate
 BatchFetchCallable = Callable[["DocumentSyncRequest", datetime, datetime, Optional[str]], ProviderFetchBatch]
 CandidateResolveCallable = Callable[[Any, RawDocumentCandidate], RawDocumentCandidate]
 RequestBuildCallable = Callable[[Any], list["DocumentSyncRequest"]]
+MarketRequestBuildCallable = Callable[[list[str]], list["DocumentSyncRequest"]]
 
 
 @dataclass(frozen=True)
@@ -37,3 +38,4 @@ class NewsProviderDescriptor:
     fetch_batch: BatchFetchCallable
     build_company_requests: RequestBuildCallable
     build_theme_requests: RequestBuildCallable
+    build_market_requests: MarketRequestBuildCallable

@@ -221,6 +221,27 @@ function catalystEmptyState(title: string, description: string) {
   );
 }
 
+function MacroBoardFallbackCard({
+  title,
+  missingSource,
+  fallbackWatch,
+  confidenceImpact,
+}: {
+  title: string;
+  missingSource: string;
+  fallbackWatch: string;
+  confidenceImpact: string;
+}) {
+  return (
+    <article className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_16px_40px_-28px_rgba(15,23,42,0.45)]">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</p>
+      <p className="mt-3 text-sm font-semibold text-slate-900">{missingSource} 미연동</p>
+      <p className="mt-2 text-sm leading-6 text-slate-700">대신 {fallbackWatch}</p>
+      <p className="mt-3 text-xs leading-5 text-slate-500">{confidenceImpact}</p>
+    </article>
+  );
+}
+
 export function GlobalEventsDashboard({
   highlights,
   upcoming,
@@ -297,6 +318,33 @@ export function GlobalEventsDashboard({
           <div className="space-y-6">
             <section className="space-y-4">
               <SectionHeader
+                title="한국장 매크로 보드"
+                description="실시간 가격 보드 소스는 아직 연결하지 않았습니다. 이번 라운드에서는 어떤 가격을 못 보고 있고, 대신 무엇을 봐야 하는지 먼저 고정합니다."
+              />
+              <div className="grid gap-3 lg:grid-cols-3">
+                <MacroBoardFallbackCard
+                  title="환율"
+                  missingSource="USD/KRW 현물"
+                  fallbackWatch="달러 관련 이벤트 영향 카드와 외국인 수급"
+                  confidenceImpact="환율 가격 미표시 구간이라 surprise risk 해석은 보수적으로 유지합니다."
+                />
+                <MacroBoardFallbackCard
+                  title="유가"
+                  missingSource="WTI 현물"
+                  fallbackWatch="에너지 이벤트와 관련 섹터 확산 여부"
+                  confidenceImpact="유가 가격 레벨이 없어 정유·항공 반응은 이벤트 중심으로만 해석합니다."
+                />
+                <MacroBoardFallbackCard
+                  title="미국 금리"
+                  missingSource="미국채 가격·금리 보드"
+                  fallbackWatch="CPI/FOMC/고용 이벤트의 예상·실제·서프라이즈"
+                  confidenceImpact="금리 레벨 부재로 이미 가격 반영 여부보다 surprise risk 중심으로 읽어야 합니다."
+                />
+              </div>
+            </section>
+
+            <section className="space-y-4">
+              <SectionHeader
                 title="이번 주 핵심 촉매"
                 description="한국 증시에 파급력이 큰 이벤트를 우선순위로 정렬했습니다."
                 action={
@@ -353,8 +401,8 @@ export function GlobalEventsDashboard({
           <aside className="space-y-6 lg:sticky lg:top-6 lg:self-start">
             <section className="space-y-4">
               <SectionHeader
-                title="한국 시장 영향 해석"
-                description="달러, 금리, 외국인 수급에 연결되는 영향 경로를 우선 제공합니다."
+                title="한국장 전이 경로"
+                description="달러, 금리, 외국인 수급에 연결되는 경로와 surprise risk를 우선 제공합니다."
               />
               {impactCards.length ? (
                 <div className="grid gap-3">

@@ -80,6 +80,16 @@ function formatLargeNumber(value: number | null) {
   return formatSigned(value, 0);
 }
 
+function structuredMetricValue(
+  value: string,
+  missingSource: string,
+  fallback: string,
+  confidenceImpact: string,
+) {
+  if (value !== "-") return value;
+  return `${missingSource} 미연동 · ${fallback} · ${confidenceImpact}`;
+}
+
 function directionalBiasLabel(value: DerivativesSummary["directionalBias"]) {
   if (value === "bullish") return "상방 우위";
   if (value === "bearish") return "하방 우위";
@@ -238,6 +248,7 @@ function DerivativesOneLine({
       <p className="mt-3 text-sm leading-7 text-slate-600">
         신뢰도 {confidenceBucketLabel(derivativesSummary.confidenceBucket)} · {freshnessLabel(derivativesSummary.lastUpdatedAt)}
       </p>
+      <p className="mt-2 text-sm leading-6 text-slate-600">누가 어떤 방향으로 베팅하는지, 그리고 그 베팅이 오늘밤까지 이어질지를 먼저 읽는 영역입니다.</p>
       <SourceBadgeRow sourceNames={derivativesSummary.sourceCoverage.sourceNames} />
     </section>
   );
@@ -426,10 +437,41 @@ function DerivativesTabPanel({
     .map((component) => component.explanationKo?.trim())
     .filter((line): line is string => Boolean(line))
     .slice(0, 3);
+  const cumulativeFrame = `누적: ${formatLargeNumber(derivativesSummary.foreignFuturesNetPosition)} 외국인 선물 포지션`;
+  const todayFrame = `오늘: PCR ${structuredMetricValue(
+    formatNumber(derivativesSummary.pcr, 2),
+    "옵션 체인",
+    "방향 강도는 해설과 수급 카드로 확인",
+    "신뢰도 보수적 해석",
+  )}`;
+  const nextFrame = hasPreOpenSession || hasNightSession
+    ? `다음 세션: ${sessionMetricLabel} ${sessionMetricValue}`
+    : "다음 세션: 야간선물 또는 개장 전 선물 소스가 없어 환율·외국인 선물 변화를 함께 봐야 합니다.";
 
   return (
     <div className="flex flex-col gap-6" data-testid="market-signal-derivatives-panel">
       <DerivativesOneLine derivativesSummary={derivativesSummary} fallbackLine={fallbackCard?.interpretationLine ?? null} />
+
+      <section className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5 shadow-sm">
+        <SectionHeader
+          title="누적 · 오늘 · 다음 세션"
+          description="같은 숫자를 시간축으로 나눠 보면, 보유 포지션과 당일 반응, 오늘밤 이어질 위험을 구분할 수 있습니다."
+        />
+        <div className="grid gap-3 xl:grid-cols-3">
+          <article className="rounded-2xl border border-slate-200 bg-white p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">누적</p>
+            <p className="mt-2 text-sm leading-6 text-slate-900">{cumulativeFrame}</p>
+          </article>
+          <article className="rounded-2xl border border-slate-200 bg-white p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">오늘</p>
+            <p className="mt-2 text-sm leading-6 text-slate-900">{todayFrame}</p>
+          </article>
+          <article className="rounded-2xl border border-slate-200 bg-white p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">다음 세션</p>
+            <p className="mt-2 text-sm leading-6 text-slate-900">{nextFrame}</p>
+          </article>
+        </div>
+      </section>
 
       <section>
         <SectionHeader
@@ -629,7 +671,7 @@ function CheckpointBoard({
 }
 
 function subtabDescription(tab: MarketSignalSubtabKey) {
-  if (tab === "summary") return "팩트, 수급, 파생, 트리거를 한 번에 정리해 오늘 시장의 핵심 보드를 제공합니다.";
+  if (tab === "summary") return "누가 어떤 방향으로 베팅하는지, 수급과 파생을 한 번에 읽는 메인 보드입니다.";
   if (tab === "fund-flow") return "외국인·기관·프로그램 수급 중심으로 당일 자금 방향을 확인합니다.";
   if (tab === "derivatives") return "파생 포지션과 변동성 지표를 핵심 카드와 추이 차트로 제공합니다.";
   if (tab === "checkpoints") return "개장 전/장중 확인해야 할 리스크 체크포인트를 정리합니다.";
@@ -700,13 +742,38 @@ export function MarketSignalDashboard({
   const derivativesSummaryLine = `${directionalBiasLabel(derivativesSummary.directionalBias)} · ${gapBiasLabel(derivativesSummary.gapBias)} · ${volatilityBiasLabel(
     derivativesSummary.volatilityBias,
   )}`;
+  const summaryTimeFrames = [
+    {
+      key: "cumulative",
+      label: "누적",
+      value: formatLargeNumber(derivativesSummary.foreignFuturesNetPosition),
+      description: "외국인 선물 누적 포지션",
+    },
+    {
+      key: "today",
+      label: "오늘",
+      value: formatNumber(derivativesSummary.pcr, 2),
+      description: "당일 PCR로 방향 강도 확인",
+    },
+    {
+      key: "next-session",
+      label: "다음 세션",
+      value:
+        derivativesSummary.preOpenFutures.changeRate !== null
+          ? formatSignedPercent(derivativesSummary.preOpenFutures.changeRate, 2)
+          : derivativesSummary.nightFutures.changeRate !== null
+            ? formatSignedPercent(derivativesSummary.nightFutures.changeRate, 2)
+            : "소스 대기",
+      description: "개장 전 또는 야간선물 기준",
+    },
+  ];
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-6 md:py-8">
       <section className="rounded-[32px] border border-slate-200 bg-[linear-gradient(140deg,rgba(255,255,255,0.98),rgba(241,245,249,0.94))] p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-black tracking-tight text-slate-900">시장 신호</h1>
+            <h1 className="text-2xl font-black tracking-tight text-slate-900">파생·수급</h1>
             <p className="mt-1 text-sm text-slate-600">{subtabDescription(activeSubtab)}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -714,7 +781,7 @@ export function MarketSignalDashboard({
             <Badge variant="neutral">{freshnessLabel(summary.lastUpdatedAt)}</Badge>
           </div>
         </div>
-        <nav className="mt-4 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="시장 신호 세부 탭" data-testid="market-signal-subtabs">
+        <nav className="mt-4 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="파생·수급 세부 탭" data-testid="market-signal-subtabs">
           {MARKET_SIGNAL_SUBTAB_OPTIONS.map((option) => {
             const active = option.key === activeSubtab;
             return (
@@ -744,9 +811,19 @@ export function MarketSignalDashboard({
               <Badge variant={coverageVariant(summary.sourceCoverage.state)}>{summary.sourceCoverage.label}</Badge>
               <Badge variant="neutral">{freshnessLabel(summary.lastUpdatedAt)}</Badge>
             </div>
+            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">누가 어떤 방향으로 베팅하고 있나?</p>
             <h2 className="mt-4 text-3xl font-black tracking-tight text-slate-900">{summary.interpretationLine}</h2>
             <p className="mt-3 max-w-4xl text-sm leading-7 text-slate-600">{summary.explanationText}</p>
             <SourceBadgeRow sourceNames={summary.sourceCoverage.sourceNames} />
+            <div className="mt-5 grid gap-3 xl:grid-cols-3">
+              {summaryTimeFrames.map((item) => (
+                <article key={item.key} className="rounded-2xl border border-slate-200 bg-white/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+                  <p className="mt-2 text-xl font-black tracking-tight text-slate-900">{item.value}</p>
+                  <p className="mt-2 text-xs text-slate-500">{item.description}</p>
+                </article>
+              ))}
+            </div>
           </section>
           <section className="grid gap-4 xl:grid-cols-2" data-testid="market-signal-summary-grid">
             <SummaryBoardCard
