@@ -1,24 +1,18 @@
 # Argus Renewal 실행 가이드
 
-## 0) 사전 요구사항
-- Node.js 20+
-- `pnpm`
-- Python 3.10+
+## 1. 의존성 설치
 
-## 1) 워크스페이스 의존성 설치
 ```bash
 pnpm install
-```
 
-## 2) Python 가상환경(venv) 생성 및 백엔드 의존성 설치
-```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r backend/requirements.txt
 ```
 
-## 3) 환경 변수 준비
+## 2. 환경 변수
+
 ```bash
 cp .env.example backend/.env
 cat > frontend/.env.local <<'ENV'
@@ -26,7 +20,10 @@ BACKEND_BASE_URL=http://localhost:4000
 ENV
 ```
 
-## 4) 개발 서버 실행
+KIS 실데이터 smoke를 하려면 `backend/.env`에 `KIS_APP_KEY`, `KIS_APP_SECRET`만 채웁니다. token 값은 직접 넣지 않습니다.
+
+## 3. 개발 서버
+
 ```bash
 source .venv/bin/activate
 pnpm dev:backend
@@ -39,20 +36,40 @@ pnpm dev:frontend
 - backend: `http://localhost:4000`
 - frontend: `http://localhost:3000`
 
-## 5) 동작 확인
-- `http://localhost:3000/krx`
-- `http://localhost:3000/krx/news`
-- `http://localhost:3000/krx/global-events`
+## 4. 확인 경로
 
-## 6) 검증 명령
+- 시장 판단: `http://localhost:3000/argus`
+- 옵션·선물: `http://localhost:3000/argus/derivatives`
+- 현물 반응: `http://localhost:3000/argus/reaction`
+- 뉴스 트리거: `http://localhost:3000/argus/triggers`
+- API: `http://localhost:4000/api/argus/v2/dashboard`
+
+## 5. KIS Smoke
+
 ```bash
-source .venv/bin/activate
-pnpm lint
-pnpm test
-pnpm build
+cd backend
+python3 -m src.argus_v2.cli smoke-kis
 ```
 
-작업 종료 후:
+## 6. 현물/뉴스 컨텍스트 수집
+
 ```bash
-deactivate
+cd backend
+python3 -m src.argus_v2.cli collect-context
+python3 -m src.argus_v2.cli collect-context --market-reaction-provider kis
+python3 -m src.argus_v2.cli collect-context --news-triggers-provider rss
+python3 -m src.argus_v2.cli collect-context --news-triggers-provider naver
+python3 -m src.argus_v2.cli collect-context --news-triggers-provider dart
+python3 -m src.argus_v2.cli collect-context --news-triggers-provider macro
+```
+
+## 7. 검증
+
+```bash
+pnpm --filter frontend lint
+pnpm --filter frontend test -- --runInBand
+pnpm --filter frontend build
+
+cd backend
+pytest -q
 ```

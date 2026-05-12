@@ -1,6 +1,5 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -15,7 +14,7 @@ body {
 }
 
 body {
-  background: #e8ecf2;
+  background: #f3f5f1;
   font-family: "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
 }
 
@@ -23,17 +22,14 @@ body {
   min-height: 100vh;
 }
 
-.market-shell-krx {
+.market-shell-argus {
   background:
-    radial-gradient(circle at 12% 2%, rgba(17, 24, 39, 0.12), transparent 34%),
-    radial-gradient(circle at 96% 10%, rgba(245, 158, 11, 0.18), transparent 30%),
-    linear-gradient(180deg, #edf1f6 0%, #e6eaf1 40%, #dde3ec 100%);
+    linear-gradient(90deg, rgba(190, 24, 24, 0.06) 0 1px, transparent 1px 100%),
+    linear-gradient(180deg, rgba(29, 78, 216, 0.05) 0 1px, transparent 1px 100%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(234, 238, 228, 0.82) 44%, rgba(230, 235, 239, 0.9));
+  background-size: 44px 44px, 44px 44px, auto;
   font-family: "SUIT Variable", "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
-}
-
-a {
-  color: inherit;
-  text-decoration: none;
+  color: #181816;
 }
 
 :focus-visible {
@@ -56,37 +52,37 @@ a {
 }
 
 :root {
-  --background: oklch(0.97 0.005 250);
-  --foreground: oklch(0.145 0.015 260);
-  --card: oklch(0.995 0.002 90);
-  --card-foreground: oklch(0.145 0.015 260);
+  --background: oklch(0.965 0.012 118);
+  --foreground: oklch(0.18 0.012 90);
+  --card: oklch(0.995 0.005 110);
+  --card-foreground: oklch(0.18 0.012 90);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.75 0.18 75);
-  --primary-foreground: oklch(0.18 0.02 260);
-  --secondary: oklch(0.95 0.01 250);
-  --secondary-foreground: oklch(0.25 0.015 260);
-  --muted: oklch(0.94 0.008 250);
-  --muted-foreground: oklch(0.50 0.01 260);
-  --accent: oklch(0.92 0.04 80);
-  --accent-foreground: oklch(0.20 0.02 260);
-  --destructive: oklch(0.60 0.22 25);
-  --success: oklch(0.65 0.18 155);
-  --border: oklch(0.88 0.01 250);
-  --input: oklch(0.92 0.008 250);
-  --ring: oklch(0.75 0.15 75);
-  --chart-1: oklch(0.75 0.18 75);
-  --chart-2: oklch(0.65 0.15 155);
-  --chart-3: oklch(0.60 0.20 25);
-  --chart-4: oklch(0.65 0.15 260);
-  --chart-5: oklch(0.55 0.12 300);
-  --radius: 0.75rem;
+  --primary: oklch(0.55 0.22 27);
+  --primary-foreground: oklch(0.98 0.008 110);
+  --secondary: oklch(0.92 0.02 118);
+  --secondary-foreground: oklch(0.24 0.014 90);
+  --muted: oklch(0.92 0.012 118);
+  --muted-foreground: oklch(0.45 0.012 90);
+  --accent: oklch(0.55 0.18 258);
+  --accent-foreground: oklch(0.98 0.008 110);
+  --destructive: oklch(0.55 0.22 258);
+  --success: oklch(0.55 0.22 27);
+  --border: oklch(0.84 0.018 110);
+  --input: oklch(0.90 0.014 110);
+  --ring: oklch(0.55 0.18 27);
+  --chart-1: oklch(0.55 0.22 27);
+  --chart-2: oklch(0.55 0.18 258);
+  --chart-3: oklch(0.50 0.10 150);
+  --chart-4: oklch(0.56 0.12 65);
+  --chart-5: oklch(0.42 0.025 90);
+  --radius: 0.5rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.75 0.18 75);
-  --sidebar-primary-foreground: oklch(0.18 0.02 260);
-  --sidebar-accent: oklch(0.92 0.04 80);
-  --sidebar-accent-foreground: oklch(0.20 0.02 260);
+  --sidebar-primary: oklch(0.55 0.22 27);
+  --sidebar-primary-foreground: oklch(0.98 0.008 110);
+  --sidebar-accent: oklch(0.92 0.02 118);
+  --sidebar-accent-foreground: oklch(0.24 0.014 90);
   --sidebar-border: oklch(0.88 0.01 250);
   --sidebar-ring: oklch(0.75 0.15 75);
 }
@@ -177,5 +173,58 @@ a {
   }
   html {
     @apply font-sans;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+}
+
+@layer components {
+  .argus-frame {
+    border: 1px solid rgba(24, 24, 22, 0.14);
+    background: rgba(255, 255, 252, 0.9);
+    box-shadow: 0 18px 55px -42px rgba(24, 24, 22, 0.45);
+  }
+
+  .argus-panel {
+    border: 1px solid rgba(24, 24, 22, 0.12);
+    background: rgba(255, 255, 252, 0.82);
+  }
+
+  .argus-tile {
+    border: 1px solid rgba(24, 24, 22, 0.12);
+    background: rgba(244, 246, 242, 0.72);
+  }
+
+  .argus-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(24, 24, 22, 0.88);
+    background: #181816;
+    color: #f8faf5;
+    font-weight: 800;
+    transition: background-color 160ms ease, border-color 160ms ease;
+  }
+
+  .argus-action:hover {
+    background: #33322e;
+  }
+
+  .argus-label {
+    color: rgba(24, 24, 22, 0.58);
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .argus-red {
+    color: #b91c1c;
+  }
+
+  .argus-blue {
+    color: #1d4ed8;
   }
 }
