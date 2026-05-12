@@ -317,6 +317,64 @@ def test_context_collection_does_not_keyword_classify_live_news_without_ai(tmp_p
     assert result.providers[1].news_trigger_count == 0
 
 
+def test_context_collection_hides_live_news_when_ai_enrichment_fails(tmp_path):
+    db_path = str(tmp_path / "argus-v2.db")
+    feed_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>테스트 경제 뉴스</title>
+    <item>
+      <title>FOMC 금리 경계와 환율 상승</title>
+      <link>https://example.test/fomc</link>
+      <description>미국 국채금리와 달러 강세가 위험자산에 부담입니다.</description>
+      <pubDate>Tue, 12 May 2026 12:20:00 +0900</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(500, json={"error": "ai unavailable"})
+        return httpx.Response(200, text=feed_xml)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    settings = Settings(
+        db_path=db_path,
+        argus_market_reaction_provider="disabled",
+        argus_news_triggers_provider="rss",
+        argus_news_triggers_rss_urls="https://example.test/rss",
+        argus_news_triggers_lookback_hours=24,
+        **_news_ai_settings(),
+    )
+
+    try:
+        result = run_context_collection(
+            settings=settings,
+            trade_date=date(2026, 5, 12),
+            snapshot_time=datetime(2026, 5, 12, 4, 0, tzinfo=timezone.utc),
+            http_client=client,
+        )
+    finally:
+        client.close()
+
+    assert result.providers[1].status == "success"
+    assert result.providers[1].news_trigger_count == 0
+
+    with get_connection(db_path) as connection:
+        latest_run = connection.execute(
+            """
+            SELECT metadata_json
+            FROM argus_v2_provider_runs
+            WHERE provider_key = 'v2_news_triggers'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    assert '"ai_error_count": 1' in latest_run["metadata_json"]
+
+
 def test_context_collection_prefers_quality_news_source_and_filters_market_spam(tmp_path):
     db_path = str(tmp_path / "argus-v2.db")
     feed_xml = """<?xml version="1.0" encoding="UTF-8"?>

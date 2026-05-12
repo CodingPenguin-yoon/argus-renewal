@@ -68,7 +68,11 @@ def build_market_judgement(
     futures_change = _number(derivatives.kospi200_futures_change_rate.value)
     basis = _number(derivatives.basis.value)
     open_interest_change = _number(derivatives.open_interest_change_rate.value)
-    option_oi_change_side = _option_oi_change_side(derivatives.summary)
+    option_oi_change_side = (
+        derivatives.option_open_interest_change.dominant_side
+        if derivatives.option_open_interest_change.freshness == "fresh"
+        else "UNKNOWN"
+    )
     kospi_change = _number(reaction.kospi_change_rate.value)
     negative_triggers = [item for item in triggers if item.impact == "negative"]
     positive_triggers = [item for item in triggers if item.impact == "positive"]
@@ -253,16 +257,6 @@ def _watch_points(derivatives: DerivativesPressure) -> list[str]:
         if level.strike_price is not None:
             points.append(f"{level.strike_price:g}pt {level.label}")
     return points[:4]
-
-
-def _option_oi_change_side(summary: str) -> str | None:
-    if "옵션 OI 변화는 CALL 우위" in summary:
-        return "CALL"
-    if "옵션 OI 변화는 PUT 우위" in summary:
-        return "PUT"
-    if "옵션 OI 변화는 NEUTRAL 우위" in summary:
-        return "NEUTRAL"
-    return None
 
 
 def _spot_flow_score(value: float) -> int:

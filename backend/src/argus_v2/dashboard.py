@@ -9,6 +9,7 @@ from .contracts import (
     DerivativesPressure,
     MarketDashboard,
     MarketReaction,
+    OptionOpenInterestChange,
     OptionKeyLevel,
     OptionPressureSide,
     ProviderHealth,
@@ -146,6 +147,18 @@ def _build_derivatives_pressure(
             _freshness(latest_derivatives),
         ),
         option_pressure=option_pressure,
+        option_open_interest_change=_option_oi_change_contract(
+            option_oi_change=option_oi_change,
+            observed_at=_open_interest_observed_at(
+                futures_observed_at=futures_observed_at,
+                option_observed_at=option_observed_at,
+                option_oi_change=option_oi_change,
+            ),
+            source=_open_interest_change_source(
+                futures_source=_as_text(latest_derivatives, "source_name") or KIS_SOURCE,
+                option_oi_change=option_oi_change,
+            ),
+        ),
         key_levels=_key_levels(latest_option_chain, option_stats),
         summary=" ".join(summary_parts),
         freshness=_combined_freshness(_freshness(latest_derivatives), _freshness(latest_option_chain)),
@@ -422,6 +435,22 @@ def _option_open_interest_change(*, option_stats: dict[str, Any], previous_optio
         "total_change_rate": total_change_rate,
         "dominant_side": dominant_side,
     }
+
+
+def _option_oi_change_contract(*, option_oi_change: dict[str, Any], observed_at: str | None, source: str) -> OptionOpenInterestChange:
+    freshness = str(option_oi_change.get("freshness") or "missing")
+    if freshness not in {"fresh", "partial", "stale", "missing"}:
+        freshness = "missing"
+    return OptionOpenInterestChange(
+        freshness=freshness,
+        call_change_rate=_safe_number(option_oi_change.get("call_change_rate")),
+        put_change_rate=_safe_number(option_oi_change.get("put_change_rate")),
+        net_change_rate=_safe_number(option_oi_change.get("net_change_rate")),
+        total_change_rate=_safe_number(option_oi_change.get("total_change_rate")),
+        dominant_side=_pressure_side(str(option_oi_change.get("dominant_side") or "UNKNOWN")),
+        source=source,
+        observed_at=observed_at,
+    )
 
 
 def _combined_open_interest_change_rate(*, futures_oi_change_rate: float | None, option_oi_change: dict[str, Any]) -> float | None:

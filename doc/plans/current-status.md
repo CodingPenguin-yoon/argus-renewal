@@ -3,7 +3,7 @@
 ## Completion Snapshot
 
 - 레거시 전환 달성률: 완료 판정.
-- 제품 완성 달성률: 약 60~65%.
+- 제품 완성 달성률: 약 65%.
 - 기준: 레거시 전환은 구 KRX runtime 제거, v2 runtime 대체, 레거시 파일 제거, 검증 통과를 기준으로 봅니다.
 - 주의: 뉴스 품질, 판단 가중치, 매크로 source, 장중 운영 관찰은 레거시 전환 잔여 작업이 아니라 제품 고도화 작업입니다.
 
@@ -17,6 +17,7 @@
 - KIS live smoke로 국내파생 1건과 옵션체인 100개 level 수신 및 v2 DB 저장을 확인했습니다.
 - KIS 국내파생 응답의 basis, market basis, 선물 미결제약정 증감률을 dashboard 판단 입력에 연결했습니다.
 - 옵션체인 최신 snapshot과 직전 snapshot을 비교해 옵션 OI 변화율과 CALL/PUT 우위 방향을 dashboard/판단 엔진에 연결했습니다.
+- 판단 엔진은 옵션 OI 변화 방향을 summary 문자열 파싱이 아니라 `option_open_interest_change.dominant_side` 구조 필드로 읽습니다.
 - KIS 현물 반응 provider를 추가해 KOSPI/KOSDAQ 등락률, 상승/하락 종목 수, 강/약 업종을 v2 DB에 저장할 수 있게 했습니다.
 - KIS 현물 반응 live 수집에서 실제 field alias를 확인했고, 해외/레버리지/지수성 항목을 제외해 국내 현물 섹터만 남기도록 보정했습니다.
 - KIS 시장별 투자자매매동향을 별도 현물 수급 계약(`spot_foreign_net_buy`, `spot_institution_net_buy`, `spot_individual_net_buy`)으로 추가했습니다. 선물 수급 필드에는 대입하지 않습니다.
@@ -25,7 +26,7 @@
 - `/api/argus/v2/dashboard`는 v2 DB 최신 snapshot을 먼저 읽고, DB가 비어 있을 때만 mock fallback을 사용합니다.
 - `collect-context` CLI로 현물 반응과 뉴스 트리거를 v2 DB에 적재할 수 있습니다.
 - 뉴스 트리거의 키워드 기반 호악재/중요도/품질 판정은 제거했습니다. RSS/Naver/DART는 원문 수집만 담당하고, 노출 여부/영향/연결강도는 AI enrichment JSON만 사용합니다.
-- AI가 꺼진 상태에서는 실뉴스를 임의로 호재/악재 분류하지 않습니다. 로컬 UI는 `mock`, 수동 import는 명시적 `ai_enrichment` 계약으로 동작합니다.
+- AI가 꺼졌거나 실패한 상태에서는 실뉴스를 임의로 호재/악재 분류하지 않습니다. 로컬 UI는 `mock`, 수동 import는 명시적 `ai_enrichment` 계약으로 동작합니다.
 - 매크로 이벤트는 `macro` provider를 통해 뉴스 트리거와 같은 계약으로 normalize할 수 있습니다.
 - 판단 엔진은 선물 변동률, basis, 선물 미결제약정 증감률, 옵션 압력, 현물 반응, 뉴스 트리거를 1차 점수화합니다.
 - 판단 엔진은 선물 수급이 비어 있을 때 외국인 현물 수급을 보조 신호로 쓰고, 선물/현물 외국인 수급이 충돌하면 반대 증거로 표시합니다.
@@ -37,15 +38,15 @@
 
 ## In Progress
 
-- 제품 고도화: KIS 현물 반응 운영 관찰, 판단 엔진 운영 가중치 보정, 매크로 실제 source 결정, AI 뉴스 판단 프롬프트 운영 보정.
+- 제품 고도화: KIS 현물 반응 운영 관찰, 판단 엔진 운영 가중치 보정, 매크로 실제 source 결정, AI 뉴스 판단 프롬프트/실모델 smoke 보정.
 - 보류: KIS 공식 `domestic_futureoption` 샘플에서는 시장 전체 외국인/기관/개인 KOSPI200 선물 수급 endpoint가 아직 확인되지 않았습니다. 계좌 기반 잔고/손익 API는 시장 수급으로 연결하지 않습니다.
 
 ## Next
 
 1. 제품 고도화 backlog를 별도 순서로 진행합니다.
-2. KIS 현물 반응 운영 관찰: 장중 반복 수집 시 재시도 빈도, 섹터명 노이즈, 현물 수급 단위 배율을 보정합니다.
-3. 판단 엔진 가중치는 실제 장중 케이스 기준으로 추가 보정합니다.
-4. AI 뉴스 판단 프롬프트와 JSON 계약은 실제 장중 케이스 기준으로 보정합니다.
+2. AI 뉴스 판단 프롬프트와 JSON 계약은 실제 장중 케이스 기준으로 보정하고 실모델 smoke test를 수행합니다.
+3. KIS 현물 반응 운영 관찰: 장중 반복 수집 시 재시도 빈도, 섹터명 노이즈, 현물 수급 단위 배율을 보정합니다.
+4. 판단 엔진 가중치는 실제 장중 케이스 기준으로 추가 보정합니다.
 5. KOSPI200 시장 전체 선물 수급 endpoint는 공식 문서나 live smoke로 확인되기 전까지 보류합니다.
 
 ## Risks

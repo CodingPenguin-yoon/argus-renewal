@@ -21,7 +21,7 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 ## Completion Baseline
 
 - 레거시 전환: 완료 판정.
-- 제품 완성: 약 60~65%.
+- 제품 완성: 약 65%.
 - 레거시 전환 잔여 작업은 `legacy-transition-closeout.md`를 기준으로 마감합니다.
 - 제품 고도화 작업은 레거시 전환 완료 후 backlog로 처리합니다.
 
@@ -48,6 +48,7 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 - 완료: KIS 선물 basis와 market basis 저장
 - 완료: KIS 선물 미결제약정 증감률 dashboard 연결
 - 완료: 옵션 OI 전시점 비교 계산과 CALL/PUT 변화 우위 판단 연결
+- 완료: 옵션 OI 변화 방향을 summary 문자열 파싱이 아니라 구조 필드 `option_open_interest_change.dominant_side`로 판단 엔진에 전달
 - 보류: KIS 공식 `domestic_futureoption` 샘플의 `inquire_balance_valuation_pl`은 이름/주석에 시장 동향 문구가 있으나 실제 path가 계좌 기반 `/trading/inquire-balance-valuation-pl`이고 `CANO`, `ACNT_PRDT_CD`가 필요하므로 시장 전체 외국인/기관/개인 수급으로 연결하지 않습니다.
 - 남음: 공식 문서 또는 live smoke로 확인되는 시장 전체 투자자별 선물 수급 endpoint 대체 경로 조사
 
@@ -68,17 +69,18 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 
 ## Phase 4. News Triggers
 
-상태: 저장 계약, API 연결, provider, 중요도 필터 1차 완료.
+상태: 저장 계약, API 연결, provider, AI enrichment 1차 완료.
 
 - 완료: `argus_v2_news_triggers`
 - 완료: dashboard response 연결
 - 완료: mock/file/rss/naver/dart/hybrid provider와 `collect-context` CLI 연결
-- 완료: 금리, 환율, 반도체, 미국 지수, 수급, 옵션, 공시 키워드 기반 중요도 필터
-- 완료: dashboard 뉴스 trigger 중요도순 정렬
-- 완료: source 품질 가점, 리딩방/추천주성 키워드 감점, 같은 제목 중복 시 품질 높은 원문 우선
-- 남음: 실제 운영 로그 기준 source 품질 추가 보정
+- 완료: 키워드 기반 호악재/중요도/source 품질 판정을 제거
+- 완료: AI enrichment JSON(`should_use`, `impact`, `relevance_score`, `connection_strength`, `affected_factors`, `summary`, `reason`, `confidence`) 기준으로만 실뉴스를 노출
+- 완료: AI가 꺼지거나 실패하면 RSS/Naver/DART 원문을 임의 판단으로 노출하지 않음
+- 완료: dashboard 뉴스 trigger는 AI relevance와 confidence 기준으로 정렬
+- 남음: 실제 운영 로그 기준 AI prompt/schema 보정
 - 완료: macro event를 news trigger 계약으로 normalize하는 `macro` provider
-- 남음: connection strength 산정 기준 운영 보정
+- 남음: OpenAI-compatible 실모델 smoke test와 timeout/비용/재시도 운영 기준 확정
 
 ## Phase 5. Judgement Engine
 
@@ -89,6 +91,7 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 - 완료: 미수신 데이터가 있으면 보수적으로 확신도 제한
 - 완료: basis와 선물 OI 증감률 1차 가중치 반영
 - 완료: 옵션 OI 변화 CALL/PUT 우위 1차 가중치 반영
+- 완료: 옵션 OI 변화 방향을 summary 문자열이 아니라 구조 데이터로 읽도록 보정
 - 완료: 선물 수급 미수신 시 외국인 현물 수급을 보조 신호로 반영
 - 완료: 외국인 선물/현물 수급 충돌 시 반대 증거로 표시
 - 완료: 파생 하방 + 현물/섹터 버팀, 파생 상방 + 약세 섹터/악재 케이스의 상충 신호 테스트
@@ -108,8 +111,8 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 
 ## Next Order
 
-1. KIS 현물 반응 운영 관찰
-2. 뉴스 source 품질 보정
+1. 뉴스 AI 실모델 smoke test와 prompt 운영 보정
+2. KIS 현물 반응 운영 관찰
 3. 판단 엔진 가중치 정교화
 
 ## Open Work Breakdown
@@ -128,7 +131,7 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 - 완료: 판단 엔진은 풋 OI 증가가 강하면 하방 점수를, 콜 OI 증가가 강하면 상방 점수를 보강합니다.
 - 남음: “비교 기준 없음”을 화면에서 더 친절한 별도 문구로 보여주는 UX 조정.
 
-### 2. 뉴스 트리거 중요도 필터
+### 2. 뉴스 트리거 AI enrichment
 
 목표: 많이 보여주는 뉴스가 아니라 시장 판단에 연결되는 뉴스만 남깁니다.
 
@@ -136,13 +139,12 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 
 완료 기준:
 
-- 완료: 금리, 환율, 반도체, 미국 지수, 정책, 수급, 옵션, 공시 키워드 가중치를 둡니다.
-- 완료: 제목/요약 중복을 제거합니다.
-- 완료: `connection_strength`를 중요도 점수 기준으로 계산합니다.
+- 완료: RSS/Naver/DART는 원문 수집만 담당합니다.
+- 완료: 호악재, 노출 여부, relevance, connection strength는 AI JSON 응답만 사용합니다.
+- 완료: 제목/요약 중복을 제거하고 AI relevance가 높은 원문을 우선합니다.
 - 완료: dashboard에는 상위 trigger만 노출합니다.
-- 완료: 리딩방/추천주성 노이즈를 감점합니다.
-- 완료: 신뢰 source 가점과 제목 중복 시 우선순위 보정을 적용합니다.
-- 남음: 실제 운영 로그를 보며 source 품질과 감점 키워드를 추가 보정합니다.
+- 완료: AI disabled/failed 상태에서는 실뉴스를 임의로 표시하지 않습니다.
+- 남음: 실제 운영 로그를 보며 prompt, confidence 기준, 실패 처리 문구를 보정합니다.
 
 ### 3. 매크로 이벤트 normalize
 
@@ -193,7 +195,7 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 - 완료: 파생 하방 + 현물/섹터 버팀
 - 완료: 파생 상방 + 뉴스 악재 + 약세 섹터
 - 완료: 데이터 일부 미수신 시 confidence 제한
-- 뉴스 악재 + 수급 중립
+- 남음: 뉴스 AI 악재 + 수급 중립
 
 ### 6. 화면 밀도 조정
 
@@ -221,4 +223,4 @@ pnpm --filter frontend build
 
 ## Last Updated
 
-- 2026-05-12
+- 2026-05-13

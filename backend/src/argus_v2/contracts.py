@@ -43,6 +43,17 @@ class OptionKeyLevel(BaseModel):
     freshness: FreshnessStatus
 
 
+class OptionOpenInterestChange(BaseModel):
+    freshness: FreshnessStatus = "missing"
+    call_change_rate: Optional[float] = None
+    put_change_rate: Optional[float] = None
+    net_change_rate: Optional[float] = None
+    total_change_rate: Optional[float] = None
+    dominant_side: OptionPressureSide = "UNKNOWN"
+    source: str = "argus_v2.option_chain_comparison"
+    observed_at: Optional[str] = None
+
+
 class DerivativesPressure(BaseModel):
     foreign_futures_net_buy: DataPoint
     institution_futures_net_buy: DataPoint
@@ -52,6 +63,7 @@ class DerivativesPressure(BaseModel):
     open_interest_change_rate: DataPoint
     kospi200_futures_change_rate: DataPoint
     option_pressure: OptionPressureSide
+    option_open_interest_change: OptionOpenInterestChange = Field(default_factory=OptionOpenInterestChange)
     key_levels: list[OptionKeyLevel]
     summary: str
     freshness: FreshnessStatus

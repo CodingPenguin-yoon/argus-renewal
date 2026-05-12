@@ -243,6 +243,8 @@ def test_argus_v2_dashboard_reads_latest_v2_db_snapshots(tmp_path: Path):
     assert data["derivatives"]["basis"]["value"] == -0.4
     assert round(data["derivatives"]["open_interest_change_rate"]["value"], 2) == 30.0
     assert data["derivatives"]["open_interest_change_rate"]["source"] == "argus_v2.option_chain_comparison"
+    assert data["derivatives"]["option_open_interest_change"]["dominant_side"] == "PUT"
+    assert round(data["derivatives"]["option_open_interest_change"]["put_change_rate"], 2) == 48.0
     assert "옵션 OI 변화는 PUT 우위" in data["derivatives"]["summary"]
     assert data["derivatives"]["foreign_futures_net_buy"]["freshness"] == "missing"
     assert data["derivatives"]["option_pressure"] == "PUT"

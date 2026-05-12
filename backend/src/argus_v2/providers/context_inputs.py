@@ -42,6 +42,35 @@ DEFAULT_KIS_TOKEN_CACHE_PATH = "data/kis_token_cache.json"
 KIS_MARKET_REACTION_PROVIDERS = {"kis", "kis_api", "kis_index"}
 DEFAULT_NEWS_AI_BASE_URL = "https://api.openai.com"
 DEFAULT_NEWS_AI_CHAT_PATH = "/v1/chat/completions"
+NEWS_AI_SYSTEM_PROMPT = (
+    "You classify Korean market news for a KOSPI/KOSDAQ derivatives dashboard. "
+    "Return JSON only. Do not recommend trades. Do not invent causal links. "
+    "If the item is weakly related, promotional, or source credibility is unclear, set should_use=false."
+)
+NEWS_AI_DECISION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "should_use",
+        "impact",
+        "relevance_score",
+        "connection_strength",
+        "affected_factors",
+        "summary",
+        "reason",
+        "confidence",
+    ],
+    "properties": {
+        "should_use": {"type": "boolean"},
+        "impact": {"type": "string", "enum": ["positive", "neutral", "negative"]},
+        "relevance_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "connection_strength": {"type": "string", "enum": ["strong", "medium", "weak", "unclear"]},
+        "affected_factors": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "summary": {"type": "string", "maxLength": 160},
+        "reason": {"type": "string", "maxLength": 240},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -302,6 +331,10 @@ class ArgusNewsTriggerService:
                 "semantic_filter": "ai_enrichment",
                 "news_ai_provider": self.news_ai_provider or "disabled",
                 "input_count": len(records),
+                "ai_enriched_count": len(enriched),
+                "ai_selected_count": len(selected),
+                "ai_error_count": sum(1 for record in enriched if _ai_reason_from_raw(record).startswith("news_ai_error:")),
+                "ai_disabled_count": sum(1 for record in enriched if _ai_reason_from_raw(record) == "news_ai_disabled"),
                 "filtered_count": len(limited),
                 "expected_count": len(limited),
                 **(metadata or {}),
@@ -360,10 +393,7 @@ class ArgusNewsTriggerService:
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You classify Korean market news for a KOSPI/KOSDAQ derivatives dashboard. "
-                        "Return JSON only. Do not recommend trades."
-                    ),
+                    "content": NEWS_AI_SYSTEM_PROMPT,
                 },
                 {
                     "role": "user",
@@ -375,14 +405,8 @@ class ArgusNewsTriggerService:
                                 "Ignore promotions, stock-picking content, entertainment, and weakly related items."
                             ),
                             "output_schema": {
-                                "should_use": "boolean",
-                                "impact": "positive|neutral|negative",
-                                "relevance_score": "integer 0-100",
-                                "connection_strength": "strong|medium|weak|unclear",
-                                "affected_factors": "array of short strings",
-                                "summary": "short Korean summary for dashboard",
-                                "reason": "short Korean reason",
-                                "confidence": "high|medium|low",
+                                **NEWS_AI_DECISION_SCHEMA,
+                                "description": "Return one JSON object matching this schema.",
                             },
                             "news": {
                                 "title": record.title,
@@ -1237,7 +1261,7 @@ def _apply_news_ai_decision(*, record: NewsTriggerRecord, decision: dict[str, An
 def _normalize_news_ai_decision(decision: dict[str, Any]) -> dict[str, Any]:
     score = _bounded_int(decision.get("relevance_score"), minimum=0, maximum=100)
     explicit_should_use = _as_bool(decision.get("should_use"))
-    should_use = explicit_should_use if explicit_should_use is not None else score > 0
+    should_use = (explicit_should_use if explicit_should_use is not None else True) and score > 0
     if not should_use:
         score = 0
 
@@ -1285,6 +1309,14 @@ def _ai_confidence_rank(record: NewsTriggerRecord) -> int:
     raw_payload = record.raw_payload if isinstance(record.raw_payload, dict) else {}
     value = _as_text(raw_payload.get("_argus_ai_confidence")) or "low"
     return {"high": 3, "medium": 2, "low": 1}.get(value, 0)
+
+
+def _ai_reason_from_raw(record: NewsTriggerRecord) -> str:
+    raw_payload = record.raw_payload if isinstance(record.raw_payload, dict) else {}
+    ai_payload = raw_payload.get("_argus_ai")
+    if not isinstance(ai_payload, dict):
+        return ""
+    return _as_text(ai_payload.get("reason")) or ""
 
 
 def _strength_from_relevance(score: int) -> str:

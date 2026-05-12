@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from src.argus_v2.contracts import DataPoint, DerivativesPressure, MarketReaction, SectorMove, TriggerEvent
+from src.argus_v2.contracts import (
+    DataPoint,
+    DerivativesPressure,
+    MarketReaction,
+    OptionOpenInterestChange,
+    SectorMove,
+    TriggerEvent,
+)
 from src.argus_v2.judgement import build_market_judgement
 
 
@@ -66,8 +73,61 @@ def test_judgement_uses_option_oi_change_side_when_available() -> None:
         open_interest_change_rate=_point(6.0, "pct"),
         kospi200_futures_change_rate=_point(0.0, "pct"),
         option_pressure="UNKNOWN",
+        option_open_interest_change=OptionOpenInterestChange(
+            freshness="fresh",
+            call_change_rate=8.0,
+            put_change_rate=20.0,
+            total_change_rate=6.0,
+            dominant_side="PUT",
+        ),
         key_levels=[],
-        summary="옵션 OI 변화는 PUT 우위입니다. 콜 1.00%, 풋 8.00%.",
+        summary="옵션 비교 데이터가 수신됐습니다.",
+        freshness="fresh",
+    )
+    reaction = MarketReaction(
+        kospi_change_rate=_point(0.0, "pct"),
+        kosdaq_change_rate=_point(None, "pct"),
+        kospi200_futures_change_rate=_point(0.0, "pct"),
+        advancing_count=_point(None, "count"),
+        declining_count=_point(None, "count"),
+        spot_foreign_net_buy=_point(None, "KRW"),
+        spot_institution_net_buy=_point(None, "KRW"),
+        spot_individual_net_buy=_point(None, "KRW"),
+        strong_sectors=[],
+        weak_sectors=[],
+        summary="현물은 보합입니다.",
+        freshness="fresh",
+    )
+
+    judgement = build_market_judgement(
+        derivatives,
+        [],
+        reaction,
+        live_provider_missing=False,
+    )
+
+    assert judgement.label == "하방 우위"
+
+
+def test_judgement_does_not_parse_option_oi_side_from_summary() -> None:
+    derivatives = DerivativesPressure(
+        foreign_futures_net_buy=_point(None, "KRW"),
+        institution_futures_net_buy=_point(None, "KRW"),
+        individual_futures_net_buy=_point(None, "KRW"),
+        basis=_point(None, "pt"),
+        put_call_ratio=_point(None, "ratio"),
+        open_interest_change_rate=_point(6.0, "pct"),
+        kospi200_futures_change_rate=_point(0.0, "pct"),
+        option_pressure="UNKNOWN",
+        option_open_interest_change=OptionOpenInterestChange(
+            freshness="fresh",
+            call_change_rate=2.0,
+            put_change_rate=12.0,
+            total_change_rate=6.0,
+            dominant_side="PUT",
+        ),
+        key_levels=[],
+        summary="옵션 OI 변화는 CALL 우위입니다. 이 문장은 판단 입력이 아니어야 합니다.",
         freshness="fresh",
     )
     reaction = MarketReaction(

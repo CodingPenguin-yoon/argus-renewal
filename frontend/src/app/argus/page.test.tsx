@@ -34,6 +34,16 @@ function buildDashboardFixture(): MarketDashboard {
       open_interest_change_rate: point(1.7, "pct"),
       kospi200_futures_change_rate: point(-0.34, "pct"),
       option_pressure: "PUT",
+      option_open_interest_change: {
+        freshness: "partial",
+        call_change_rate: 0.4,
+        put_change_rate: 1.7,
+        net_change_rate: -1.2,
+        total_change_rate: 1.7,
+        dominant_side: "PUT",
+        source: "mock.option_chain",
+        observed_at: "2026-03-15T02:10:00Z",
+      },
       key_levels: [
         {
           role: "put_wall",

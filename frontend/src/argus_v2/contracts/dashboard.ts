@@ -36,6 +36,17 @@ const optionKeyLevelSchema = z.object({
   freshness: freshnessStatusSchema,
 });
 
+const optionOpenInterestChangeSchema = z.object({
+  freshness: freshnessStatusSchema,
+  call_change_rate: z.number().nullable(),
+  put_change_rate: z.number().nullable(),
+  net_change_rate: z.number().nullable(),
+  total_change_rate: z.number().nullable(),
+  dominant_side: optionPressureSideSchema,
+  source: z.string(),
+  observed_at: z.string().nullable(),
+});
+
 const derivativesPressureSchema = z.object({
   foreign_futures_net_buy: dataPointSchema,
   institution_futures_net_buy: dataPointSchema,
@@ -45,6 +56,7 @@ const derivativesPressureSchema = z.object({
   open_interest_change_rate: dataPointSchema,
   kospi200_futures_change_rate: dataPointSchema,
   option_pressure: optionPressureSideSchema,
+  option_open_interest_change: optionOpenInterestChangeSchema,
   key_levels: z.array(optionKeyLevelSchema),
   summary: z.string(),
   freshness: freshnessStatusSchema,
