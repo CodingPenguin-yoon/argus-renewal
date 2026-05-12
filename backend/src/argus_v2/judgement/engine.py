@@ -3,6 +3,9 @@ from __future__ import annotations
 from ..contracts import DerivativesPressure, MarketJudgement, MarketReaction, TriggerEvent
 
 
+SPOT_FLOW_SIGNAL_THRESHOLD = 1_000_000_000
+
+
 def _number(value: float | int | str | None) -> float | None:
     return float(value) if isinstance(value, (float, int)) else None
 
@@ -61,6 +64,7 @@ def build_market_judgement(
     live_provider_missing: bool,
 ) -> MarketJudgement:
     foreign_flow = _number(derivatives.foreign_futures_net_buy.value)
+    spot_foreign_flow = _number(reaction.spot_foreign_net_buy.value)
     futures_change = _number(derivatives.kospi200_futures_change_rate.value)
     basis = _number(derivatives.basis.value)
     open_interest_change = _number(derivatives.open_interest_change_rate.value)
@@ -74,6 +78,8 @@ def build_market_judgement(
     score = 0
     if foreign_flow is not None:
         score += 2 if foreign_flow > 0 else -2 if foreign_flow < 0 else 0
+    elif spot_foreign_flow is not None:
+        score += _spot_flow_score(spot_foreign_flow)
     if derivatives.option_pressure == "CALL":
         score += 1
     elif derivatives.option_pressure == "PUT":
@@ -118,6 +124,7 @@ def build_market_judgement(
 
     primary_driver = _primary_driver(
         foreign_flow=foreign_flow,
+        spot_foreign_flow=spot_foreign_flow,
         option_pressure=derivatives.option_pressure,
         futures_change=futures_change,
         basis=basis,
@@ -136,6 +143,8 @@ def build_market_judgement(
         counter_evidence.append(f"{weak_sector} 약세가 상방 확신을 제한합니다.")
     if positive_triggers:
         counter_evidence.append(f"{positive_triggers[0].title} 신호는 하방 압력을 일부 상쇄합니다.")
+    if _flows_conflict(foreign_flow=foreign_flow, spot_foreign_flow=spot_foreign_flow):
+        counter_evidence.append("외국인 현물 수급은 선물 수급과 반대로 움직입니다.")
     if futures_change is not None and open_interest_change is not None and open_interest_change < -0.5:
         counter_evidence.append("선물 미결제약정 감소는 현재 방향의 추세 확신도를 낮춥니다.")
     if reaction.freshness in {"missing", "partial", "stale"} or not triggers:
@@ -146,6 +155,7 @@ def build_market_judgement(
         summary=_summary(
             label=label,
             foreign_flow=foreign_flow,
+            spot_foreign_flow=spot_foreign_flow,
             option_pressure=derivatives.option_pressure,
             futures_change=futures_change,
             basis=basis,
@@ -171,6 +181,7 @@ def build_market_judgement(
 def _primary_driver(
     *,
     foreign_flow: float | None,
+    spot_foreign_flow: float | None,
     option_pressure: str,
     futures_change: float | None,
     basis: float | None,
@@ -184,6 +195,11 @@ def _primary_driver(
         return f"옵션 미결제약정 {option_pressure} 우위"
     if basis is not None and abs(basis) > 0.5:
         return "KOSPI200 선물 basis"
+    if spot_foreign_flow is not None and abs(spot_foreign_flow) >= SPOT_FLOW_SIGNAL_THRESHOLD:
+        if spot_foreign_flow > 0:
+            return "외국인 현물 순매수"
+        if spot_foreign_flow < 0:
+            return "외국인 현물 순매도"
     if futures_change is not None:
         return "KOSPI200 선물 변동률"
     return "데이터 수신 상태"
@@ -193,6 +209,7 @@ def _summary(
     *,
     label: str,
     foreign_flow: float | None,
+    spot_foreign_flow: float | None,
     option_pressure: str,
     futures_change: float | None,
     basis: float | None,
@@ -203,6 +220,9 @@ def _summary(
     if foreign_flow is not None:
         direction = "순매수" if foreign_flow > 0 else "순매도" if foreign_flow < 0 else "중립"
         parts.append(f"외국인 KOSPI200 선물은 {direction}입니다.")
+    elif spot_foreign_flow is not None and abs(spot_foreign_flow) >= SPOT_FLOW_SIGNAL_THRESHOLD:
+        direction = "순매수" if spot_foreign_flow > 0 else "순매도" if spot_foreign_flow < 0 else "중립"
+        parts.append(f"외국인 현물은 {direction}입니다.")
     if option_pressure in {"CALL", "PUT", "NEUTRAL"}:
         parts.append(f"옵션 미결제약정은 {option_pressure} 우위입니다.")
     if futures_change is not None:
@@ -243,3 +263,19 @@ def _option_oi_change_side(summary: str) -> str | None:
     if "옵션 OI 변화는 NEUTRAL 우위" in summary:
         return "NEUTRAL"
     return None
+
+
+def _spot_flow_score(value: float) -> int:
+    if value >= SPOT_FLOW_SIGNAL_THRESHOLD:
+        return 1
+    if value <= -SPOT_FLOW_SIGNAL_THRESHOLD:
+        return -1
+    return 0
+
+
+def _flows_conflict(*, foreign_flow: float | None, spot_foreign_flow: float | None) -> bool:
+    if foreign_flow is None or spot_foreign_flow is None:
+        return False
+    if abs(spot_foreign_flow) < SPOT_FLOW_SIGNAL_THRESHOLD:
+        return False
+    return (foreign_flow > 0 and spot_foreign_flow < 0) or (foreign_flow < 0 and spot_foreign_flow > 0)

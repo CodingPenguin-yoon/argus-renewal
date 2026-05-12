@@ -95,6 +95,112 @@ def test_judgement_uses_option_oi_change_side_when_available() -> None:
     assert judgement.label == "하방 우위"
 
 
+def test_judgement_uses_spot_foreign_flow_when_futures_flow_is_missing() -> None:
+    derivatives = DerivativesPressure(
+        foreign_futures_net_buy=_point(None, "KRW"),
+        institution_futures_net_buy=_point(None, "KRW"),
+        individual_futures_net_buy=_point(None, "KRW"),
+        basis=_point(None, "pt"),
+        put_call_ratio=_point(None, "ratio"),
+        open_interest_change_rate=_point(None, "pct"),
+        kospi200_futures_change_rate=_point(0.0, "pct"),
+        option_pressure="UNKNOWN",
+        key_levels=[],
+        summary="선물 투자자별 수급은 아직 미수신입니다.",
+        freshness="fresh",
+    )
+    reaction = MarketReaction(
+        kospi_change_rate=_point(-0.1, "pct"),
+        kosdaq_change_rate=_point(None, "pct"),
+        kospi200_futures_change_rate=_point(0.0, "pct"),
+        advancing_count=_point(None, "count"),
+        declining_count=_point(None, "count"),
+        spot_foreign_net_buy=_point(-1_500_000_000, "KRW"),
+        spot_institution_net_buy=_point(600_000_000, "KRW"),
+        spot_individual_net_buy=_point(900_000_000, "KRW"),
+        strong_sectors=[],
+        weak_sectors=[],
+        summary="외국인 현물 순매도가 확인됩니다.",
+        freshness="fresh",
+    )
+    triggers = [
+        TriggerEvent(
+            id="neutral-check",
+            title="장중 수급 점검",
+            summary="시장 방향을 확인 중입니다.",
+            impact="neutral",
+            source="test",
+            published_at="2026-05-12T00:01:00Z",
+            connection_strength="medium",
+            freshness="fresh",
+        )
+    ]
+
+    judgement = build_market_judgement(
+        derivatives,
+        triggers,
+        reaction,
+        live_provider_missing=False,
+    )
+
+    assert judgement.label == "하방 우위"
+    assert judgement.primary_driver == "외국인 현물 순매도"
+    assert "외국인 현물은 순매도입니다." in judgement.summary
+
+
+def test_judgement_marks_conflicting_futures_and_spot_flow_as_counter_evidence() -> None:
+    derivatives = DerivativesPressure(
+        foreign_futures_net_buy=_point(1_500_000_000, "KRW"),
+        institution_futures_net_buy=_point(None, "KRW"),
+        individual_futures_net_buy=_point(None, "KRW"),
+        basis=_point(None, "pt"),
+        put_call_ratio=_point(None, "ratio"),
+        open_interest_change_rate=_point(None, "pct"),
+        kospi200_futures_change_rate=_point(0.7, "pct"),
+        option_pressure="UNKNOWN",
+        key_levels=[],
+        summary="외국인 선물 순매수와 KOSPI200 선물 강세가 우선 신호입니다.",
+        freshness="fresh",
+    )
+    reaction = MarketReaction(
+        kospi_change_rate=_point(0.1, "pct"),
+        kosdaq_change_rate=_point(None, "pct"),
+        kospi200_futures_change_rate=_point(0.7, "pct"),
+        advancing_count=_point(None, "count"),
+        declining_count=_point(None, "count"),
+        spot_foreign_net_buy=_point(-2_000_000_000, "KRW"),
+        spot_institution_net_buy=_point(1_000_000_000, "KRW"),
+        spot_individual_net_buy=_point(1_000_000_000, "KRW"),
+        strong_sectors=[],
+        weak_sectors=[],
+        summary="외국인 현물은 순매도입니다.",
+        freshness="fresh",
+    )
+    triggers = [
+        TriggerEvent(
+            id="neutral-check",
+            title="장중 수급 점검",
+            summary="시장 방향을 확인 중입니다.",
+            impact="neutral",
+            source="test",
+            published_at="2026-05-12T00:01:00Z",
+            connection_strength="medium",
+            freshness="fresh",
+        )
+    ]
+
+    judgement = build_market_judgement(
+        derivatives,
+        triggers,
+        reaction,
+        live_provider_missing=False,
+    )
+
+    assert judgement.label == "강한 상방"
+    assert judgement.primary_driver == "외국인 KOSPI200 선물 순매수"
+    assert "외국인 현물 수급은 선물 수급과 반대로 움직입니다." in judgement.counter_evidence
+
+
 def test_judgement_softens_derivatives_downside_when_market_reaction_conflicts() -> None:
     derivatives = DerivativesPressure(
         foreign_futures_net_buy=_point(-1200.0, "KRW"),

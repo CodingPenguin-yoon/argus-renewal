@@ -256,7 +256,7 @@ def test_argus_v2_dashboard_reads_latest_v2_db_snapshots(tmp_path: Path):
     assert data["reaction"]["spot_individual_net_buy"]["value"] == 48_000_000_000
     assert data["judgement"]["label"] == "강한 하방"
     assert data["judgement"]["primary_driver"] == "옵션 미결제약정 PUT 우위"
-    assert "외국인" not in data["judgement"]["summary"]
+    assert "외국인 현물은 순매도" in data["judgement"]["summary"]
     assert data["provider_health"][0]["key"] == "kis_derivatives"
     assert data["provider_health"][0]["status"] == "fresh"
     assert data["provider_health"][1]["key"] == "kis_option_chain"
