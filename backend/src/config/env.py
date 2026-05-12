@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     argus_news_triggers_query: str = "금리,환율,반도체,코스피,선물,옵션"
     argus_news_triggers_limit: int = 8
     argus_news_triggers_lookback_hours: int = 24
+    argus_news_ai_provider: str = "disabled"
+    argus_news_ai_base_url: str = "https://api.openai.com"
+    argus_news_ai_chat_path: str = "/v1/chat/completions"
+    argus_news_ai_model: Optional[str] = None
+    argus_news_ai_api_key: Optional[str] = None
+    argus_news_ai_timeout_seconds: float = 20.0
     argus_macro_events_provider: str = "disabled"
     argus_macro_events_file_path: Optional[str] = None
 

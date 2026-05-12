@@ -41,6 +41,7 @@ argus_renewal/
 - Frontend: `/argus`, `/argus/derivatives`, `/argus/reaction`, `/argus/triggers`
 - Backend: `/api/argus/v2/dashboard`, `/health`
 - Legacy `/krx*`, `/api/krx*`, `/api/news*`, `/api/global-events*` runtime surface는 제거했습니다.
+- Live news judgement는 키워드 포함 규칙이 아니라 AI enrichment JSON(`should_use`, `impact`, `relevance_score`, `connection_strength`)만 사용합니다. AI가 꺼져 있으면 임의로 호재/악재를 분류하지 않습니다.
 
 ## Storage
 
@@ -102,6 +103,8 @@ python3 -m src.argus_v2.cli collect-context --news-triggers-provider naver
 python3 -m src.argus_v2.cli collect-context --news-triggers-provider dart
 python3 -m src.argus_v2.cli collect-context --news-triggers-provider hybrid
 ```
+
+실뉴스 판단을 켜려면 `backend/.env`에 `ARGUS_NEWS_AI_PROVIDER=openai`, `ARGUS_NEWS_AI_MODEL`, `ARGUS_NEWS_AI_API_KEY`를 설정합니다. 키가 없으면 `mock` provider 또는 file import의 명시적 `ai_enrichment`로만 뉴스 트리거를 표시합니다.
 
 ## Validation
 

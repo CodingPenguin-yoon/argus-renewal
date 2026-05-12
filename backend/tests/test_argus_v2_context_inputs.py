@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import json
 
 import httpx
 
@@ -9,6 +10,46 @@ from src.argus_v2.db import get_connection
 from src.argus_v2.providers.context_inputs import run_context_collection
 from src.argus_v2.storage import ArgusV2Storage
 from src.config.env import Settings
+
+
+def _ai_decision_response(decision: dict) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={"choices": [{"message": {"content": json.dumps(decision, ensure_ascii=False)}}]},
+    )
+
+
+def _decision_for_ai_request(request: httpx.Request, decisions_by_title: dict[str, dict]) -> dict:
+    payload = json.loads(request.content.decode())
+    user_content = payload["messages"][-1]["content"]
+    news = json.loads(user_content)["news"]
+    title = news["title"]
+    source_url = news.get("source_url")
+    if source_url and source_url in decisions_by_title:
+        return decisions_by_title[source_url]
+    return decisions_by_title.get(
+        title,
+        {
+            "should_use": False,
+            "impact": "neutral",
+            "relevance_score": 0,
+            "connection_strength": "unclear",
+            "affected_factors": [],
+            "summary": "",
+            "reason": "테스트 기본 미사용",
+            "confidence": "low",
+        },
+    )
+
+
+def _news_ai_settings() -> dict[str, str]:
+    return {
+        "argus_news_ai_provider": "openai",
+        "argus_news_ai_base_url": "https://ai.test",
+        "argus_news_ai_chat_path": "/v1/chat/completions",
+        "argus_news_ai_api_key": "test-key",
+        "argus_news_ai_model": "test-model",
+    }
 
 
 def test_context_collection_persists_mock_market_reaction_and_news(tmp_path):
@@ -59,7 +100,25 @@ def test_context_collection_reads_rss_news_triggers(tmp_path):
 </rss>
 """
 
-    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=feed_xml))
+    decisions = {
+        "반도체 강세, 코스피 낙폭 제한": {
+            "should_use": True,
+            "impact": "positive",
+            "relevance_score": 82,
+            "connection_strength": "strong",
+            "affected_factors": ["반도체", "코스피"],
+            "summary": "반도체 강세가 코스피 낙폭을 제한합니다.",
+            "reason": "국내 지수 영향도가 큰 업종 흐름입니다.",
+            "confidence": "high",
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return _ai_decision_response(_decision_for_ai_request(request, decisions))
+        return httpx.Response(200, text=feed_xml)
+
+    transport = httpx.MockTransport(handler)
     client = httpx.Client(transport=transport)
     settings = Settings(
         db_path=db_path,
@@ -68,6 +127,7 @@ def test_context_collection_reads_rss_news_triggers(tmp_path):
         argus_news_triggers_rss_urls="https://example.test/rss",
         argus_news_triggers_query="반도체",
         argus_news_triggers_lookback_hours=24,
+        **_news_ai_settings(),
     )
 
     try:
@@ -120,7 +180,45 @@ def test_context_collection_filters_news_by_market_importance(tmp_path):
 </rss>
 """
 
-    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=feed_xml))
+    decisions = {
+        "연예 소식 모음": {
+            "should_use": False,
+            "impact": "neutral",
+            "relevance_score": 0,
+            "connection_strength": "unclear",
+            "affected_factors": [],
+            "summary": "",
+            "reason": "시장 판단과 무관합니다.",
+            "confidence": "high",
+        },
+        "반도체 강세, 코스피 낙폭 제한": {
+            "should_use": True,
+            "impact": "positive",
+            "relevance_score": 78,
+            "connection_strength": "medium",
+            "affected_factors": ["반도체", "코스피"],
+            "summary": "반도체 강세가 코스피 낙폭을 제한합니다.",
+            "reason": "국내 지수 비중 업종 흐름입니다.",
+            "confidence": "medium",
+        },
+        "FOMC 금리 경계와 환율 상승": {
+            "should_use": True,
+            "impact": "negative",
+            "relevance_score": 92,
+            "connection_strength": "strong",
+            "affected_factors": ["FOMC", "금리", "환율"],
+            "summary": "FOMC 금리 경계와 환율 상승은 위험자산에 부담입니다.",
+            "reason": "한국장 개장 전 매크로 압력입니다.",
+            "confidence": "high",
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return _ai_decision_response(_decision_for_ai_request(request, decisions))
+        return httpx.Response(200, text=feed_xml)
+
+    transport = httpx.MockTransport(handler)
     client = httpx.Client(transport=transport)
     settings = Settings(
         db_path=db_path,
@@ -130,6 +228,7 @@ def test_context_collection_filters_news_by_market_importance(tmp_path):
         argus_news_triggers_query="",
         argus_news_triggers_limit=2,
         argus_news_triggers_lookback_hours=24,
+        **_news_ai_settings(),
     )
 
     try:
@@ -171,10 +270,51 @@ def test_context_collection_filters_news_by_market_importance(tmp_path):
         "반도체 강세, 코스피 낙폭 제한",
     ]
     assert triggers[0]["connection_strength"] == "strong"
-    assert triggers[1]["connection_strength"] == "strong"
+    assert triggers[1]["connection_strength"] == "medium"
     assert "연예 소식 모음" not in {trigger["title"] for trigger in triggers}
     assert '"filtered_count": 2' in latest_run["metadata_json"]
-    assert any("_argus_importance_score" in row["payload_json"] for row in samples)
+    assert any("_argus_ai_relevance_score" in row["payload_json"] for row in samples)
+
+
+def test_context_collection_does_not_keyword_classify_live_news_without_ai(tmp_path):
+    db_path = str(tmp_path / "argus-v2.db")
+    feed_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>테스트 경제 뉴스</title>
+    <item>
+      <title>FOMC 금리 경계와 환율 상승</title>
+      <link>https://example.test/fomc</link>
+      <description>미국 국채금리와 달러 강세가 위험자산에 부담입니다.</description>
+      <pubDate>Tue, 12 May 2026 12:20:00 +0900</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=feed_xml)))
+    settings = Settings(
+        db_path=db_path,
+        argus_market_reaction_provider="disabled",
+        argus_news_triggers_provider="rss",
+        argus_news_triggers_rss_urls="https://example.test/rss",
+        argus_news_triggers_query="금리,환율,FOMC",
+        argus_news_triggers_lookback_hours=24,
+        argus_news_ai_provider="disabled",
+    )
+
+    try:
+        result = run_context_collection(
+            settings=settings,
+            trade_date=date(2026, 5, 12),
+            snapshot_time=datetime(2026, 5, 12, 4, 0, tzinfo=timezone.utc),
+            http_client=client,
+        )
+    finally:
+        client.close()
+
+    assert result.providers[1].status == "success"
+    assert result.providers[1].news_trigger_count == 0
 
 
 def test_context_collection_prefers_quality_news_source_and_filters_market_spam(tmp_path):
@@ -211,7 +351,57 @@ def test_context_collection_prefers_quality_news_source_and_filters_market_spam(
 </rss>
 """
 
-    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=feed_xml))
+    decisions = {
+        "https://blog.naver.com/spam/fomc": {
+            "should_use": False,
+            "impact": "neutral",
+            "relevance_score": 0,
+            "connection_strength": "unclear",
+            "affected_factors": [],
+            "summary": "",
+            "reason": "프로모션성 문맥이라 사용하지 않습니다.",
+            "confidence": "high",
+        },
+        "https://www.reuters.com/markets/rates-fx": {
+            "should_use": True,
+            "impact": "negative",
+            "relevance_score": 92,
+            "connection_strength": "strong",
+            "affected_factors": ["FOMC", "금리", "환율"],
+            "summary": "FOMC 금리 경계와 환율 상승은 위험자산에 부담입니다.",
+            "reason": "신뢰 가능한 원문 기준으로 한국장 매크로 압력입니다.",
+            "confidence": "high",
+        },
+        "반도체 급등주 무료추천": {
+            "should_use": False,
+            "impact": "neutral",
+            "relevance_score": 0,
+            "connection_strength": "unclear",
+            "affected_factors": [],
+            "summary": "",
+            "reason": "프로모션 성격이라 시장 판단에 쓰지 않습니다.",
+            "confidence": "high",
+        },
+        "코스피 수급, 외국인 선물 매도 지속": {
+            "should_use": True,
+            "impact": "negative",
+            "relevance_score": 84,
+            "connection_strength": "strong",
+            "affected_factors": ["외국인 선물", "수급", "코스피"],
+            "summary": "외국인 선물 매도는 장중 지수에 부담입니다.",
+            "reason": "파생 수급과 지수 방향성에 직접 연결됩니다.",
+            "confidence": "high",
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            decision = _decision_for_ai_request(request, decisions)
+            if request.url.host == "ai.test":
+                return _ai_decision_response(decision)
+        return httpx.Response(200, text=feed_xml)
+
+    transport = httpx.MockTransport(handler)
     client = httpx.Client(transport=transport)
     settings = Settings(
         db_path=db_path,
@@ -221,6 +411,7 @@ def test_context_collection_prefers_quality_news_source_and_filters_market_spam(
         argus_news_triggers_query="",
         argus_news_triggers_limit=2,
         argus_news_triggers_lookback_hours=24,
+        **_news_ai_settings(),
     )
 
     try:
@@ -246,7 +437,7 @@ def test_context_collection_prefers_quality_news_source_and_filters_market_spam(
     ]
     assert triggers[0]["source_url"] == "https://www.reuters.com/markets/rates-fx"
     assert "반도체 급등주 무료추천" not in {trigger["title"] for trigger in triggers}
-    assert any("_argus_source_quality_score" in row["payload_json"] for row in samples)
+    assert any("_argus_ai_relevance_score" in row["payload_json"] for row in samples)
 
 
 def test_context_collection_normalizes_macro_events_as_triggers(tmp_path):
@@ -391,8 +582,22 @@ def test_context_collection_reads_kis_market_reaction(tmp_path):
 
 def test_context_collection_reads_naver_news_triggers(tmp_path):
     db_path = str(tmp_path / "argus-v2.db")
+    decisions = {
+        "환율 상승과 반도체 강세": {
+            "should_use": True,
+            "impact": "neutral",
+            "relevance_score": 80,
+            "connection_strength": "strong",
+            "affected_factors": ["환율", "반도체"],
+            "summary": "환율 부담과 반도체 강세가 동시에 관찰됩니다.",
+            "reason": "국내 지수와 대형주 흐름에 연결됩니다.",
+            "confidence": "medium",
+        }
+    }
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return _ai_decision_response(_decision_for_ai_request(request, decisions))
         assert request.headers["X-Naver-Client-Id"] == "naver-id"
         assert request.headers["X-Naver-Client-Secret"] == "naver-secret"
         return httpx.Response(
@@ -419,6 +624,7 @@ def test_context_collection_reads_naver_news_triggers(tmp_path):
         argus_news_naver_client_secret="naver-secret",
         argus_news_naver_display=1,
         argus_news_naver_page_limit=1,
+        **_news_ai_settings(),
     )
 
     try:
@@ -443,8 +649,22 @@ def test_context_collection_reads_naver_news_triggers(tmp_path):
 
 def test_context_collection_reads_dart_disclosure_triggers(tmp_path):
     db_path = str(tmp_path / "argus-v2.db")
+    decisions = {
+        "테스트전자 단일판매ㆍ공급계약체결": {
+            "should_use": True,
+            "impact": "positive",
+            "relevance_score": 76,
+            "connection_strength": "medium",
+            "affected_factors": ["DART", "공급계약"],
+            "summary": "테스트전자 공급계약 공시는 개별 대형주 수급에 우호적입니다.",
+            "reason": "공시 원문 기반의 기업 이벤트입니다.",
+            "confidence": "medium",
+        }
+    }
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return _ai_decision_response(_decision_for_ai_request(request, decisions))
         assert request.url.params["crtfc_key"] == "dart-key"
         assert request.url.params["bgn_de"] == "20260512"
         assert request.url.params["end_de"] == "20260512"
@@ -475,6 +695,7 @@ def test_context_collection_reads_dart_disclosure_triggers(tmp_path):
         argus_disclosure_dart_api_key="dart-key",
         argus_disclosure_dart_corp_cls="Y",
         argus_disclosure_dart_pblntf_ty="I",
+        **_news_ai_settings(),
     )
 
     try:

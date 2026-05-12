@@ -53,6 +53,8 @@ python3 -m src.argus_v2.cli collect-context --news-triggers-provider hybrid
 
 현물 반응은 `mock`, `file`, `kis`, 뉴스 트리거는 `mock`, `file`, `rss`, `naver`, `dart`, `macro`, `hybrid` provider를 지원합니다. KIS 현물 수급은 `ARGUS_MARKET_REACTION_INVESTOR_AMOUNT_MULTIPLIER`로 KRW 정규화합니다. `macro`를 쓰려면 `ARGUS_MACRO_EVENTS_PROVIDER=mock` 또는 `file`을 설정합니다.
 
+실뉴스의 호악재/중요도/연결강도는 키워드 규칙으로 판정하지 않습니다. `ARGUS_NEWS_AI_PROVIDER=openai`, `ARGUS_NEWS_AI_MODEL`, `ARGUS_NEWS_AI_API_KEY`를 설정했을 때만 AI가 반환한 구조화 JSON으로 트리거를 선별합니다. AI가 꺼져 있으면 RSS/Naver/DART 원문은 수집하되 임의 판단으로 노출하지 않습니다.
+
 ## Validation
 
 ```bash

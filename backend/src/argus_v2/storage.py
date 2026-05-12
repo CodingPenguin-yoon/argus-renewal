@@ -676,7 +676,7 @@ class ArgusV2Storage:
         items = [_row_to_dict(row) or {} for row in rows]
         items.sort(
             key=lambda item: (
-                _news_importance_from_sample(item.get("raw_payload_json")),
+                _news_relevance_from_sample(item.get("raw_payload_json")),
                 str(item.get("published_at") or item.get("created_at") or ""),
                 int(item.get("id") or 0),
             ),
@@ -829,7 +829,7 @@ def _redact_sensitive(value: Any) -> Any:
     return ready
 
 
-def _news_importance_from_sample(payload_json: Any) -> int:
+def _news_relevance_from_sample(payload_json: Any) -> int:
     if not isinstance(payload_json, str) or not payload_json:
         return 0
     try:
@@ -838,5 +838,5 @@ def _news_importance_from_sample(payload_json: Any) -> int:
         return 0
     if not isinstance(payload, dict):
         return 0
-    value = payload.get("_argus_importance_score")
+    value = payload.get("_argus_ai_relevance_score")
     return int(value) if isinstance(value, int) else 0

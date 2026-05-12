@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import html
+import json
 import logging
 import re
 import xml.etree.ElementTree as ET
@@ -39,126 +40,8 @@ DEFAULT_DART_BASE_URL = "https://opendart.fss.or.kr"
 DEFAULT_DART_LIST_PATH = "/api/list.json"
 DEFAULT_KIS_TOKEN_CACHE_PATH = "data/kis_token_cache.json"
 KIS_MARKET_REACTION_PROVIDERS = {"kis", "kis_api", "kis_index"}
-
-NEGATIVE_TERMS = (
-    "금리 상승",
-    "금리인상",
-    "긴축",
-    "인플레이션",
-    "물가",
-    "환율 상승",
-    "달러 강세",
-    "급락",
-    "하락",
-    "우려",
-    "침체",
-    "관세",
-    "전쟁",
-    "매도",
-    "유상증자",
-    "감자",
-    "횡령",
-    "소송",
-    "상장폐지",
-    "관리종목",
-)
-POSITIVE_TERMS = (
-    "반도체",
-    "ai",
-    "호실적",
-    "상승",
-    "강세",
-    "금리 인하",
-    "완화",
-    "수주",
-    "공급계약",
-    "자사주",
-    "배당",
-    "회복",
-    "실적 개선",
-)
-
-NEWS_IMPORTANCE_TERMS: tuple[tuple[str, int], ...] = (
-    ("fomc", 6),
-    ("cpi", 6),
-    ("pce", 6),
-    ("금리", 6),
-    ("국채금리", 6),
-    ("환율", 5),
-    ("달러", 5),
-    ("원화", 5),
-    ("미국", 4),
-    ("나스닥", 4),
-    ("s&p", 4),
-    ("다우", 3),
-    ("반도체", 5),
-    ("엔비디아", 5),
-    ("ai", 3),
-    ("코스피", 4),
-    ("코스닥", 4),
-    ("외국인", 5),
-    ("기관", 3),
-    ("선물", 5),
-    ("옵션", 5),
-    ("미결제약정", 5),
-    ("수급", 4),
-    ("유가", 4),
-    ("원유", 4),
-    ("관세", 4),
-    ("정책", 3),
-    ("공급계약", 4),
-    ("자사주", 3),
-    ("실적", 3),
-    ("유상증자", 4),
-    ("감자", 5),
-    ("관리종목", 5),
-    ("상장폐지", 6),
-)
-LOW_SIGNAL_NEWS_TERMS = (
-    "연예",
-    "스포츠",
-    "날씨",
-    "여행",
-    "맛집",
-    "부동산 매물",
-    "로또",
-    "복권",
-    "드라마",
-    "영화",
-    "게임",
-)
-LOW_QUALITY_MARKET_TERMS = (
-    "추천주",
-    "종목추천",
-    "무료추천",
-    "리딩방",
-    "유료방",
-    "급등주",
-    "상한가 따라잡기",
-    "매수 추천",
-    "매도 추천",
-)
-LOW_QUALITY_SOURCE_TERMS = (
-    "blog.naver.com",
-    "cafe.naver.com",
-    "youtube.com",
-    "youtu.be",
-    "instagram.com",
-    "threads.net",
-    "twitter.com",
-    "x.com",
-)
-SOURCE_QUALITY_TERMS: tuple[tuple[str, int], ...] = (
-    ("dart", 5),
-    ("opendart.fss.or.kr", 5),
-    ("reuters", 4),
-    ("bloomberg", 4),
-    ("yna.co.kr", 3),
-    ("mk.co.kr", 3),
-    ("hankyung.com", 3),
-    ("sedaily.com", 2),
-    ("edaily.co.kr", 2),
-)
+DEFAULT_NEWS_AI_BASE_URL = "https://api.openai.com"
+DEFAULT_NEWS_AI_CHAT_PATH = "/v1/chat/completions"
 
 
 @dataclass(frozen=True)
@@ -267,6 +150,12 @@ class ArgusNewsTriggerService:
         naver_search_path: str = DEFAULT_NAVER_NEWS_PATH,
         naver_display: int = 20,
         naver_page_limit: int = 2,
+        news_ai_provider: str = "disabled",
+        news_ai_base_url: str = DEFAULT_NEWS_AI_BASE_URL,
+        news_ai_chat_path: str = DEFAULT_NEWS_AI_CHAT_PATH,
+        news_ai_api_key: str | None = None,
+        news_ai_model: str | None = None,
+        news_ai_timeout_seconds: float | None = None,
         dart_api_key: str | None = None,
         dart_base_url: str = DEFAULT_DART_BASE_URL,
         dart_list_path: str = DEFAULT_DART_LIST_PATH,
@@ -293,6 +182,12 @@ class ArgusNewsTriggerService:
         self.naver_search_path = naver_search_path
         self.naver_display = max(1, min(naver_display, 100))
         self.naver_page_limit = max(1, naver_page_limit)
+        self.news_ai_provider = news_ai_provider.strip().lower()
+        self.news_ai_base_url = news_ai_base_url.rstrip("/")
+        self.news_ai_chat_path = news_ai_chat_path
+        self.news_ai_api_key = (news_ai_api_key or "").strip()
+        self.news_ai_model = (news_ai_model or "").strip()
+        self.news_ai_timeout_seconds = max(1.0, news_ai_timeout_seconds or timeout_seconds)
         self.dart_api_key = (dart_api_key or "").strip()
         self.dart_base_url = dart_base_url.rstrip("/")
         self.dart_list_path = dart_list_path
@@ -386,16 +281,26 @@ class ArgusNewsTriggerService:
         provider: str,
         metadata: dict[str, Any] | None = None,
     ) -> BriefingProviderBatch:
-        ranked = _deduplicate_triggers([_with_importance(record) for record in records])
-        important = [record for record in ranked if _importance_score_from_raw(record) > 0]
-        important.sort(key=lambda item: (_importance_score_from_raw(item), item.published_at or ""), reverse=True)
-        limited = important[: self.limit]
+        enriched = [self._with_ai_enrichment(record) for record in records]
+        ranked = _deduplicate_triggers(enriched)
+        selected = [record for record in ranked if _ai_should_use_from_raw(record)]
+        selected.sort(
+            key=lambda item: (
+                _ai_relevance_score_from_raw(item),
+                _ai_confidence_rank(item),
+                item.published_at or "",
+            ),
+            reverse=True,
+        )
+        limited = selected[: self.limit]
         return BriefingProviderBatch(
             records=limited,
             metadata={
                 "provider": provider,
                 "feed_urls": self.rss_urls if provider in {"rss", "hybrid"} else [],
                 "query_terms": self.query_terms,
+                "semantic_filter": "ai_enrichment",
+                "news_ai_provider": self.news_ai_provider or "disabled",
                 "input_count": len(records),
                 "filtered_count": len(limited),
                 "expected_count": len(limited),
@@ -403,19 +308,119 @@ class ArgusNewsTriggerService:
             },
         )
 
+    def _with_ai_enrichment(self, record: NewsTriggerRecord) -> NewsTriggerRecord:
+        raw_payload = record.raw_payload if isinstance(record.raw_payload, dict) else {}
+        explicit_decision = _extract_news_ai_decision(raw_payload)
+        if explicit_decision is not None:
+            return _apply_news_ai_decision(record=record, decision=explicit_decision, provider="explicit")
+
+        if self.news_ai_provider in {"", "disabled"}:
+            return _apply_news_ai_decision(
+                record=record,
+                decision=_no_news_ai_decision(reason="news_ai_disabled"),
+                provider="disabled",
+            )
+
+        if self.news_ai_provider in {"openai", "openai_compatible"}:
+            try:
+                return _apply_news_ai_decision(
+                    record=record,
+                    decision=self._request_news_ai_decision(record),
+                    provider=self.news_ai_provider,
+                )
+            except Exception as error:
+                logger.warning("news_ai_enrichment_failed title=%r error=%s", record.title, error)
+                return _apply_news_ai_decision(
+                    record=record,
+                    decision=_no_news_ai_decision(reason=f"news_ai_error:{error.__class__.__name__}"),
+                    provider=self.news_ai_provider,
+                )
+
+        return _apply_news_ai_decision(
+            record=record,
+            decision=_no_news_ai_decision(reason=f"unsupported_news_ai_provider:{self.news_ai_provider}"),
+            provider=self.news_ai_provider or "disabled",
+        )
+
+    def _request_news_ai_decision(self, record: NewsTriggerRecord) -> dict[str, Any]:
+        if not self.news_ai_api_key:
+            raise ValueError("missing_news_ai_api_key")
+        if not self.news_ai_model:
+            raise ValueError("missing_news_ai_model")
+
+        url = f"{self.news_ai_base_url}{self.news_ai_chat_path}"
+        headers = {
+            "Authorization": f"Bearer {self.news_ai_api_key}",
+            "Content-Type": "application/json",
+        }
+        request_payload = {
+            "model": self.news_ai_model,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You classify Korean market news for a KOSPI/KOSDAQ derivatives dashboard. "
+                        "Return JSON only. Do not recommend trades."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "task": (
+                                "Decide whether this item should affect today's Korean index/options market read. "
+                                "Use source credibility, macro/index relevance, derivative relevance, and actual market linkage. "
+                                "Ignore promotions, stock-picking content, entertainment, and weakly related items."
+                            ),
+                            "output_schema": {
+                                "should_use": "boolean",
+                                "impact": "positive|neutral|negative",
+                                "relevance_score": "integer 0-100",
+                                "connection_strength": "strong|medium|weak|unclear",
+                                "affected_factors": "array of short strings",
+                                "summary": "short Korean summary for dashboard",
+                                "reason": "short Korean reason",
+                                "confidence": "high|medium|low",
+                            },
+                            "news": {
+                                "title": record.title,
+                                "summary": record.summary,
+                                "source": record.source,
+                                "source_url": record.source_url,
+                                "published_at": record.published_at,
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        }
+        payload = self._post_json(url=url, headers=headers, payload=request_payload)
+        return _parse_news_ai_response(payload)
+
+    def _post_json(self, *, url: str, headers: dict[str, str], payload: dict[str, Any]) -> Any:
+        if self._http_client is not None:
+            response = self._http_client.post(url, headers=headers, json=payload, timeout=self.news_ai_timeout_seconds)
+        else:
+            with httpx.Client() as client:
+                response = client.post(url, headers=headers, json=payload, timeout=self.news_ai_timeout_seconds)
+        response.raise_for_status()
+        return response.json()
+
     def _normalize_file_row(self, *, row: dict[str, Any], index: int, snapshot_time: datetime) -> NewsTriggerRecord:
         title = pick_text(row, ("title", "headline")) or f"뉴스 트리거 {index + 1}"
         summary = pick_text(row, ("summary", "description", "memo")) or ""
         published_at = pick_text(row, ("published_at", "pub_date", "observed_at")) or _snapshot_iso(snapshot_time)
-        impact = pick_text(row, ("impact", "tone")) or _classify_impact(f"{title} {summary}")
         return NewsTriggerRecord(
             id=pick_text(row, ("id", "external_id", "source_record_id")) or _stable_trigger_id(title=title, published_at=published_at),
             title=title,
             summary=summary,
-            impact=_valid_impact(impact),
+            impact=_valid_impact(pick_text(row, ("impact", "tone")) or "neutral"),
             source=pick_text(row, ("source", "source_name", "publisher")) or "argus_v2.news_trigger_file",
             published_at=published_at,
-            connection_strength=_valid_connection_strength(pick_text(row, ("connection_strength", "strength")) or _connection_strength(title, summary)),
+            connection_strength=_valid_connection_strength(pick_text(row, ("connection_strength", "strength")) or "unclear"),
             freshness=pick_text(row, ("freshness", "freshness_state")) or "partial",
             source_url=pick_text(row, ("source_url", "url", "link")),
             raw_payload=row,
@@ -432,8 +437,6 @@ class ArgusNewsTriggerService:
                     continue
                 published_at = _parse_iso(record.published_at)
                 if published_at is not None and published_at < cutoff:
-                    continue
-                if self.query_terms and not _matches_any_term(record, self.query_terms):
                     continue
                 records.append(record)
 
@@ -465,7 +468,7 @@ class ArgusNewsTriggerService:
                     records.append(record)
                 if len(rows) < self.naver_display:
                     break
-        return _deduplicate_triggers(records)
+        return records
 
     def _request_naver_page(self, *, query: str, start: int) -> dict[str, Any]:
         url = f"{self.naver_base_url}{self.naver_search_path}"
@@ -496,10 +499,10 @@ class ArgusNewsTriggerService:
             id=_stable_trigger_id(title=title or f"naver-{index}", published_at=published_value or link or query),
             title=title or link or f"Naver news {index + 1}",
             summary=summary,
-            impact=_classify_impact(f"{title} {summary}"),
+            impact="neutral",
             source=_source_from_url(link or "naver.com"),
             published_at=published_value,
-            connection_strength=_connection_strength(title, summary),
+            connection_strength="unclear",
             freshness="fresh",
             source_url=link,
             raw_payload={
@@ -533,7 +536,7 @@ class ArgusNewsTriggerService:
                 for row in rows:
                     if isinstance(row, dict):
                         records.append(self._dart_row_to_record(row=row))
-        return _deduplicate_triggers(records)
+        return records
 
     def _fetch_macro_records(self, *, trade_date: date, snapshot_time: datetime) -> list[NewsTriggerRecord]:
         enabled, _ = self._macro_events_enabled()
@@ -565,10 +568,10 @@ class ArgusNewsTriggerService:
             id=pick_text(row, ("id", "external_id", "source_record_id")) or _stable_trigger_id(title=title, published_at=observed_at),
             title=title,
             summary=summary,
-            impact=_valid_impact(pick_text(row, ("impact", "tone")) or _classify_impact(f"{title} {summary}")),
+            impact=_valid_impact(pick_text(row, ("impact", "tone")) or "neutral"),
             source=pick_text(row, ("source", "source_name")) or "ARGUS_MACRO_EVENT",
             published_at=observed_at,
-            connection_strength=_valid_connection_strength(pick_text(row, ("connection_strength", "strength")) or _connection_strength(title, summary)),
+            connection_strength=_valid_connection_strength(pick_text(row, ("connection_strength", "strength")) or "unclear"),
             freshness=pick_text(row, ("freshness", "freshness_state")) or "fresh",
             source_url=pick_text(row, ("source_url", "url")),
             raw_payload=row,
@@ -613,10 +616,10 @@ class ArgusNewsTriggerService:
             id=f"dart-{receipt_no}",
             title=title,
             summary=summary,
-            impact=_classify_impact(title),
+            impact="neutral",
             source="DART",
             published_at=published_at,
-            connection_strength=_connection_strength(title, summary),
+            connection_strength="unclear",
             freshness="fresh",
             source_url=viewer_url,
             raw_payload={
@@ -692,17 +695,16 @@ class ArgusNewsTriggerService:
         published_at = _parse_rss_date(item.findtext("pubDate"))
         if not title and not link:
             return None
-        impact = _classify_impact(f"{title} {summary}")
         source = _strip_html(feed_title) or _source_from_url(link or feed_url)
         published_value = _snapshot_iso(published_at) if published_at is not None else None
         return NewsTriggerRecord(
             id=_stable_trigger_id(title=title, published_at=published_value or link or feed_url),
             title=title or link,
             summary=summary,
-            impact=impact,
+            impact="neutral",
             source=source,
             published_at=published_value,
-            connection_strength=_connection_strength(title, summary),
+            connection_strength="unclear",
             freshness="fresh",
             source_url=link or feed_url,
             raw_payload={
@@ -860,6 +862,12 @@ def _fetch_and_store_news_triggers(
             naver_search_path=settings.argus_news_naver_search_path,
             naver_display=settings.argus_news_naver_display,
             naver_page_limit=settings.argus_news_naver_page_limit,
+            news_ai_provider=settings.argus_news_ai_provider,
+            news_ai_base_url=settings.argus_news_ai_base_url,
+            news_ai_chat_path=settings.argus_news_ai_chat_path,
+            news_ai_api_key=settings.argus_news_ai_api_key,
+            news_ai_model=settings.argus_news_ai_model,
+            news_ai_timeout_seconds=settings.argus_news_ai_timeout_seconds,
             dart_api_key=settings.argus_disclosure_dart_api_key,
             dart_base_url=settings.argus_disclosure_dart_base_url,
             dart_list_path=settings.argus_disclosure_dart_list_path,
@@ -977,7 +985,18 @@ def _mock_news_triggers(*, snapshot_time: str) -> list[NewsTriggerRecord]:
             published_at=snapshot_time,
             connection_strength="medium",
             freshness="partial",
-            raw_payload={"provider": "mock"},
+            raw_payload={
+                "provider": "mock",
+                "ai_enrichment": {
+                    "should_use": True,
+                    "impact": "negative",
+                    "relevance_score": 80,
+                    "connection_strength": "medium",
+                    "summary": "미국 금리 상승은 위험자산과 원화에 부담입니다.",
+                    "reason": "한국장 개장 전 지수와 성장주 심리에 직접 연결됩니다.",
+                    "confidence": "medium",
+                },
+            },
         ),
         NewsTriggerRecord(
             id="mock-chip",
@@ -988,7 +1007,18 @@ def _mock_news_triggers(*, snapshot_time: str) -> list[NewsTriggerRecord]:
             published_at=snapshot_time,
             connection_strength="medium",
             freshness="partial",
-            raw_payload={"provider": "mock"},
+            raw_payload={
+                "provider": "mock",
+                "ai_enrichment": {
+                    "should_use": True,
+                    "impact": "positive",
+                    "relevance_score": 72,
+                    "connection_strength": "medium",
+                    "summary": "반도체 상대 강세가 지수 하방 압력을 일부 상쇄합니다.",
+                    "reason": "국내 지수 영향도가 큰 업종 흐름입니다.",
+                    "confidence": "medium",
+                },
+            },
         ),
     ]
 
@@ -1004,7 +1034,19 @@ def _mock_macro_triggers(*, snapshot_time: str) -> list[NewsTriggerRecord]:
             published_at=snapshot_time,
             connection_strength="strong",
             freshness="partial",
-            raw_payload={"provider": "mock_macro", "event_type": "rates"},
+            raw_payload={
+                "provider": "mock_macro",
+                "event_type": "rates",
+                "ai_enrichment": {
+                    "should_use": True,
+                    "impact": "negative",
+                    "relevance_score": 88,
+                    "connection_strength": "strong",
+                    "summary": "미국 10년물 금리 상승은 성장주와 원화에 부담입니다.",
+                    "reason": "해외 금리 변화는 한국장 선물·현물 위험선호에 직접 연결됩니다.",
+                    "confidence": "high",
+                },
+            },
         ),
         NewsTriggerRecord(
             id="mock-macro-us-tech",
@@ -1015,7 +1057,19 @@ def _mock_macro_triggers(*, snapshot_time: str) -> list[NewsTriggerRecord]:
             published_at=snapshot_time,
             connection_strength="medium",
             freshness="partial",
-            raw_payload={"provider": "mock_macro", "event_type": "us_equity"},
+            raw_payload={
+                "provider": "mock_macro",
+                "event_type": "us_equity",
+                "ai_enrichment": {
+                    "should_use": True,
+                    "impact": "positive",
+                    "relevance_score": 74,
+                    "connection_strength": "medium",
+                    "summary": "나스닥 반도체 강세는 국내 반도체 대형주에 우호적입니다.",
+                    "reason": "국내 지수 비중 업종의 해외 선행 흐름입니다.",
+                    "confidence": "medium",
+                },
+            },
         ),
     ]
 
@@ -1088,101 +1142,159 @@ def _sector_records(payload: Any, *, role: str, observed_at: str, source: str) -
     return records
 
 
-def _classify_impact(text: str) -> str:
-    lower_text = text.casefold()
-    positive_score = sum(1 for term in POSITIVE_TERMS if term.casefold() in lower_text)
-    negative_score = sum(1 for term in NEGATIVE_TERMS if term.casefold() in lower_text)
-    if positive_score > negative_score:
-        return "positive"
-    if negative_score > positive_score:
-        return "negative"
-    return "neutral"
+def _extract_news_ai_decision(raw_payload: dict[str, Any]) -> dict[str, Any] | None:
+    for key in ("ai_enrichment", "argus_ai_enrichment", "_argus_ai"):
+        value = raw_payload.get(key)
+        if isinstance(value, dict):
+            return value
+
+    explicit_keys = {
+        "should_use",
+        "relevance_score",
+        "importance_score",
+        "impact",
+        "tone",
+        "connection_strength",
+        "strength",
+        "ai_summary",
+        "ai_reason",
+        "confidence",
+    }
+    if not any(key in raw_payload for key in explicit_keys):
+        return None
+
+    return {
+        "should_use": raw_payload.get("should_use"),
+        "impact": raw_payload.get("impact") or raw_payload.get("tone"),
+        "relevance_score": raw_payload.get("relevance_score") or raw_payload.get("importance_score"),
+        "connection_strength": raw_payload.get("connection_strength") or raw_payload.get("strength"),
+        "affected_factors": raw_payload.get("affected_factors") or raw_payload.get("factors") or [],
+        "summary": raw_payload.get("ai_summary") or raw_payload.get("summary"),
+        "reason": raw_payload.get("ai_reason") or raw_payload.get("reason") or raw_payload.get("memo"),
+        "confidence": raw_payload.get("confidence"),
+    }
 
 
-def _connection_strength(title: str, summary: str) -> str:
-    text = f"{title} {summary}".casefold()
-    score = sum(1 for term in (*POSITIVE_TERMS, *NEGATIVE_TERMS) if term.casefold() in text)
-    if score >= 3:
-        return "strong"
-    if score >= 1:
-        return "medium"
-    return "weak"
+def _parse_news_ai_response(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("news_ai_response_invalid")
+
+    content: str | None = None
+    if isinstance(payload.get("output_text"), str):
+        content = payload["output_text"]
+    else:
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices:
+            first_choice = choices[0]
+            if isinstance(first_choice, dict):
+                message = first_choice.get("message")
+                if isinstance(message, dict) and isinstance(message.get("content"), str):
+                    content = message["content"]
+
+    if not content:
+        raise ValueError("news_ai_content_missing")
+
+    try:
+        decision = json.loads(content)
+    except json.JSONDecodeError as error:
+        raise ValueError("news_ai_json_invalid") from error
+
+    if not isinstance(decision, dict):
+        raise ValueError("news_ai_json_not_object")
+    return decision
 
 
-def _with_importance(record: NewsTriggerRecord) -> NewsTriggerRecord:
-    score, matched_terms = _news_importance(record)
+def _apply_news_ai_decision(*, record: NewsTriggerRecord, decision: dict[str, Any], provider: str) -> NewsTriggerRecord:
+    normalized = _normalize_news_ai_decision(decision)
     raw_payload = record.raw_payload if isinstance(record.raw_payload, dict) else {}
     enriched_raw_payload = {
         **raw_payload,
-        "_argus_importance_score": score,
-        "_argus_importance_terms": matched_terms,
-        "_argus_source_quality_score": _source_quality_score(record),
+        "_argus_ai": {
+            "provider": provider,
+            "should_use": normalized["should_use"],
+            "impact": normalized["impact"],
+            "relevance_score": normalized["relevance_score"],
+            "connection_strength": normalized["connection_strength"],
+            "affected_factors": normalized["affected_factors"],
+            "summary": normalized["summary"],
+            "reason": normalized["reason"],
+            "confidence": normalized["confidence"],
+        },
+        "_argus_ai_provider": provider,
+        "_argus_ai_should_use": normalized["should_use"],
+        "_argus_ai_relevance_score": normalized["relevance_score"],
+        "_argus_ai_confidence": normalized["confidence"],
     }
     return replace(
         record,
-        connection_strength=_strength_from_importance(score),
+        summary=normalized["summary"] or record.summary,
+        impact=normalized["impact"] if normalized["should_use"] else "neutral",
+        connection_strength=normalized["connection_strength"] if normalized["should_use"] else "unclear",
         raw_payload=enriched_raw_payload,
     )
 
 
-def _news_importance(record: NewsTriggerRecord) -> tuple[int, list[str]]:
-    text = f"{record.title} {record.summary} {record.source}".casefold()
-    source_text = f"{record.source} {record.source_url or ''}".casefold()
-    score = 0
-    matched_terms: list[str] = []
-    for term, weight in NEWS_IMPORTANCE_TERMS:
-        if term.casefold() in text:
-            score += weight
-            matched_terms.append(term)
+def _normalize_news_ai_decision(decision: dict[str, Any]) -> dict[str, Any]:
+    score = _bounded_int(decision.get("relevance_score"), minimum=0, maximum=100)
+    explicit_should_use = _as_bool(decision.get("should_use"))
+    should_use = explicit_should_use if explicit_should_use is not None else score > 0
+    if not should_use:
+        score = 0
 
-    source_quality = _source_quality_score(record)
-    if source_quality > 0:
-        score += source_quality
-        matched_terms.append("source_quality")
+    connection_strength = _valid_connection_strength(_as_text(decision.get("connection_strength")) or "")
+    if connection_strength == "unclear" and score > 0:
+        connection_strength = _strength_from_relevance(score)
 
-    penalty_terms = [
-        term
-        for term in (*LOW_SIGNAL_NEWS_TERMS, *LOW_QUALITY_MARKET_TERMS)
-        if term.casefold() in text
-    ]
-    if penalty_terms:
-        score -= 6 * len(penalty_terms)
-        matched_terms.extend(penalty_terms[:3])
-
-    if any(term.casefold() in source_text for term in LOW_QUALITY_SOURCE_TERMS):
-        score -= 4
-        matched_terms.append("low_quality_source")
-
-    return max(score, 0), matched_terms[:8]
+    return {
+        "should_use": should_use,
+        "impact": _valid_impact(_as_text(decision.get("impact")) or "neutral"),
+        "relevance_score": score,
+        "connection_strength": connection_strength,
+        "affected_factors": _as_text_list(decision.get("affected_factors"), limit=6),
+        "summary": _as_text(decision.get("summary")) or "",
+        "reason": _as_text(decision.get("reason")) or "",
+        "confidence": _valid_confidence(_as_text(decision.get("confidence")) or "low"),
+    }
 
 
-def _strength_from_importance(score: int) -> str:
-    if score >= 10:
+def _no_news_ai_decision(*, reason: str) -> dict[str, Any]:
+    return {
+        "should_use": False,
+        "impact": "neutral",
+        "relevance_score": 0,
+        "connection_strength": "unclear",
+        "affected_factors": [],
+        "summary": "",
+        "reason": reason,
+        "confidence": "low",
+    }
+
+
+def _ai_should_use_from_raw(record: NewsTriggerRecord) -> bool:
+    raw_payload = record.raw_payload if isinstance(record.raw_payload, dict) else {}
+    return bool(raw_payload.get("_argus_ai_should_use"))
+
+
+def _ai_relevance_score_from_raw(record: NewsTriggerRecord) -> int:
+    raw_payload = record.raw_payload if isinstance(record.raw_payload, dict) else {}
+    value = raw_payload.get("_argus_ai_relevance_score")
+    return int(value) if isinstance(value, int) else 0
+
+
+def _ai_confidence_rank(record: NewsTriggerRecord) -> int:
+    raw_payload = record.raw_payload if isinstance(record.raw_payload, dict) else {}
+    value = _as_text(raw_payload.get("_argus_ai_confidence")) or "low"
+    return {"high": 3, "medium": 2, "low": 1}.get(value, 0)
+
+
+def _strength_from_relevance(score: int) -> str:
+    if score >= 80:
         return "strong"
-    if score >= 5:
+    if score >= 45:
         return "medium"
     if score > 0:
         return "weak"
     return "unclear"
-
-
-def _importance_score_from_raw(record: NewsTriggerRecord) -> int:
-    raw_payload = record.raw_payload if isinstance(record.raw_payload, dict) else {}
-    value = raw_payload.get("_argus_importance_score")
-    return int(value) if isinstance(value, int) else 0
-
-
-def _source_quality_score(record: NewsTriggerRecord) -> int:
-    source_text = f"{record.source} {record.source_url or ''}".casefold()
-    return max(
-        (weight for term, weight in SOURCE_QUALITY_TERMS if term.casefold() in source_text),
-        default=0,
-    )
-
-
-def _matches_any_term(record: NewsTriggerRecord, terms: list[str]) -> bool:
-    text = f"{record.title} {record.summary}".casefold()
-    return any(term.casefold() in text for term in terms)
 
 
 def _deduplicate_triggers(records: list[NewsTriggerRecord]) -> list[NewsTriggerRecord]:
@@ -1206,8 +1318,8 @@ def _trigger_dedupe_key(record: NewsTriggerRecord) -> str:
 
 def _trigger_rank(record: NewsTriggerRecord) -> tuple[int, int, str]:
     return (
-        _importance_score_from_raw(record),
-        _source_quality_score(record),
+        _ai_relevance_score_from_raw(record),
+        _ai_confidence_rank(record),
         record.published_at or "",
     )
 
@@ -1235,6 +1347,40 @@ def _valid_connection_strength(value: str) -> str:
     if normalized in {"strong", "medium", "weak", "unclear"}:
         return normalized
     return "unclear"
+
+
+def _valid_confidence(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {"high", "medium", "low"}:
+        return normalized
+    return "low"
+
+
+def _bounded_int(value: Any, *, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return minimum
+    return max(minimum, min(maximum, parsed))
+
+
+def _as_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y"}:
+            return True
+        if normalized in {"false", "0", "no", "n"}:
+            return False
+    return None
+
+
+def _as_text_list(value: Any, *, limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items = [_as_text(item) for item in value]
+    return [item for item in items if item][:limit]
 
 
 def _stable_trigger_id(*, title: str, published_at: str) -> str:
