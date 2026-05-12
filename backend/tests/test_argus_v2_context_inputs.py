@@ -177,6 +177,78 @@ def test_context_collection_filters_news_by_market_importance(tmp_path):
     assert any("_argus_importance_score" in row["payload_json"] for row in samples)
 
 
+def test_context_collection_prefers_quality_news_source_and_filters_market_spam(tmp_path):
+    db_path = str(tmp_path / "argus-v2.db")
+    feed_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>테스트 경제 뉴스</title>
+    <item>
+      <title>FOMC 금리 경계와 환율 상승</title>
+      <link>https://blog.naver.com/spam/fomc</link>
+      <description>무료추천 리딩방에서 달러 강세 대응 종목을 소개합니다.</description>
+      <pubDate>Tue, 12 May 2026 12:50:00 +0900</pubDate>
+    </item>
+    <item>
+      <title>FOMC 금리 경계와 환율 상승</title>
+      <link>https://www.reuters.com/markets/rates-fx</link>
+      <description>미국 국채금리와 달러 강세가 위험자산에 부담입니다.</description>
+      <pubDate>Tue, 12 May 2026 12:20:00 +0900</pubDate>
+    </item>
+    <item>
+      <title>반도체 급등주 무료추천</title>
+      <link>https://example.test/promo</link>
+      <description>리딩방에서 반도체 종목추천을 제공합니다.</description>
+      <pubDate>Tue, 12 May 2026 12:15:00 +0900</pubDate>
+    </item>
+    <item>
+      <title>코스피 수급, 외국인 선물 매도 지속</title>
+      <link>https://www.mk.co.kr/news/market/flow</link>
+      <description>외국인 선물 매도와 기관 수급이 장중 지수에 부담입니다.</description>
+      <pubDate>Tue, 12 May 2026 12:10:00 +0900</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=feed_xml))
+    client = httpx.Client(transport=transport)
+    settings = Settings(
+        db_path=db_path,
+        argus_market_reaction_provider="disabled",
+        argus_news_triggers_provider="rss",
+        argus_news_triggers_rss_urls="https://example.test/rss",
+        argus_news_triggers_query="",
+        argus_news_triggers_limit=2,
+        argus_news_triggers_lookback_hours=24,
+    )
+
+    try:
+        result = run_context_collection(
+            settings=settings,
+            trade_date=date(2026, 5, 12),
+            snapshot_time=datetime(2026, 5, 12, 4, 0, tzinfo=timezone.utc),
+            http_client=client,
+        )
+    finally:
+        client.close()
+
+    assert result.providers[1].status == "success"
+    assert result.providers[1].news_trigger_count == 2
+
+    with get_connection(db_path) as connection:
+        triggers = ArgusV2Storage(connection).get_latest_news_triggers(limit=3)
+        samples = connection.execute("SELECT payload_json FROM argus_v2_provider_samples").fetchall()
+
+    assert [trigger["title"] for trigger in triggers] == [
+        "FOMC 금리 경계와 환율 상승",
+        "코스피 수급, 외국인 선물 매도 지속",
+    ]
+    assert triggers[0]["source_url"] == "https://www.reuters.com/markets/rates-fx"
+    assert "반도체 급등주 무료추천" not in {trigger["title"] for trigger in triggers}
+    assert any("_argus_source_quality_score" in row["payload_json"] for row in samples)
+
+
 def test_context_collection_normalizes_macro_events_as_triggers(tmp_path):
     db_path = str(tmp_path / "argus-v2.db")
     settings = Settings(

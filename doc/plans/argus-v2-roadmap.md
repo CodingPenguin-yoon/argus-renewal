@@ -75,7 +75,8 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 - 완료: mock/file/rss/naver/dart/hybrid provider와 `collect-context` CLI 연결
 - 완료: 금리, 환율, 반도체, 미국 지수, 수급, 옵션, 공시 키워드 기반 중요도 필터
 - 완료: dashboard 뉴스 trigger 중요도순 정렬
-- 남음: 뉴스 source 품질 기준 운영 보정
+- 완료: source 품질 가점, 리딩방/추천주성 키워드 감점, 같은 제목 중복 시 품질 높은 원문 우선
+- 남음: 실제 운영 로그 기준 source 품질 추가 보정
 - 완료: macro event를 news trigger 계약으로 normalize하는 `macro` provider
 - 남음: connection strength 산정 기준 운영 보정
 
@@ -137,7 +138,9 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 - 완료: 제목/요약 중복을 제거합니다.
 - 완료: `connection_strength`를 중요도 점수 기준으로 계산합니다.
 - 완료: dashboard에는 상위 trigger만 노출합니다.
-- 남음: 실제 운영 로그를 보며 source 품질과 감점 키워드를 보정합니다.
+- 완료: 리딩방/추천주성 노이즈를 감점합니다.
+- 완료: 신뢰 source 가점과 제목 중복 시 우선순위 보정을 적용합니다.
+- 남음: 실제 운영 로그를 보며 source 품질과 감점 키워드를 추가 보정합니다.
 
 ### 3. 매크로 이벤트 normalize
 

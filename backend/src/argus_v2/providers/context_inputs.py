@@ -121,14 +121,43 @@ LOW_SIGNAL_NEWS_TERMS = (
     "여행",
     "맛집",
     "부동산 매물",
+    "로또",
+    "복권",
+    "드라마",
+    "영화",
+    "게임",
 )
-HIGH_QUALITY_SOURCES = (
-    "dart",
-    "mk.co.kr",
-    "hankyung.com",
-    "yna.co.kr",
-    "reuters",
-    "bloomberg",
+LOW_QUALITY_MARKET_TERMS = (
+    "추천주",
+    "종목추천",
+    "무료추천",
+    "리딩방",
+    "유료방",
+    "급등주",
+    "상한가 따라잡기",
+    "매수 추천",
+    "매도 추천",
+)
+LOW_QUALITY_SOURCE_TERMS = (
+    "blog.naver.com",
+    "cafe.naver.com",
+    "youtube.com",
+    "youtu.be",
+    "instagram.com",
+    "threads.net",
+    "twitter.com",
+    "x.com",
+)
+SOURCE_QUALITY_TERMS: tuple[tuple[str, int], ...] = (
+    ("dart", 5),
+    ("opendart.fss.or.kr", 5),
+    ("reuters", 4),
+    ("bloomberg", 4),
+    ("yna.co.kr", 3),
+    ("mk.co.kr", 3),
+    ("hankyung.com", 3),
+    ("sedaily.com", 2),
+    ("edaily.co.kr", 2),
 )
 
 
@@ -312,7 +341,7 @@ class ArgusNewsTriggerService:
             if self.dart_api_key:
                 records.extend(self._fetch_dart_records(trade_date=trade_date))
             records.extend(self._fetch_macro_records(trade_date=trade_date, snapshot_time=snapshot_at))
-            return self._records_batch(records=_deduplicate_triggers(records), provider="hybrid")
+            return self._records_batch(records=records, provider="hybrid")
 
         records = self._fetch_rss_records(snapshot_time=snapshot_at)
         return self._records_batch(records=records, provider="rss")
@@ -357,7 +386,7 @@ class ArgusNewsTriggerService:
         provider: str,
         metadata: dict[str, Any] | None = None,
     ) -> BriefingProviderBatch:
-        ranked = [_with_importance(record) for record in records]
+        ranked = _deduplicate_triggers([_with_importance(record) for record in records])
         important = [record for record in ranked if _importance_score_from_raw(record) > 0]
         important.sort(key=lambda item: (_importance_score_from_raw(item), item.published_at or ""), reverse=True)
         limited = important[: self.limit]
@@ -1087,6 +1116,7 @@ def _with_importance(record: NewsTriggerRecord) -> NewsTriggerRecord:
         **raw_payload,
         "_argus_importance_score": score,
         "_argus_importance_terms": matched_terms,
+        "_argus_source_quality_score": _source_quality_score(record),
     }
     return replace(
         record,
@@ -1097,6 +1127,7 @@ def _with_importance(record: NewsTriggerRecord) -> NewsTriggerRecord:
 
 def _news_importance(record: NewsTriggerRecord) -> tuple[int, list[str]]:
     text = f"{record.title} {record.summary} {record.source}".casefold()
+    source_text = f"{record.source} {record.source_url or ''}".casefold()
     score = 0
     matched_terms: list[str] = []
     for term, weight in NEWS_IMPORTANCE_TERMS:
@@ -1104,16 +1135,23 @@ def _news_importance(record: NewsTriggerRecord) -> tuple[int, list[str]]:
             score += weight
             matched_terms.append(term)
 
-    if record.source_url:
-        source_text = f"{record.source} {record.source_url}".casefold()
-        if any(source.casefold() in source_text for source in HIGH_QUALITY_SOURCES):
-            score += 2
+    source_quality = _source_quality_score(record)
+    if source_quality > 0:
+        score += source_quality
+        matched_terms.append("source_quality")
 
-    if record.source.casefold() == "dart":
-        score += 3
+    penalty_terms = [
+        term
+        for term in (*LOW_SIGNAL_NEWS_TERMS, *LOW_QUALITY_MARKET_TERMS)
+        if term.casefold() in text
+    ]
+    if penalty_terms:
+        score -= 6 * len(penalty_terms)
+        matched_terms.extend(penalty_terms[:3])
 
-    if any(term.casefold() in text for term in LOW_SIGNAL_NEWS_TERMS):
-        score -= 5
+    if any(term.casefold() in source_text for term in LOW_QUALITY_SOURCE_TERMS):
+        score -= 4
+        matched_terms.append("low_quality_source")
 
     return max(score, 0), matched_terms[:8]
 
@@ -1134,21 +1172,49 @@ def _importance_score_from_raw(record: NewsTriggerRecord) -> int:
     return int(value) if isinstance(value, int) else 0
 
 
+def _source_quality_score(record: NewsTriggerRecord) -> int:
+    source_text = f"{record.source} {record.source_url or ''}".casefold()
+    return max(
+        (weight for term, weight in SOURCE_QUALITY_TERMS if term.casefold() in source_text),
+        default=0,
+    )
+
+
 def _matches_any_term(record: NewsTriggerRecord, terms: list[str]) -> bool:
     text = f"{record.title} {record.summary}".casefold()
     return any(term.casefold() in text for term in terms)
 
 
 def _deduplicate_triggers(records: list[NewsTriggerRecord]) -> list[NewsTriggerRecord]:
-    seen: set[str] = set()
-    deduped: list[NewsTriggerRecord] = []
+    best_by_key: dict[str, NewsTriggerRecord] = {}
     for record in records:
-        key = (record.source_url or record.id or record.title).casefold()
-        if key in seen:
+        key = _trigger_dedupe_key(record)
+        current = best_by_key.get(key)
+        if current is not None and _trigger_rank(current) >= _trigger_rank(record):
             continue
-        seen.add(key)
-        deduped.append(record)
-    return deduped
+        best_by_key[key] = record
+    return list(best_by_key.values())
+
+
+def _trigger_dedupe_key(record: NewsTriggerRecord) -> str:
+    title_key = _normalize_dedupe_text(record.title)
+    date_key = (record.published_at or "")[:10]
+    if title_key:
+        return f"title:{title_key}:{date_key}"
+    return f"source:{(record.source_url or record.id or '').casefold()}"
+
+
+def _trigger_rank(record: NewsTriggerRecord) -> tuple[int, int, str]:
+    return (
+        _importance_score_from_raw(record),
+        _source_quality_score(record),
+        record.published_at or "",
+    )
+
+
+def _normalize_dedupe_text(value: str) -> str:
+    normalized = re.sub(r"\[[^\]]+\]|\([^\)]+\)", " ", value.casefold())
+    return re.sub(r"[^0-9a-z가-힣]+", "", normalized)
 
 
 def _split_csv(value: str | None) -> list[str]:
