@@ -348,7 +348,8 @@ class ArgusNewsTriggerService:
         provider: str,
         metadata: dict[str, Any] | None = None,
     ) -> BriefingProviderBatch:
-        enriched = [self._with_ai_enrichment(record) for record in records]
+        candidates = self._ai_candidate_records(records=records, provider=provider)
+        enriched = [self._with_ai_enrichment(record) for record in candidates]
         ranked = _deduplicate_triggers(enriched)
         selected = [record for record in ranked if _ai_should_use_from_raw(record)]
         selected.sort(
@@ -369,6 +370,7 @@ class ArgusNewsTriggerService:
                 "semantic_filter": "ai_enrichment",
                 "news_ai_provider": self.news_ai_provider or "disabled",
                 "input_count": len(records),
+                "ai_candidate_count": len(candidates),
                 "ai_enriched_count": len(enriched),
                 "ai_selected_count": len(selected),
                 "ai_error_count": sum(1 for record in enriched if _ai_reason_from_raw(record).startswith("news_ai_error:")),
@@ -378,6 +380,19 @@ class ArgusNewsTriggerService:
                 **(metadata or {}),
             },
         )
+
+    def _ai_candidate_records(self, *, records: list[NewsTriggerRecord], provider: str) -> list[NewsTriggerRecord]:
+        ranked = list(records)
+        ranked.sort(key=lambda record: record.published_at or "", reverse=True)
+
+        if provider in {"rss", "hybrid", "naver"} and self.query_terms:
+            matched = [record for record in ranked if _record_matches_query_terms(record=record, query_terms=self.query_terms)]
+            if matched:
+                ranked = matched
+
+        candidate_multiplier = 2 if self.query_terms else 3
+        candidate_limit = min(max(self.limit * candidate_multiplier, self.limit), 12)
+        return ranked[:candidate_limit]
 
     def _with_ai_enrichment(self, record: NewsTriggerRecord) -> NewsTriggerRecord:
         raw_payload = record.raw_payload if isinstance(record.raw_payload, dict) else {}
@@ -881,8 +896,8 @@ def run_news_ai_smoke(
     settings: Settings,
     title: str = "FOMC 금리 경계와 환율 상승",
     summary: str = "미국 국채금리와 달러 강세가 위험자산에 부담입니다.",
-    source: str = "argus.smoke.news",
-    source_url: str = "https://example.test/news-ai-smoke",
+    source: str = "Reuters",
+    source_url: str = "https://www.reuters.com/markets/rates-bonds/",
     http_client: httpx.Client | None = None,
 ) -> NewsAiSmokeResult:
     provider = settings.argus_news_ai_provider.strip().lower()
@@ -1507,6 +1522,11 @@ def _trigger_rank(record: NewsTriggerRecord) -> tuple[int, int, str]:
         _ai_confidence_rank(record),
         record.published_at or "",
     )
+
+
+def _record_matches_query_terms(*, record: NewsTriggerRecord, query_terms: list[str]) -> bool:
+    haystack = f"{record.title} {record.summary}".casefold()
+    return any(term.casefold() in haystack for term in query_terms)
 
 
 def _normalize_dedupe_text(value: str) -> str:

@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     argus_news_triggers_file_path: Optional[str] = None
     argus_news_triggers_rss_urls: str = "https://www.mk.co.kr/rss/30100041/,https://www.mk.co.kr/rss/50200011/"
     argus_news_triggers_query: str = "금리,환율,반도체,코스피,선물,옵션"
-    argus_news_triggers_limit: int = 8
+    argus_news_triggers_limit: int = 3
     argus_news_triggers_lookback_hours: int = 24
     argus_news_ai_provider: str = "disabled"
     argus_news_ai_base_url: str = "https://api.openai.com"
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     argus_gemini_api_key: Optional[str] = None
     gemini_model: Optional[str] = None
     gemini_api_key: Optional[str] = None
-    argus_news_ai_timeout_seconds: float = 20.0
+    argus_news_ai_timeout_seconds: float = 8.0
     argus_macro_events_provider: str = "disabled"
     argus_macro_events_file_path: Optional[str] = None
 

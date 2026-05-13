@@ -9,21 +9,22 @@ MVP 완료 기준은 완벽한 판단 튜닝이 아니라 `실제 데이터 수�
 ## 현재 판정
 
 - 레거시 전환: 완료.
-- MVP 상태: 폐쇄 루프 구성 완료, live AI 검증은 Gemini 실키 입력 대기.
-- 주요 차단: `backend/.env`에 Gemini 실키가 아직 없습니다.
-- 2026-05-13 확인: `smoke-kis` 성공, KIS `collect-context` 성공, RSS 수집 경로 성공. 단, AI disabled 상태라 live 뉴스 trigger 저장은 0건입니다.
+- MVP 상태: 폐쇄 루프 구성 완료, live AI RSS 저장 확인 완료.
+- 주요 차단: 없음. 남은 것은 장중 반복 관찰과 프롬프트/가중치 보정입니다.
+- 2026-05-13 확인: Gemini key 인식, `smoke-news-ai` 성공, RSS live 뉴스 1건 DB 저장, dashboard AI reason/confidence/factors 계약 확인, `smoke-kis` 성공, KIS `collect-context` 성공.
+- 참고: `gemini-3-flash-preview`는 단건 smoke는 성공했지만 RSS 수집 중 timeout/429가 발생했습니다. MVP 운영 기본값은 `gemini-2.5-flash`로 둡니다.
 
 ## MVP 필수 작업
 
 ### 1. Gemini 실키 smoke test
 
-상태: 명령 동작 확인, 키 입력 대기.
+상태: 완료.
 
 필요 env:
 
 ```bash
 ARGUS_NEWS_AI_PROVIDER=gemini
-ARGUS_GEMINI_MODEL=gemini-3-flash
+ARGUS_GEMINI_MODEL=gemini-2.5-flash
 ARGUS_GEMINI_API_KEY=...
 ```
 
@@ -42,11 +43,12 @@ python3 -m src.argus_v2.cli smoke-news-ai
 
 최근 결과:
 
-- `ARGUS_NEWS_AI_PROVIDER`가 disabled라 `status=failed`, `reason=news_ai_disabled`로 정상 차단됩니다.
+- `gemini-2.5-flash`로 `status=success` 응답을 확인했습니다.
+- 키가 없거나 provider가 disabled면 `reason=news_ai_disabled`로 정상 차단됩니다.
 
 ### 2. 실뉴스 source 1개 live 연결 확인
 
-상태: RSS 경로 성공, Gemini 실키 입력 후 DB 저장 확인 필요.
+상태: 완료, 운영 품질 보정 필요.
 
 우선 source:
 
@@ -68,7 +70,9 @@ python3 -m src.argus_v2.cli collect-context --skip-market-reaction --news-trigge
 최근 결과:
 
 - RSS provider 실행은 성공했습니다.
-- AI disabled 상태라 `news_trigger_count=0`입니다. 실키 입력 후 재실행해야 live 뉴스 저장까지 닫힙니다.
+- `gemini-2.5-flash`, `ARGUS_NEWS_TRIGGERS_LIMIT=1`, `ARGUS_NEWS_AI_TIMEOUT_SECONDS=8` 조건에서 live 뉴스 1건이 DB에 저장됐습니다.
+- 저장된 trigger는 AI payload, confidence, affected factors를 포함합니다.
+- 일부 후보에서 timeout이 있었으므로 후보 수와 timeout은 낮게 유지합니다.
 
 ### 3. KIS 데이터 반복 수집 확인
 
@@ -153,10 +157,10 @@ http://localhost:3000/argus/triggers
 
 ## 남은 작업 목록
 
-- [ ] `backend/.env`에 `ARGUS_NEWS_AI_PROVIDER=gemini`, `ARGUS_GEMINI_MODEL=gemini-3-flash`, `ARGUS_GEMINI_API_KEY` 입력.
-- [ ] `smoke-news-ai`가 `status=success`를 반환하는지 확인.
-- [ ] RSS live 뉴스가 Gemini 판단을 거쳐 DB에 저장되는지 확인.
-- [ ] `/argus/triggers`에서 live 뉴스의 AI reason, confidence, affected factors 확인.
+- [x] `backend/.env`에 `ARGUS_NEWS_AI_PROVIDER=gemini`, `ARGUS_GEMINI_MODEL=gemini-2.5-flash`, `ARGUS_GEMINI_API_KEY` 입력.
+- [x] `smoke-news-ai`가 `status=success`를 반환하는지 확인.
+- [x] RSS live 뉴스가 Gemini 판단을 거쳐 DB에 저장되는지 확인.
+- [ ] `/argus/triggers` 브라우저 화면에서 live 뉴스의 AI reason, confidence, affected factors 확인.
 - [ ] 장중 KIS `smoke-kis`와 `collect-context --market-reaction-provider kis`를 2회 이상 반복해 freshness/provider health 확인.
 - [ ] 실제 장중 케이스를 보고 판단 엔진 가중치와 Gemini prompt를 보정.
 

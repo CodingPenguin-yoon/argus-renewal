@@ -310,6 +310,75 @@ def test_context_collection_filters_news_by_market_importance(tmp_path):
     assert any("_argus_ai_relevance_score" in row["payload_json"] for row in samples)
 
 
+def test_context_collection_limits_ai_candidates_before_enrichment(tmp_path):
+    db_path = str(tmp_path / "argus-v2.db")
+    items = "\n".join(
+        f"""
+    <item>
+      <title>코스피 후보 뉴스 {index}</title>
+      <link>https://example.test/market/{index}</link>
+      <description>코스피와 옵션 시장에 영향을 줄 수 있는 후보입니다.</description>
+      <pubDate>Tue, 12 May 2026 12:{50 - index:02d}:00 +0900</pubDate>
+    </item>
+"""
+        for index in range(5)
+    )
+    feed_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>테스트 경제 뉴스</title>
+    {items}
+  </channel>
+</rss>
+"""
+    post_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal post_count
+        if request.method == "POST":
+            post_count += 1
+            return _ai_decision_response(
+                {
+                    "should_use": False,
+                    "impact": "neutral",
+                    "relevance_score": 0,
+                    "connection_strength": "unclear",
+                    "affected_factors": [],
+                    "summary": "",
+                    "reason": "테스트 후보 제한",
+                    "confidence": "low",
+                }
+            )
+        return httpx.Response(200, text=feed_xml)
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.Client(transport=transport)
+    settings = Settings(
+        db_path=db_path,
+        argus_market_reaction_provider="disabled",
+        argus_news_triggers_provider="rss",
+        argus_news_triggers_rss_urls="https://example.test/rss",
+        argus_news_triggers_query="코스피",
+        argus_news_triggers_limit=1,
+        argus_news_triggers_lookback_hours=24,
+        **_news_ai_settings(),
+    )
+
+    try:
+        result = run_context_collection(
+            settings=settings,
+            trade_date=date(2026, 5, 12),
+            snapshot_time=datetime(2026, 5, 12, 4, 0, tzinfo=timezone.utc),
+            http_client=client,
+        )
+    finally:
+        client.close()
+
+    assert result.providers[1].status == "success"
+    assert result.providers[1].news_trigger_count == 0
+    assert post_count == 2
+
+
 def test_context_collection_does_not_keyword_classify_live_news_without_ai(tmp_path):
     db_path = str(tmp_path / "argus-v2.db")
     feed_xml = """<?xml version="1.0" encoding="UTF-8"?>
@@ -501,6 +570,7 @@ def test_news_ai_smoke_uses_gemini_alias_settings(tmp_path):
     settings = Settings(
         db_path=str(tmp_path / "argus-v2.db"),
         argus_news_ai_provider="gemini",
+        argus_gemini_model="",
         gemini_model="gemini-3-flash",
         gemini_api_key="test-gemini-key",
     )

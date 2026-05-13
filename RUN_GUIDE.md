@@ -26,8 +26,10 @@ KIS 실데이터 smoke를 하려면 `backend/.env`에 `KIS_APP_KEY`, `KIS_APP_SE
 
 ```bash
 ARGUS_NEWS_AI_PROVIDER=gemini
-ARGUS_GEMINI_MODEL=gemini-3-flash
+ARGUS_GEMINI_MODEL=gemini-2.5-flash
 ARGUS_GEMINI_API_KEY=...
+ARGUS_NEWS_TRIGGERS_LIMIT=3
+ARGUS_NEWS_AI_TIMEOUT_SECONDS=8
 ```
 
 이미 `GEMINI_MODEL`, `GEMINI_API_KEY` 이름으로 저장돼 있어도 fallback으로 읽습니다.

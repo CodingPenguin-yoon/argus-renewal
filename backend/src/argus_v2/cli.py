@@ -32,8 +32,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     news_ai_parser = subparsers.add_parser("smoke-news-ai", help="Run one AI news enrichment request without storing data.")
     news_ai_parser.add_argument("--title", default="FOMC 금리 경계와 환율 상승")
     news_ai_parser.add_argument("--summary", default="미국 국채금리와 달러 강세가 위험자산에 부담입니다.")
-    news_ai_parser.add_argument("--source", default="argus.smoke.news")
-    news_ai_parser.add_argument("--source-url", default="https://example.test/news-ai-smoke")
+    news_ai_parser.add_argument("--source", default="Reuters")
+    news_ai_parser.add_argument("--source-url", default="https://www.reuters.com/markets/rates-bonds/")
 
     args = parser.parse_args(argv)
     settings = get_settings()

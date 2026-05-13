@@ -105,7 +105,7 @@ python3 -m src.argus_v2.cli collect-context --news-triggers-provider dart
 python3 -m src.argus_v2.cli collect-context --news-triggers-provider hybrid
 ```
 
-실뉴스 판단을 켜려면 `backend/.env`에 AI provider와 모델/key를 설정합니다. Gemini는 `ARGUS_NEWS_AI_PROVIDER=gemini`, `ARGUS_GEMINI_MODEL=gemini-3-flash`, `ARGUS_GEMINI_API_KEY`를 사용합니다. OpenAI-compatible provider는 `ARGUS_NEWS_AI_PROVIDER=openai`, `ARGUS_NEWS_AI_MODEL`, `ARGUS_NEWS_AI_API_KEY`를 사용합니다. 키가 없으면 `mock` provider 또는 file import의 명시적 `ai_enrichment`로만 뉴스 트리거를 표시합니다.
+실뉴스 판단을 켜려면 `backend/.env`에 AI provider와 모델/key를 설정합니다. Gemini는 `ARGUS_NEWS_AI_PROVIDER=gemini`, `ARGUS_GEMINI_MODEL=gemini-2.5-flash`, `ARGUS_GEMINI_API_KEY`를 사용합니다. OpenAI-compatible provider는 `ARGUS_NEWS_AI_PROVIDER=openai`, `ARGUS_NEWS_AI_MODEL`, `ARGUS_NEWS_AI_API_KEY`를 사용합니다. 키가 없으면 `mock` provider 또는 file import의 명시적 `ai_enrichment`로만 뉴스 트리거를 표시합니다.
 
 AI 뉴스 판단 smoke test:
 
