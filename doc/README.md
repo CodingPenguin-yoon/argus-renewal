@@ -10,6 +10,7 @@
 ## Execution
 
 - `plans/current-status.md`
+- `plans/mvp-closeout.md`
 - `plans/argus-v2-roadmap.md`
 
 ## Study
@@ -19,6 +20,7 @@
 - `study/02-terms.md`
 - `study/03-argus-flow.md`
 - `study/04-why-this-structure.md`
+- `study/05-debugging-and-operations.md`
 
 ## Rule
 
