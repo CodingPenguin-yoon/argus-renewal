@@ -76,6 +76,25 @@ const triggerEventSchema = z.object({
   freshness: freshnessStatusSchema,
 });
 
+const newsFeedItemSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  summary: z.string(),
+  source: z.string(),
+  published_at: z.string().nullable(),
+  source_url: z.string().nullable().optional(),
+  freshness: freshnessStatusSchema,
+});
+
+export const newsFeedResponseSchema = z.object({
+  as_of: z.string(),
+  provider: z.string(),
+  status: freshnessStatusSchema,
+  observed_count: z.number(),
+  error: z.string().nullable().optional(),
+  items: z.array(newsFeedItemSchema),
+});
+
 const sectorMoveSchema = z.object({
   name: z.string(),
   change_rate: z.number().nullable(),
@@ -125,3 +144,4 @@ export const marketDashboardSchema = z.object({
 
 export type MarketDashboard = z.infer<typeof marketDashboardSchema>;
 export type DataPoint = z.infer<typeof dataPointSchema>;
+export type NewsFeedResponse = z.infer<typeof newsFeedResponseSchema>;

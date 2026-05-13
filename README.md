@@ -2,13 +2,14 @@
 
 Argus Renewal은 **Argus v2** 기준으로 재구성 중인 한국장 시장 상황판입니다.
 
-뉴스 피드나 종목 추천 서비스가 아니라, 장 시작 전과 장중에 `파생/옵션 포지셔닝 -> 실제 뉴스/매크로 트리거 -> 현물 반응` 순서로 시장 상태를 빠르게 읽기 위한 도구입니다.
+종목 추천 서비스가 아니라, 장 시작 전과 장중에 `파생/옵션 포지셔닝 -> 실제 뉴스/매크로 트리거 -> 현물 반응` 순서로 시장 상태를 빠르게 읽기 위한 도구입니다. 원천 뉴스 피드는 `뉴스 분석` 탭 안에서 트리거 판단의 재료로 분리해 보여줍니다.
 
 ## Product Direction
 
 - 판단 라벨은 `강한 상방 / 상방 우위 / 중립 / 하방 우위 / 강한 하방`만 사용합니다.
 - 첫 화면은 결론, 핵심 근거, 반대 증거, 전환 조건을 한 번에 보여줍니다.
-- 상세 탭은 `시장 판단`, `옵션·선물`, `현물 반응`, `뉴스 트리거` 네 개만 유지합니다.
+- 상세 탭은 `시장 판단`, `옵션·선물`, `현물 반응`, `뉴스 분석` 네 개만 유지합니다.
+- `뉴스 분석` 내부는 `메인`과 `뉴스` 서브탭으로 나눕니다. `메인`은 시장 판단에 연결된 트리거, `뉴스`는 실시간 원천 경제 뉴스 피드입니다.
 - AI 인사이트는 별도 탭이 아니라 각 화면 안의 해석 레이어입니다.
 - 매수/매도 추천처럼 읽히는 표현은 쓰지 않습니다.
 
@@ -39,8 +40,8 @@ argus_renewal/
 
 ## Runtime Surface
 
-- Frontend: `/argus`, `/argus/derivatives`, `/argus/reaction`, `/argus/triggers`
-- Backend: `/api/argus/v2/dashboard`, `/health`
+- Frontend: `/argus`, `/argus/derivatives`, `/argus/reaction`, `/argus/triggers`, `/argus/triggers/news`
+- Backend: `/api/argus/v2/dashboard`, `/api/argus/v2/news-feed`, `/health`
 - Legacy `/krx*`, `/api/krx*`, `/api/news*`, `/api/global-events*` runtime surface는 제거했습니다.
 - Live news judgement는 키워드 포함 규칙이 아니라 AI enrichment JSON(`should_use`, `impact`, `relevance_score`, `connection_strength`)만 사용합니다. AI가 꺼져 있으면 임의로 호재/악재를 분류하지 않습니다.
 
@@ -54,6 +55,13 @@ Argus v2는 `DB_PATH`가 가리키는 SQLite DB에 `argus_v2_*` 테이블을 만
 - KIS 옵션체인 snapshot/level
 - v2 현물 반응 snapshot/sector와 현물 투자자 수급
 - v2 뉴스 트리거
+
+## News Analysis
+
+- `/argus/triggers`는 뉴스 분석 메인 화면으로, AI 판단을 거친 시장 연결 트리거만 표시합니다.
+- `/argus/triggers/news`는 `/api/argus/v2/news-feed`에서 받은 원천 뉴스 피드를 표시합니다.
+- `ARGUS_NEWS_FEED_PROVIDER` 기본값은 `rss`라서 API 키 없이 RSS 경제 뉴스를 읽습니다. `ARGUS_NEWS_FEED_RSS_URLS`가 비어 있으면 `ARGUS_NEWS_TRIGGERS_RSS_URLS`를 재사용합니다.
+- 원천 뉴스 피드는 AI 분류 없이 나열하고, 시장 판단용 뉴스 트리거는 기존처럼 AI enrichment 결과가 `should_use=true`인 항목만 사용합니다.
 
 ## Local Run
 

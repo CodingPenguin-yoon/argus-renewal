@@ -76,6 +76,7 @@ frontend route:
 /argus/derivatives
 /argus/reaction
 /argus/triggers
+/argus/triggers/news
 ```
 
 Next.js에서는 폴더 구조가 route가 됩니다.
@@ -90,6 +91,11 @@ frontend/src/app/argus/page.tsx
 ```text
 frontend/src/app/argus/triggers/page.tsx
 -> /argus/triggers
+```
+
+```text
+frontend/src/app/argus/triggers/news/page.tsx
+-> /argus/triggers/news
 ```
 
 ## 3. Provider

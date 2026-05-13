@@ -89,6 +89,7 @@ frontend/src/app/argus/page.tsx
 frontend/src/app/argus/derivatives/page.tsx
 frontend/src/app/argus/reaction/page.tsx
 frontend/src/app/argus/triggers/page.tsx
+frontend/src/app/argus/triggers/news/page.tsx
 frontend/src/argus_v2/components/dashboard.tsx
 frontend/src/argus_v2/contracts/dashboard.ts
 frontend/src/argus_v2/server/dashboard.ts
@@ -128,9 +129,11 @@ doc/study/
 - `gemini-2.5-flash`로 AI 뉴스 smoke가 성공했습니다.
 - RSS live 뉴스 1건이 Gemini 판단을 거쳐 DB에 저장됐습니다.
 - dashboard 계약에서 AI reason/confidence/factors가 확인됐습니다.
+- 2026-05-14에 `뉴스 분석 > 뉴스` 원천 뉴스 피드가 추가됐습니다.
+- `/api/argus/v2/news-feed`와 `/argus/triggers/news`가 동작합니다.
 
 남은 핵심:
 
-- `/argus/triggers` 브라우저 화면 확인.
 - 장중 KIS 반복 수집 관찰.
+- 원천 뉴스 source/중복/필터 UX 보정.
 - Gemini prompt와 판단 엔진 가중치 보정.

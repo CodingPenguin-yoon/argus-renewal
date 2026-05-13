@@ -53,8 +53,10 @@ pnpm dev:frontend
 - 시장 판단: `http://localhost:3000/argus`
 - 옵션·선물: `http://localhost:3000/argus/derivatives`
 - 현물 반응: `http://localhost:3000/argus/reaction`
-- 뉴스 트리거: `http://localhost:3000/argus/triggers`
+- 뉴스 분석 메인: `http://localhost:3000/argus/triggers`
+- 실시간 뉴스: `http://localhost:3000/argus/triggers/news`
 - API: `http://localhost:4000/api/argus/v2/dashboard`
+- 뉴스 피드 API: `http://localhost:4000/api/argus/v2/news-feed`
 
 ## 5. KIS Smoke
 
@@ -98,6 +100,7 @@ python3 -m src.argus_v2.cli collect-context --market-reaction-provider kis --new
 ```text
 http://localhost:3000/argus
 http://localhost:3000/argus/triggers
+http://localhost:3000/argus/triggers/news
 ```
 
 ## 9. 검증

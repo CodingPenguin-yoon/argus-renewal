@@ -7,7 +7,8 @@ Next.js App Router 기반 Argus v2 프론트엔드입니다.
 - `/argus`: 시장 판단
 - `/argus/derivatives`: 옵션·선물
 - `/argus/reaction`: 현물 반응
-- `/argus/triggers`: 뉴스 트리거
+- `/argus/triggers`: 뉴스 분석 메인
+- `/argus/triggers/news`: 실시간 원천 뉴스 피드
 
 Legacy `/krx*` route는 제거했습니다.
 

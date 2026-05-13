@@ -2,11 +2,13 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ArgusPage from "@/app/argus/page";
-import { getArgusV2Dashboard } from "@/argus_v2/server/dashboard";
-import type { MarketDashboard } from "@/argus_v2/contracts/dashboard";
+import ArgusNewsFeedPage from "@/app/argus/triggers/news/page";
+import { getArgusV2Dashboard, getArgusV2NewsFeed } from "@/argus_v2/server/dashboard";
+import type { MarketDashboard, NewsFeedResponse } from "@/argus_v2/contracts/dashboard";
 
 vi.mock("@/argus_v2/server/dashboard", () => ({
   getArgusV2Dashboard: vi.fn(),
+  getArgusV2NewsFeed: vi.fn(),
 }));
 
 afterEach(() => {
@@ -123,6 +125,36 @@ function buildDashboardFixture(): MarketDashboard {
   };
 }
 
+function buildNewsFeedFixture(): NewsFeedResponse {
+  return {
+    as_of: "2026-03-15T02:12:00Z",
+    provider: "rss",
+    status: "fresh",
+    observed_count: 2,
+    error: null,
+    items: [
+      {
+        id: "feed-fx",
+        title: "원/달러 환율 장중 상승",
+        summary: "달러 강세와 외국인 수급 경계가 이어집니다.",
+        source: "테스트 경제 뉴스",
+        published_at: "2026-03-15T02:11:00Z",
+        source_url: "https://example.test/fx",
+        freshness: "fresh",
+      },
+      {
+        id: "feed-chip",
+        title: "반도체 대형주 강세",
+        summary: "AI 반도체 수요 기대가 지수 하단을 지지합니다.",
+        source: "테스트 경제 뉴스",
+        published_at: "2026-03-15T02:10:00Z",
+        source_url: "https://example.test/chip",
+        freshness: "fresh",
+      },
+    ],
+  };
+}
+
 describe("argus market judgement route", () => {
   it("renders the Argus v2 PRD tab shell", async () => {
     vi.mocked(getArgusV2Dashboard).mockResolvedValue(buildDashboardFixture());
@@ -134,7 +166,7 @@ describe("argus market judgement route", () => {
     expect(screen.getByRole("link", { name: /시장 판단/ })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: /옵션·선물/ })).toHaveAttribute("href", "/argus/derivatives");
     expect(screen.getByRole("link", { name: /현물 반응/ })).toHaveAttribute("href", "/argus/reaction");
-    expect(screen.getByRole("link", { name: /뉴스 트리거/ })).toHaveAttribute("href", "/argus/triggers");
+    expect(screen.getByRole("link", { name: /뉴스 분석/ })).toHaveAttribute("href", "/argus/triggers");
     expect(screen.getByRole("heading", { name: "시장 판단" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "핵심 수급" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "뉴스·현물 검증" })).toBeInTheDocument();
@@ -155,5 +187,18 @@ describe("argus market judgement route", () => {
     expect(screen.getByText("대표 뉴스 없음")).toBeInTheDocument();
     expect(screen.getByText("강한 섹터 없음")).toBeInTheDocument();
     expect(screen.getByText("약한 섹터 없음")).toBeInTheDocument();
+  });
+
+  it("renders the news analysis feed subtab", async () => {
+    vi.mocked(getArgusV2Dashboard).mockResolvedValue(buildDashboardFixture());
+    vi.mocked(getArgusV2NewsFeed).mockResolvedValue(buildNewsFeedFixture());
+
+    render(await ArgusNewsFeedPage());
+
+    expect(screen.getByRole("link", { name: /메인/ })).toHaveAttribute("href", "/argus/triggers");
+    expect(screen.getByRole("link", { name: /뉴스\s+실시간 원천 피드/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "실시간 뉴스" })).toBeInTheDocument();
+    expect(screen.getByText("원/달러 환율 장중 상승")).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "원문" })[0]).toHaveAttribute("href", "https://example.test/fx");
   });
 });

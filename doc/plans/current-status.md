@@ -2,7 +2,7 @@
 
 ## 한 줄 요약
 
-Argus v2는 레거시 KRX 중심 프로젝트를 제거하고, `파생/옵션 + 실제 뉴스 AI 판단 + 현물 반응 + 판단 엔진 + 대시보드` 구조로 재구성된 상태입니다.
+Argus v2는 레거시 KRX 중심 프로젝트를 제거하고, `파생/옵션 + 실제 뉴스 AI 판단 + 원천 뉴스 피드 + 현물 반응 + 판단 엔진 + 대시보드` 구조로 재구성된 상태입니다.
 
 현재 MVP의 기술 폐쇄 루프는 닫혔습니다.
 
@@ -12,6 +12,14 @@ Argus v2는 레거시 KRX 중심 프로젝트를 제거하고, `파생/옵션 + 
 -> SQLite 저장
 -> dashboard API 조회
 -> frontend 표시 계약
+
+원천 뉴스 피드는 별도 API와 화면으로 분리했습니다.
+
+```text
+RSS/Naver/DART/hybrid 원천 뉴스
+-> /api/argus/v2/news-feed
+-> /argus/triggers/news
+```
 ```
 
 남은 일은 “기능이 존재하는가”가 아니라 “장중에 반복해서 믿고 볼 수 있는가”를 검증하고 보정하는 단계입니다.
@@ -28,11 +36,12 @@ Argus v2는 레거시 KRX 중심 프로젝트를 제거하고, `파생/옵션 + 
 완료로 보는 기준:
 
 - 구 KRX runtime, route, 문서, 테스트는 제거했습니다.
-- v2 backend runtime은 `/api/argus/v2/dashboard`와 `/health` 중심입니다.
-- frontend canonical route는 `/argus`, `/argus/derivatives`, `/argus/reaction`, `/argus/triggers`입니다.
+- v2 backend runtime은 `/api/argus/v2/dashboard`, `/api/argus/v2/news-feed`, `/health` 중심입니다.
+- frontend canonical route는 `/argus`, `/argus/derivatives`, `/argus/reaction`, `/argus/triggers`, `/argus/triggers/news`입니다.
 - SQLite 저장소는 provider run, raw sample, derivatives, option chain, market reaction, news trigger를 기록합니다.
 - DB가 비어 있을 때만 mock fallback을 사용합니다.
 - 실뉴스는 AI 판단 없이는 임의로 호재/악재 분류하지 않습니다.
+- 원천 뉴스 피드는 AI 판단과 별개로 `뉴스 분석 > 뉴스`에서 표시합니다.
 
 ## 현재 제품 방향
 
@@ -69,6 +78,8 @@ Argus는 매수/매도 추천기가 아닙니다.
 - Gemini smoke: `gemini-2.5-flash`로 `status=success`, `should_use=true` 확인.
 - RSS live 뉴스: Gemini 판단 후 news trigger 1건 DB 저장 확인.
 - dashboard 계약: 저장된 live 뉴스의 `ai_reason`, `ai_confidence`, `affected_factors` 확인.
+- `/api/argus/v2/news-feed`: RSS 원천 뉴스 50건 수신 확인.
+- `/argus/triggers/news`: HTTP 200 응답 확인.
 
 주의할 점:
 
@@ -82,13 +93,13 @@ Argus는 매수/매도 추천기가 아닙니다.
 Backend:
 
 - `backend/src/argus_v2/cli.py`: `smoke-kis`, `collect-context`, `smoke-news-ai` 실행 입구.
-- `backend/src/argus_v2/api/router.py`: dashboard API 입구.
+- `backend/src/argus_v2/api/router.py`: dashboard API와 원천 뉴스 피드 API 입구.
 - `backend/src/argus_v2/contracts.py`: backend API 응답 계약.
 - `backend/src/argus_v2/dashboard.py`: DB 최신값을 화면용 `MarketDashboard`로 조립.
 - `backend/src/argus_v2/judgement/engine.py`: 시장 판단 엔진.
 - `backend/src/argus_v2/storage.py`: SQLite 저장/조회.
 - `backend/src/argus_v2/providers/kis_*`: KIS token, 국내파생, 옵션체인 live provider.
-- `backend/src/argus_v2/providers/context_inputs.py`: 현물 반응, 뉴스 트리거, Gemini AI enrichment.
+- `backend/src/argus_v2/providers/context_inputs.py`: 현물 반응, 뉴스 트리거, 원천 뉴스 피드, Gemini AI enrichment.
 - `backend/src/config/env.py`: env 기반 설정.
 
 Frontend:
@@ -96,7 +107,8 @@ Frontend:
 - `frontend/src/app/argus/page.tsx`: 첫 화면.
 - `frontend/src/app/argus/derivatives/page.tsx`: 파생/옵션 상세.
 - `frontend/src/app/argus/reaction/page.tsx`: 현물 반응 상세.
-- `frontend/src/app/argus/triggers/page.tsx`: 뉴스/매크로 trigger 상세.
+- `frontend/src/app/argus/triggers/page.tsx`: 뉴스 분석 메인, 뉴스/매크로 trigger 상세.
+- `frontend/src/app/argus/triggers/news/page.tsx`: 실시간 원천 뉴스 피드.
 - `frontend/src/argus_v2/components/dashboard.tsx`: 대시보드 UI.
 - `frontend/src/argus_v2/contracts/dashboard.ts`: frontend Zod 계약.
 - `frontend/src/argus_v2/server/dashboard.ts`: backend dashboard API 호출.
@@ -113,7 +125,8 @@ Docs:
 - SQLite를 로컬 DB로 사용합니다.
 - 나중에 운영 규모가 커지면 PostgreSQL로 갈 수 있게 storage 책임을 분리합니다.
 - 외부 API 호출은 frontend에서 직접 하지 않습니다.
-- 화면은 dashboard API만 봅니다.
+- 시장 판단 화면은 dashboard API를 봅니다.
+- 원천 뉴스 화면은 news-feed API를 봅니다.
 - 수집은 CLI 또는 추후 스케줄러가 담당합니다.
 - provider는 외부 API 응답을 Argus 내부 record로 변환합니다.
 - storage는 provider run과 raw sample을 저장하고 민감값을 redaction합니다.
@@ -121,6 +134,7 @@ Docs:
 - judgement engine은 구조화된 데이터만 보고 판단합니다.
 - 뉴스 판단은 키워드 문자열 규칙이 아니라 AI JSON 응답을 기준으로 합니다.
 - AI가 실패하거나 꺼져 있으면 실뉴스는 표시하지 않습니다.
+- 원천 뉴스 피드는 AI 판단 실패 여부와 무관하게 최신 뉴스 아이템을 표시합니다.
 - 테스트는 핵심 계약을 지키되, 테스트 작성이 개발 속도를 잡아먹지 않게 유지합니다.
 
 ## AI 뉴스 판단 정책
@@ -131,6 +145,13 @@ Docs:
 - 호재/악재, 중요도, 연결강도, 사용 여부는 AI enrichment JSON이 결정합니다.
 - AI 판단 JSON에는 `should_use`, `impact`, `relevance_score`, `connection_strength`, `confidence`, `summary`, `reason`, `affected_factors`가 들어갑니다.
 - 저장된 trigger는 frontend에서 AI reason, confidence, affected factors로 표시됩니다.
+
+원천 뉴스 피드 정책:
+
+- `/api/argus/v2/news-feed`는 AI 판단을 거치지 않은 최신 원천 뉴스 아이템을 반환합니다.
+- 기본 provider는 `ARGUS_NEWS_FEED_PROVIDER=rss`입니다.
+- `ARGUS_NEWS_FEED_RSS_URLS`가 비어 있으면 `ARGUS_NEWS_TRIGGERS_RSS_URLS`를 재사용합니다.
+- 원천 뉴스 피드는 title, summary, source, published_at, source_url, freshness 중심으로 표시합니다.
 
 운영 기본값:
 
@@ -202,25 +223,29 @@ ARGUS_NEWS_AI_TIMEOUT_SECONDS=8
 - `smoke-news-ai` CLI 추가.
 - RSS live 뉴스 -> Gemini 판단 -> DB 저장 확인.
 - 뉴스 AI reason/confidence/factors frontend 표시 계약 추가.
+- 뉴스 분석 상단 탭 rename.
+- 뉴스 분석 내부 `메인` / `뉴스` 서브탭 추가.
+- `/argus/triggers/news` 원천 뉴스 피드 화면 추가.
+- `/api/argus/v2/news-feed` API와 frontend Zod 계약 추가.
 - PRD 기준 4탭 UI 구성.
 - 리서치 데스크 디자인 톤 적용.
 - 공부 문서 작성 및 보강.
 
 ## In Progress
 
-- `/argus/triggers` 브라우저 화면에서 live 뉴스 표시 최종 확인.
 - KIS 장중 반복 수집 관찰.
 - provider health와 freshness 기준 운영 보정.
 - Gemini prompt/schema 운영 보정.
 - 판단 엔진 가중치 보정.
 - 매크로 실제 source 결정.
+- 원천 뉴스 피드 source 확대와 필터/중복 제거 UX 보정.
 
 ## Next
 
-1. frontend/backend dev server를 켜고 `/argus/triggers`에서 live 뉴스 AI reason/confidence/factors를 직접 확인합니다.
-2. 장중에 `smoke-kis`와 `collect-context --market-reaction-provider kis`를 2회 이상 반복 실행합니다.
-3. provider health에서 fresh/partial/stale/missing 표시가 실제 운영 감각과 맞는지 확인합니다.
-4. RSS 수집에서 timeout/429 빈도를 관찰하고 limit/timeout을 조정합니다.
+1. 장중에 `smoke-kis`와 `collect-context --market-reaction-provider kis`를 2회 이상 반복 실행합니다.
+2. provider health에서 fresh/partial/stale/missing 표시가 실제 운영 감각과 맞는지 확인합니다.
+3. RSS 수집에서 timeout/429 빈도를 관찰하고 limit/timeout을 조정합니다.
+4. `/argus/triggers/news`에서 source, 중복, 기사 품질을 관찰합니다.
 5. 실제 장중 사례를 모아 judgement engine 가중치를 보정합니다.
 6. 매크로 이벤트 source를 결정합니다.
 7. 장중 자동 수집 스케줄러를 붙일지 결정합니다.
@@ -231,9 +256,10 @@ ARGUS_NEWS_AI_TIMEOUT_SECONDS=8
 - KIS 보조 API 일부는 실패 로그가 있을 수 있으므로 provider health를 봐야 합니다.
 - Gemini 응답은 모델, rate limit, prompt에 따라 흔들릴 수 있습니다.
 - RSS 기사 품질이 낮으면 AI 판단 전에 후보 제한을 더 강하게 해야 합니다.
+- 원천 뉴스 피드가 많아지면 중복 제거, source 필터, 중요도 표시가 필요합니다.
 - 판단 엔진은 아직 1차 버전이므로 실제 장중 사례로 보정해야 합니다.
 - 테스트는 핵심 계약 위주로 유지해야 합니다.
 
 ## Last Updated
 
-- 2026-05-13
+- 2026-05-14

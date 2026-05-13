@@ -1,16 +1,22 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-import type { DataPoint, MarketDashboard } from "@/argus_v2/contracts/dashboard";
+import type { DataPoint, MarketDashboard, NewsFeedResponse } from "@/argus_v2/contracts/dashboard";
 
 type Tone = "positive" | "neutral" | "negative";
 type ArgusTab = "judgement" | "derivatives" | "reaction" | "triggers";
+type NewsAnalysisTab = "main" | "news";
 
 const ARGUS_TABS: Array<{ key: ArgusTab; label: string; href: string; description: string }> = [
   { key: "judgement", label: "시장 판단", href: "/argus", description: "결론과 근거" },
   { key: "derivatives", label: "옵션·선물", href: "/argus/derivatives", description: "포지셔닝" },
   { key: "reaction", label: "현물 반응", href: "/argus/reaction", description: "검증" },
-  { key: "triggers", label: "뉴스 트리거", href: "/argus/triggers", description: "원인" },
+  { key: "triggers", label: "뉴스 분석", href: "/argus/triggers", description: "트리거·피드" },
+];
+
+const NEWS_ANALYSIS_TABS: Array<{ key: NewsAnalysisTab; label: string; href: string; description: string }> = [
+  { key: "main", label: "메인", href: "/argus/triggers", description: "시장 판단 연결" },
+  { key: "news", label: "뉴스", href: "/argus/triggers/news", description: "실시간 원천 피드" },
 ];
 
 function formatValue(point: DataPoint, fractionDigits = 2) {
@@ -44,6 +50,17 @@ function formatKrw(value: number) {
     })}만원`;
   }
   return `${value.toLocaleString("ko-KR", { maximumFractionDigits: 0 })}원`;
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "시간 미수신";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("ko-KR", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: "Asia/Seoul",
+  }).format(date);
 }
 
 function freshnessLabel(value: MarketDashboard["provider_health"][number]["status"]) {
@@ -221,8 +238,44 @@ export function ArgusV2ReactionView({ data }: { data: MarketDashboard }) {
 export function ArgusV2TriggersView({ data }: { data: MarketDashboard }) {
   return (
     <ArgusShell data={data} activeTab="triggers">
-      <TriggersPanel data={data} detail />
+      <NewsAnalysisLayout activeSubtab="main">
+        <TriggersPanel data={data} detail />
+      </NewsAnalysisLayout>
     </ArgusShell>
+  );
+}
+
+export function ArgusV2NewsFeedView({ data, newsFeed }: { data: MarketDashboard; newsFeed: NewsFeedResponse }) {
+  return (
+    <ArgusShell data={data} activeTab="triggers">
+      <NewsAnalysisLayout activeSubtab="news">
+        <NewsFeedPanel newsFeed={newsFeed} />
+      </NewsAnalysisLayout>
+    </ArgusShell>
+  );
+}
+
+function NewsAnalysisLayout({ activeSubtab, children }: { activeSubtab: NewsAnalysisTab; children: ReactNode }) {
+  return (
+    <div className="grid gap-4">
+      <nav aria-label="뉴스 분석 내부 탭" className="grid border border-[#181816]/16 bg-[#f6f3e9]/88 sm:grid-cols-2">
+        {NEWS_ANALYSIS_TABS.map((tab) => {
+          const isActive = tab.key === activeSubtab;
+          return (
+            <Link
+              key={tab.key}
+              href={tab.href}
+              aria-current={isActive ? "page" : undefined}
+              className={`border-b border-[#181816]/12 px-4 py-3 transition hover:bg-white sm:border-b-0 sm:border-r ${isActive ? "bg-[#181816] text-[#fffdf7]" : "bg-transparent"}`}
+            >
+              <p className="text-sm font-black">{tab.label}</p>
+              <p className={`mt-1 text-[11px] font-bold ${isActive ? "text-[#fffdf7]/62" : "text-[#181816]/44"}`}>{tab.description}</p>
+            </Link>
+          );
+        })}
+      </nav>
+      {children}
+    </div>
   );
 }
 
@@ -442,7 +495,7 @@ function ReactionPanel({ data, detail = false }: { data: MarketDashboard; detail
 function TriggersPanel({ data, detail = false }: { data: MarketDashboard; detail?: boolean }) {
   return (
     <section className="argus-frame p-5">
-      <SectionTitle eyebrow="Causality" title="뉴스 트리거" />
+      <SectionTitle eyebrow="Causality" title="뉴스 분석 메인" />
       <div className="mt-4 grid gap-2">
         {data.triggers.length > 0 ? (
           data.triggers.map((trigger) => (
@@ -474,6 +527,57 @@ function TriggersPanel({ data, detail = false }: { data: MarketDashboard; detail
           ))
         ) : (
           <EmptyNote title="뉴스 트리거 없음" body="Gemini 판단이 꺼져 있거나 실패하면 실뉴스를 임의 분류하지 않습니다. provider 상태와 smoke-news-ai 결과를 확인하세요." />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function NewsFeedPanel({ newsFeed }: { newsFeed: NewsFeedResponse }) {
+  return (
+    <section className="argus-frame p-5">
+      <SectionTitle
+        eyebrow="Live Feed"
+        title="실시간 뉴스"
+        right={<span className="border border-[#181816]/18 px-2 py-1 text-xs font-black">{newsFeed.provider} · {freshnessLabel(newsFeed.status)}</span>}
+      />
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-bold text-[#181816]/48">
+        <span>{newsFeed.observed_count}건</span>
+        <span>as of {formatDateTime(newsFeed.as_of)}</span>
+      </div>
+      {newsFeed.error ? (
+        <div className="mt-4">
+          <EmptyNote title="뉴스 수신 오류" body={newsFeed.error} />
+        </div>
+      ) : null}
+      <div className="mt-4 grid gap-2">
+        {newsFeed.items.length > 0 ? (
+          newsFeed.items.map((item) => (
+            <article key={item.id} className="argus-tile px-4 py-3">
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-start">
+                <div>
+                  <h3 className="font-black leading-6">{item.title}</h3>
+                  {item.summary ? (
+                    <p className="mt-2 text-sm font-bold leading-6 text-[#181816]/58">{item.summary}</p>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs font-black text-[#181816]/42 sm:justify-end">
+                  <span>{formatDateTime(item.published_at)}</span>
+                  {item.source_url ? (
+                    <a href={item.source_url} target="_blank" rel="noreferrer" className="border border-[#181816]/14 bg-white px-2 py-1 text-[#181816] hover:bg-[#f6f3e9]">
+                      원문
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-bold text-[#181816]/42">
+                <span>{item.source}</span>
+                <span>{freshnessLabel(item.freshness)}</span>
+              </div>
+            </article>
+          ))
+        ) : (
+          <EmptyNote title="실시간 뉴스 없음" body="RSS 또는 외부 provider가 아직 수신한 경제 뉴스가 없습니다." />
         )}
       </div>
     </section>

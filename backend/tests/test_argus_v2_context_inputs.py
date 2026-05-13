@@ -7,7 +7,7 @@ import httpx
 
 from src.argus_v2.dashboard import build_dashboard_from_storage
 from src.argus_v2.db import get_connection
-from src.argus_v2.providers.context_inputs import run_context_collection, run_news_ai_smoke
+from src.argus_v2.providers.context_inputs import ArgusNewsTriggerService, run_context_collection, run_news_ai_smoke
 from src.argus_v2.storage import ArgusV2Storage
 from src.config.env import Settings
 
@@ -184,6 +184,55 @@ def test_context_collection_reads_rss_news_triggers(tmp_path):
     assert len(triggers) == 1
     assert triggers[0]["title"] == "반도체 강세, 코스피 낙폭 제한"
     assert triggers[0]["impact"] == "positive"
+
+
+def test_news_feed_reads_raw_rss_without_ai():
+    feed_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>테스트 경제 뉴스</title>
+    <item>
+      <title>원/달러 환율 장중 상승</title>
+      <link>https://example.test/fx</link>
+      <description>달러 강세와 외국인 수급 경계가 이어집니다.</description>
+      <pubDate>Tue, 12 May 2026 12:45:00 +0900</pubDate>
+    </item>
+    <item>
+      <title>반도체 대형주 강세</title>
+      <link>https://example.test/chip</link>
+      <description>AI 반도체 수요 기대가 지수 하단을 지지합니다.</description>
+      <pubDate>Tue, 12 May 2026 12:35:00 +0900</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=feed_xml)))
+    service = ArgusNewsTriggerService(
+        provider="rss",
+        rss_urls="https://example.test/rss",
+        query="",
+        limit=10,
+        lookback_hours=24,
+        news_ai_provider="disabled",
+        http_client=client,
+    )
+
+    try:
+        batch = service.fetch_feed(
+            trade_date=date(2026, 5, 12),
+            snapshot_time=datetime(2026, 5, 12, 4, 0, tzinfo=timezone.utc),
+        )
+    finally:
+        client.close()
+
+    assert batch.metadata["semantic_filter"] == "none"
+    assert [record.title for record in batch.records] == [
+        "원/달러 환율 장중 상승",
+        "반도체 대형주 강세",
+    ]
+    assert batch.records[0].impact == "neutral"
+    assert batch.records[0].source_url == "https://example.test/fx"
 
 
 def test_context_collection_filters_news_by_market_importance(tmp_path):

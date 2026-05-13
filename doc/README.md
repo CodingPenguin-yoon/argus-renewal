@@ -10,6 +10,7 @@
 ## Execution
 
 - `plans/current-status.md`
+- `plans/news-analysis-feed-update.md`
 - `plans/mvp-closeout.md`
 - `plans/argus-v2-roadmap.md`
 

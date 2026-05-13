@@ -511,6 +511,7 @@ python3 -m src.argus_v2.cli collect-context --market-reaction-provider kis --new
 ```text
 http://localhost:3000/argus
 http://localhost:3000/argus/triggers
+http://localhost:3000/argus/triggers/news
 ```
 
 ## 15. 장중 수시 확인 예

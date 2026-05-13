@@ -262,6 +262,7 @@ frontend/src/app/argus/page.tsx
 frontend/src/app/argus/derivatives/page.tsx
 frontend/src/app/argus/reaction/page.tsx
 frontend/src/app/argus/triggers/page.tsx
+frontend/src/app/argus/triggers/news/page.tsx
 ```
 
 Next.js route 파일입니다.

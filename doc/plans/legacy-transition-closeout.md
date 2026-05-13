@@ -8,7 +8,7 @@
 
 완료 판정 기준:
 
-- `/argus` 4개 route와 `/api/argus/v2/dashboard`만 핵심 runtime으로 남습니다.
+- `/argus` 계열 v2 route와 `/api/argus/v2/dashboard`, `/api/argus/v2/news-feed`만 핵심 runtime으로 남습니다.
 - `/krx*`, `/api/krx*`, 구 뉴스/API/global-events runtime은 동작하지 않습니다.
 - `backend/src/krx`, `frontend/src/krx`, 구 KRX 테스트와 구 KRX 문서는 제거됩니다.
 - v2 storage, provider, judgement, frontend가 테스트와 build를 통과합니다.

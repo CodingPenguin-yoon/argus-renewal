@@ -7,7 +7,7 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: "Argus v2 Cockpit",
-  description: "파생/옵션, 뉴스 트리거, 시장 반응을 함께 읽는 한국장 상황판",
+  description: "파생/옵션, 뉴스 분석, 시장 반응을 함께 읽는 한국장 상황판",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

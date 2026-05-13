@@ -79,12 +79,19 @@ http://localhost:3000/argus/reaction
 http://localhost:3000/argus/triggers
 ```
 
+원천 뉴스 feed:
+
+```text
+http://localhost:3000/argus/triggers/news
+```
+
 확인할 것:
 
 - 판단 라벨이 나오는가.
 - provider health가 fresh/partial/stale/missing 중 무엇인가.
 - 대표 뉴스에 AI reason이 보이는가.
 - `/argus/triggers`에서 confidence와 affected factors가 보이는가.
+- `/argus/triggers/news`에서 최신 원천 뉴스와 원문 링크가 보이는가.
 - 파생/옵션 데이터가 최신인가.
 - 현물 반응과 섹터가 표시되는가.
 
@@ -109,7 +116,8 @@ http://localhost:3000/argus/triggers
 4. provider run metadata에서 `ai_candidate_count`, `ai_enriched_count`, `ai_selected_count`, `ai_error_count`를 봅니다.
 5. DB의 `argus_v2_news_triggers`에 저장됐는지 봅니다.
 6. raw sample에 `_argus_ai`가 있는지 봅니다.
-7. `/argus/triggers` 화면을 봅니다.
+7. `/argus/triggers` 뉴스 분석 메인 화면을 봅니다.
+8. 원천 뉴스 자체가 안 보이면 `/argus/triggers/news`와 `/api/argus/v2/news-feed`를 봅니다.
 
 ## 5. Gemini가 실패할 때
 
@@ -336,7 +344,8 @@ ARGUS_NEWS_AI_TIMEOUT_SECONDS=8
 2. collect-context로 현물 반응과 뉴스 수집
 3. /argus에서 판단 라벨과 핵심 수급 확인
 4. /argus/triggers에서 뉴스 AI 근거 확인
-5. provider health가 partial이면 원인을 기록
+5. /argus/triggers/news에서 원천 뉴스 feed 확인
+6. provider health가 partial이면 원인을 기록
 ```
 
 뉴스는 너무 많이 보여주지 않는 것이 좋습니다.

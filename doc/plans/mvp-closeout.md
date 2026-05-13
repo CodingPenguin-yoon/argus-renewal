@@ -201,11 +201,13 @@ python3 -m src.argus_v2.cli collect-context --market-reaction-provider kis --ski
 ```text
 http://localhost:3000/argus
 http://localhost:3000/argus/triggers
+http://localhost:3000/argus/triggers/news
 ```
 
-남은 확인:
+확인 결과:
 
-- dev server를 켜고 live DB 기준으로 브라우저에서 실제 카드 표시를 확인합니다.
+- `/argus/triggers/news`는 200 OK 응답을 확인했습니다.
+- `/api/argus/v2/news-feed`에서 RSS 원천 뉴스 50건 수신을 확인했습니다.
 
 ## MVP 기본 실행 순서
 
@@ -247,8 +249,9 @@ python3 -m src.argus_v2.cli collect-context --market-reaction-provider kis --ski
 3. 대표 뉴스 카드에서 AI reason을 봅니다.
 4. `/argus/derivatives`에서 옵션/선물 상세를 봅니다.
 5. `/argus/reaction`에서 현물 반응과 섹터를 봅니다.
-6. `/argus/triggers`에서 뉴스/매크로 trigger를 봅니다.
-7. provider health에서 데이터 수신 상태를 봅니다.
+6. `/argus/triggers`에서 뉴스 분석 메인의 뉴스/매크로 trigger를 봅니다.
+7. `/argus/triggers/news`에서 실시간 원천 뉴스 피드를 봅니다.
+8. provider health에서 데이터 수신 상태를 봅니다.
 
 ## 남은 작업 목록
 
@@ -258,9 +261,12 @@ python3 -m src.argus_v2.cli collect-context --market-reaction-provider kis --ski
 - [x] RSS live 뉴스가 Gemini 판단을 거쳐 DB에 저장되는지 확인.
 - [x] dashboard 계약에서 live 뉴스 AI reason/confidence/factors 확인.
 - [x] RSS 후보 제한을 AI 호출 전에 적용.
+- [x] `/api/argus/v2/news-feed` 원천 뉴스 피드 API 추가.
+- [x] `/argus/triggers/news` 실시간 뉴스 서브탭 추가.
+- [x] `/argus/triggers/news` route 200 OK 확인.
+- [x] RSS 원천 뉴스 50건 수신 확인.
 - [x] KIS `smoke-kis` 1회 성공 확인.
 - [x] KIS market reaction `collect-context` 1회 성공 확인.
-- [ ] `/argus/triggers` 브라우저 화면에서 live 뉴스 카드 확인.
 - [ ] 장중 KIS `smoke-kis` 2회 이상 반복.
 - [ ] 장중 `collect-context --market-reaction-provider kis --news-triggers-provider rss` 2회 이상 반복.
 - [ ] provider health fresh/partial/stale/missing 기준 운영 보정.

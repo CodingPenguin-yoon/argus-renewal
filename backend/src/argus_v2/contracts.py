@@ -83,6 +83,25 @@ class TriggerEvent(BaseModel):
     freshness: FreshnessStatus
 
 
+class NewsFeedItem(BaseModel):
+    id: str
+    title: str
+    summary: str
+    source: str
+    published_at: Optional[str]
+    source_url: Optional[str] = None
+    freshness: FreshnessStatus
+
+
+class NewsFeedResponse(BaseModel):
+    as_of: str
+    provider: str
+    status: FreshnessStatus
+    observed_count: int
+    error: Optional[str] = None
+    items: list[NewsFeedItem]
+
+
 class SectorMove(BaseModel):
     name: str
     change_rate: Optional[float]

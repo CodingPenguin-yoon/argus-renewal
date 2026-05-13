@@ -275,38 +275,49 @@ class ArgusNewsTriggerService:
             return BriefingProviderBatch(records=[], disabled_reason=reason)
 
         snapshot_at = (snapshot_time or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        provider, records, metadata = self._fetch_raw_records(trade_date=trade_date, snapshot_time=snapshot_at)
+        return self._records_batch(records=records, provider=provider, metadata=metadata)
+
+    def fetch_feed(self, *, trade_date: date, snapshot_time: datetime | None = None) -> BriefingProviderBatch:
+        enabled, reason = self.is_enabled()
+        if not enabled:
+            return BriefingProviderBatch(records=[], disabled_reason=reason)
+
+        snapshot_at = (snapshot_time or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        provider, records, metadata = self._fetch_raw_records(trade_date=trade_date, snapshot_time=snapshot_at)
+        return self._feed_batch(records=records, provider=provider, metadata=metadata)
+
+    def _fetch_raw_records(
+        self,
+        *,
+        trade_date: date,
+        snapshot_time: datetime,
+    ) -> tuple[str, list[NewsTriggerRecord], dict[str, Any]]:
         if self.provider == "mock":
-            return BriefingProviderBatch(
-                records=_mock_news_triggers(snapshot_time=_snapshot_iso(snapshot_at)),
-                metadata={"provider": "mock"},
-            )
+            return "mock", _mock_news_triggers(snapshot_time=_snapshot_iso(snapshot_time)), {}
         if self.provider == "file":
             payload = load_json_file(self.file_path or "")
             rows = _pick_news_rows(payload=payload, trade_date=trade_date)
-            records = [self._normalize_file_row(row=row, index=index, snapshot_time=snapshot_at) for index, row in enumerate(rows)]
-            return self._records_batch(records=records, provider="file", metadata={"file_path": self.file_path, "row_count": len(rows)})
+            records = [self._normalize_file_row(row=row, index=index, snapshot_time=snapshot_time) for index, row in enumerate(rows)]
+            return "file", records, {"file_path": self.file_path, "row_count": len(rows)}
         if self.provider == "naver":
-            records = self._fetch_naver_records(snapshot_time=snapshot_at)
-            return self._records_batch(records=records, provider="naver")
+            return "naver", self._fetch_naver_records(snapshot_time=snapshot_time), {}
         if self.provider == "dart":
-            records = self._fetch_dart_records(trade_date=trade_date)
-            return self._records_batch(records=records, provider="dart")
+            return "dart", self._fetch_dart_records(trade_date=trade_date), {}
         if self.provider == "macro":
-            records = self._fetch_macro_records(trade_date=trade_date, snapshot_time=snapshot_at)
-            return self._records_batch(records=records, provider="macro")
+            return "macro", self._fetch_macro_records(trade_date=trade_date, snapshot_time=snapshot_time), {}
         if self.provider == "hybrid":
             records = []
             if self.rss_urls:
-                records.extend(self._fetch_rss_records(snapshot_time=snapshot_at))
+                records.extend(self._fetch_rss_records(snapshot_time=snapshot_time))
             if self.naver_client_id and self.naver_client_secret:
-                records.extend(self._fetch_naver_records(snapshot_time=snapshot_at))
+                records.extend(self._fetch_naver_records(snapshot_time=snapshot_time))
             if self.dart_api_key:
                 records.extend(self._fetch_dart_records(trade_date=trade_date))
-            records.extend(self._fetch_macro_records(trade_date=trade_date, snapshot_time=snapshot_at))
-            return self._records_batch(records=records, provider="hybrid")
+            records.extend(self._fetch_macro_records(trade_date=trade_date, snapshot_time=snapshot_time))
+            return "hybrid", records, {}
 
-        records = self._fetch_rss_records(snapshot_time=snapshot_at)
-        return self._records_batch(records=records, provider="rss")
+        return "rss", self._fetch_rss_records(snapshot_time=snapshot_time), {}
 
     def is_enabled(self) -> tuple[bool, str | None]:
         if self.provider in {"", "disabled"}:
@@ -375,6 +386,30 @@ class ArgusNewsTriggerService:
                 "ai_selected_count": len(selected),
                 "ai_error_count": sum(1 for record in enriched if _ai_reason_from_raw(record).startswith("news_ai_error:")),
                 "ai_disabled_count": sum(1 for record in enriched if _ai_reason_from_raw(record) == "news_ai_disabled"),
+                "filtered_count": len(limited),
+                "expected_count": len(limited),
+                **(metadata or {}),
+            },
+        )
+
+    def _feed_batch(
+        self,
+        *,
+        records: list[NewsTriggerRecord],
+        provider: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> BriefingProviderBatch:
+        ranked = _deduplicate_triggers(records)
+        ranked.sort(key=lambda item: (item.published_at or "", item.title), reverse=True)
+        limited = ranked[: self.limit]
+        return BriefingProviderBatch(
+            records=limited,
+            metadata={
+                "provider": provider,
+                "feed_urls": self.rss_urls if provider in {"rss", "hybrid"} else [],
+                "query_terms": self.query_terms,
+                "semantic_filter": "none",
+                "input_count": len(records),
                 "filtered_count": len(limited),
                 "expected_count": len(limited),
                 **(metadata or {}),

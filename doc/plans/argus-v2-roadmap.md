@@ -14,14 +14,14 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 
 ## Current Runtime
 
-- Frontend: `/argus`, `/argus/derivatives`, `/argus/reaction`, `/argus/triggers`
-- Backend: `/api/argus/v2/dashboard`, `/health`
+- Frontend: `/argus`, `/argus/derivatives`, `/argus/reaction`, `/argus/triggers`, `/argus/triggers/news`
+- Backend: `/api/argus/v2/dashboard`, `/api/argus/v2/news-feed`, `/health`
 - Removed: `backend/src/krx`, `frontend/src/krx`, `/krx*`, `/api/krx*`, `/api/news*`, `/api/global-events*`
 
 ## Completion Baseline
 
 - 레거시 전환: 완료 판정.
-- 제품 완성: 약 65%.
+- 제품 완성: 약 70%.
 - 레거시 전환 잔여 작업은 `legacy-transition-closeout.md`를 기준으로 마감합니다.
 - 제품 고도화 작업은 레거시 전환 완료 후 backlog로 처리합니다.
 
@@ -79,9 +79,24 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 - 완료: AI가 꺼지거나 실패하면 RSS/Naver/DART 원문을 임의 판단으로 노출하지 않음
 - 완료: dashboard 뉴스 trigger는 AI relevance와 confidence 기준으로 정렬
 - 완료: Gemini provider와 `smoke-news-ai` CLI 추가
-- 남음: Gemini 실키 기반 smoke test와 실제 운영 로그 기준 AI prompt/schema 보정
+- 완료: Gemini 실키 기반 smoke test
+- 남음: 실제 운영 로그 기준 AI prompt/schema 보정
 - 완료: macro event를 news trigger 계약으로 normalize하는 `macro` provider
 - 남음: timeout/비용/재시도 운영 기준 확정
+
+## Phase 4-1. News Analysis Raw Feed
+
+상태: 1차 완료.
+
+- 완료: 상단 탭 `뉴스 트리거`를 `뉴스 분석`으로 rename
+- 완료: `뉴스 분석` 내부 `메인` / `뉴스` 서브탭 추가
+- 완료: `/argus/triggers/news` route 추가
+- 완료: `/api/argus/v2/news-feed` API 추가
+- 완료: `NewsFeedResponse` backend/frontend 계약 추가
+- 완료: `ARGUS_NEWS_FEED_*` env 추가
+- 완료: RSS 기본 provider로 API key 없는 원천 뉴스 피드 동작 확인
+- 완료: AI 판단용 trigger와 원천 뉴스 피드의 표시 계약 분리
+- 남음: source 확대, 중복 제거, 필터, 중요도 표시 UX 보정
 
 ## Phase 5. Judgement Engine
 
@@ -103,18 +118,21 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 
 상태: 1차 완료. 첫 화면 밀도 조정 완료.
 
-- 완료: 4개 route
+- 완료: 5개 route
 - 완료: 상단 tab nav
+- 완료: 뉴스 분석 내부 subtab nav
 - 완료: 데이터 수신 상태 노출
 - 완료: 미수신/빈 상태 노출
 - 완료: `/argus`는 결론, 핵심 수급, 대표 뉴스, 강/약 섹터만 축약 표시
+- 완료: `/argus/triggers/news`에서 원천 뉴스 feed 표시
 - 남음: 실제 장중 데이터 기준 문장 길이와 card 개수 미세 조정
 
 ## Next Order
 
-1. Gemini 실키 기반 뉴스 AI smoke test와 prompt 운영 보정
-2. KIS 현물 반응 운영 관찰
-3. 판단 엔진 가중치 정교화
+1. KIS 현물 반응 운영 관찰
+2. 뉴스 분석 raw feed source/중복/필터 UX 보정
+3. Gemini prompt 운영 보정
+4. 판단 엔진 가중치 정교화
 
 ## Open Work Breakdown
 
@@ -146,6 +164,20 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 - 완료: dashboard에는 상위 trigger만 노출합니다.
 - 완료: AI disabled/failed 상태에서는 실뉴스를 임의로 표시하지 않습니다.
 - 남음: 실제 운영 로그를 보며 prompt, confidence 기준, 실패 처리 문구를 보정합니다.
+
+### 2-1. 뉴스 분석 원천 뉴스 feed
+
+목표: 모든 경제 뉴스를 최대한 넓게 수집해 `뉴스 분석 > 뉴스`에서 확인합니다.
+
+상태: 1차 완료.
+
+완료 기준:
+
+- 완료: `ARGUS_NEWS_FEED_PROVIDER=rss` 기본값으로 API key 없이 동작합니다.
+- 완료: `/api/argus/v2/news-feed`가 원천 뉴스 표시 계약을 반환합니다.
+- 완료: `/argus/triggers/news`가 최신 뉴스 목록과 원문 링크를 표시합니다.
+- 완료: AI enrichment 실패 여부와 무관하게 원천 뉴스 목록을 보여줍니다.
+- 남음: RSS source 확대, source별 필터, 중복 제거, 중요도/분류 표시.
 
 ### 3. 매크로 이벤트 normalize
 
@@ -205,7 +237,7 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 완료 기준:
 
 - 완료: `/argus`는 결론 중심으로 줄입니다.
-- 완료: 상세값은 `/argus/derivatives`, `/argus/reaction`, `/argus/triggers`에 둡니다.
+- 완료: 상세값은 `/argus/derivatives`, `/argus/reaction`, `/argus/triggers`, `/argus/triggers/news`에 둡니다.
 - 완료: 미수신 값은 숨기지 않고 이유를 짧게 표시합니다.
 
 ## Validation
@@ -224,4 +256,4 @@ pnpm --filter frontend build
 
 ## Last Updated
 
-- 2026-05-13
+- 2026-05-14

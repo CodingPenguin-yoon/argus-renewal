@@ -24,6 +24,19 @@ def _get_dashboard(db_path: str):
         get_settings.cache_clear()
 
 
+def _get_news_feed(db_path: str):
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        db_path=db_path,
+        argus_news_feed_provider="mock",
+    )
+    try:
+        with TestClient(app) as client:
+            return client.get("/api/argus/v2/news-feed")
+    finally:
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()
+
+
 def test_argus_v2_dashboard_contract_falls_back_to_mock_when_v2_db_is_empty(tmp_path: Path):
     response = _get_dashboard(str(tmp_path / "empty.db"))
 
@@ -266,3 +279,16 @@ def test_argus_v2_dashboard_reads_latest_v2_db_snapshots(tmp_path: Path):
     assert data["provider_health"][2]["key"] == "v2_market_reaction"
     assert data["provider_health"][2]["status"] == "fresh"
     assert data["provider_health"][3]["key"] == "v2_news_triggers"
+
+
+def test_argus_v2_news_feed_contract_returns_raw_news_items(tmp_path: Path):
+    response = _get_news_feed(str(tmp_path / "empty.db"))
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["provider"] == "mock"
+    assert data["status"] == "fresh"
+    assert data["observed_count"] == 2
+    assert data["items"][0]["title"] in {"미국 금리 상승 경계", "반도체 상대 강세"}
+    assert "impact" not in data["items"][0]
+    assert "source" in data["items"][0]
