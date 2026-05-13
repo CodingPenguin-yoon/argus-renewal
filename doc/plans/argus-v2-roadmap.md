@@ -78,9 +78,10 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 - 완료: AI enrichment JSON(`should_use`, `impact`, `relevance_score`, `connection_strength`, `affected_factors`, `summary`, `reason`, `confidence`) 기준으로만 실뉴스를 노출
 - 완료: AI가 꺼지거나 실패하면 RSS/Naver/DART 원문을 임의 판단으로 노출하지 않음
 - 완료: dashboard 뉴스 trigger는 AI relevance와 confidence 기준으로 정렬
-- 남음: 실제 운영 로그 기준 AI prompt/schema 보정
+- 완료: Gemini provider와 `smoke-news-ai` CLI 추가
+- 남음: Gemini 실키 기반 smoke test와 실제 운영 로그 기준 AI prompt/schema 보정
 - 완료: macro event를 news trigger 계약으로 normalize하는 `macro` provider
-- 남음: OpenAI-compatible 실모델 smoke test와 timeout/비용/재시도 운영 기준 확정
+- 남음: timeout/비용/재시도 운영 기준 확정
 
 ## Phase 5. Judgement Engine
 
@@ -111,7 +112,7 @@ Argus v2를 레거시 KRX 화면/집계 계층 없이 완성하기 위한 실행
 
 ## Next Order
 
-1. 뉴스 AI 실모델 smoke test와 prompt 운영 보정
+1. Gemini 실키 기반 뉴스 AI smoke test와 prompt 운영 보정
 2. KIS 현물 반응 운영 관찰
 3. 판단 엔진 가중치 정교화
 

@@ -7,7 +7,7 @@ import httpx
 
 from src.argus_v2.dashboard import build_dashboard_from_storage
 from src.argus_v2.db import get_connection
-from src.argus_v2.providers.context_inputs import run_context_collection
+from src.argus_v2.providers.context_inputs import run_context_collection, run_news_ai_smoke
 from src.argus_v2.storage import ArgusV2Storage
 from src.config.env import Settings
 
@@ -19,10 +19,25 @@ def _ai_decision_response(decision: dict) -> httpx.Response:
     )
 
 
+def _gemini_ai_decision_response(decision: dict) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": json.dumps(decision, ensure_ascii=False)}
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+
 def _decision_for_ai_request(request: httpx.Request, decisions_by_title: dict[str, dict]) -> dict:
-    payload = json.loads(request.content.decode())
-    user_content = payload["messages"][-1]["content"]
-    news = json.loads(user_content)["news"]
+    news = _news_from_ai_request(request)
     title = news["title"]
     source_url = news.get("source_url")
     if source_url and source_url in decisions_by_title:
@@ -42,6 +57,15 @@ def _decision_for_ai_request(request: httpx.Request, decisions_by_title: dict[st
     )
 
 
+def _news_from_ai_request(request: httpx.Request) -> dict:
+    payload = json.loads(request.content.decode())
+    if "messages" in payload:
+        user_content = payload["messages"][-1]["content"]
+        return json.loads(user_content)["news"]
+    text = payload["contents"][0]["parts"][0]["text"]
+    return json.loads(text)["news"]
+
+
 def _news_ai_settings() -> dict[str, str]:
     return {
         "argus_news_ai_provider": "openai",
@@ -49,6 +73,14 @@ def _news_ai_settings() -> dict[str, str]:
         "argus_news_ai_chat_path": "/v1/chat/completions",
         "argus_news_ai_api_key": "test-key",
         "argus_news_ai_model": "test-model",
+    }
+
+
+def _gemini_news_ai_settings() -> dict[str, str]:
+    return {
+        "argus_news_ai_provider": "gemini",
+        "argus_news_ai_api_key": "test-gemini-key",
+        "argus_news_ai_model": "gemini-3-flash",
     }
 
 
@@ -373,6 +405,114 @@ def test_context_collection_hides_live_news_when_ai_enrichment_fails(tmp_path):
         ).fetchone()
 
     assert '"ai_error_count": 1' in latest_run["metadata_json"]
+
+
+def test_context_collection_reads_gemini_news_ai_enrichment(tmp_path):
+    db_path = str(tmp_path / "argus-v2.db")
+    feed_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>테스트 경제 뉴스</title>
+    <item>
+      <title>FOMC 금리 경계와 환율 상승</title>
+      <link>https://example.test/fomc</link>
+      <description>미국 국채금리와 달러 강세가 위험자산에 부담입니다.</description>
+      <pubDate>Tue, 12 May 2026 12:20:00 +0900</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+    decision = {
+        "should_use": True,
+        "impact": "negative",
+        "relevance_score": 91,
+        "connection_strength": "strong",
+        "affected_factors": ["FOMC", "금리", "환율"],
+        "summary": "FOMC 금리 경계와 환율 상승은 한국장 위험선호에 부담입니다.",
+        "reason": "개장 전 해외 금리와 환율 압력이 국내 지수/옵션 판단에 연결됩니다.",
+        "confidence": "high",
+    }
+    seen_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_requests.append(request)
+        if request.method == "POST":
+            assert request.url.host == "generativelanguage.googleapis.com"
+            assert request.url.path == "/v1beta/models/gemini-3-flash:generateContent"
+            assert request.headers["x-goog-api-key"] == "test-gemini-key"
+            payload = json.loads(request.content.decode())
+            assert payload["generationConfig"]["responseMimeType"] == "application/json"
+            assert payload["generationConfig"]["responseSchema"]["type"] == "OBJECT"
+            return _gemini_ai_decision_response(decision)
+        return httpx.Response(200, text=feed_xml)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    settings = Settings(
+        db_path=db_path,
+        argus_market_reaction_provider="disabled",
+        argus_news_triggers_provider="rss",
+        argus_news_triggers_rss_urls="https://example.test/rss",
+        argus_news_triggers_lookback_hours=24,
+        **_gemini_news_ai_settings(),
+    )
+
+    try:
+        result = run_context_collection(
+            settings=settings,
+            trade_date=date(2026, 5, 12),
+            snapshot_time=datetime(2026, 5, 12, 4, 0, tzinfo=timezone.utc),
+            http_client=client,
+        )
+    finally:
+        client.close()
+
+    assert result.providers[1].status == "success"
+    assert result.providers[1].news_trigger_count == 1
+    assert any(request.method == "POST" for request in seen_requests)
+
+    with get_connection(db_path) as connection:
+        trigger = ArgusV2Storage(connection).get_latest_news_triggers()[0]
+
+    assert trigger["title"] == "FOMC 금리 경계와 환율 상승"
+    assert trigger["impact"] == "negative"
+    assert trigger["connection_strength"] == "strong"
+
+
+def test_news_ai_smoke_uses_gemini_alias_settings(tmp_path):
+    decision = {
+        "should_use": True,
+        "impact": "negative",
+        "relevance_score": 88,
+        "connection_strength": "strong",
+        "affected_factors": ["금리"],
+        "summary": "금리 상승은 위험자산에 부담입니다.",
+        "reason": "해외 금리 압력이 한국장 개장 전 심리에 연결됩니다.",
+        "confidence": "high",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1beta/models/gemini-3-flash:generateContent"
+        return _gemini_ai_decision_response(decision)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    settings = Settings(
+        db_path=str(tmp_path / "argus-v2.db"),
+        argus_news_ai_provider="gemini",
+        gemini_model="gemini-3-flash",
+        gemini_api_key="test-gemini-key",
+    )
+
+    try:
+        result = run_news_ai_smoke(settings=settings, http_client=client)
+    finally:
+        client.close()
+
+    assert result.status == "success"
+    assert result.provider == "gemini"
+    assert result.model == "gemini-3-flash"
+    assert result.should_use is True
+    assert result.relevance_score == 88
 
 
 def test_context_collection_prefers_quality_news_source_and_filters_market_spam(tmp_path):

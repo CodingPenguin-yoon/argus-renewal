@@ -42,6 +42,8 @@ DEFAULT_KIS_TOKEN_CACHE_PATH = "data/kis_token_cache.json"
 KIS_MARKET_REACTION_PROVIDERS = {"kis", "kis_api", "kis_index"}
 DEFAULT_NEWS_AI_BASE_URL = "https://api.openai.com"
 DEFAULT_NEWS_AI_CHAT_PATH = "/v1/chat/completions"
+DEFAULT_GEMINI_NEWS_AI_BASE_URL = "https://generativelanguage.googleapis.com"
+DEFAULT_GEMINI_NEWS_AI_PATH = "/v1beta/models/{model}:generateContent"
 NEWS_AI_SYSTEM_PROMPT = (
     "You classify Korean market news for a KOSPI/KOSDAQ derivatives dashboard. "
     "Return JSON only. Do not recommend trades. Do not invent causal links. "
@@ -71,6 +73,21 @@ NEWS_AI_DECISION_SCHEMA: dict[str, Any] = {
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
     },
 }
+GEMINI_NEWS_AI_DECISION_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "should_use": {"type": "BOOLEAN"},
+        "impact": {"type": "STRING", "enum": ["positive", "neutral", "negative"]},
+        "relevance_score": {"type": "INTEGER"},
+        "connection_strength": {"type": "STRING", "enum": ["strong", "medium", "weak", "unclear"]},
+        "affected_factors": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "summary": {"type": "STRING"},
+        "reason": {"type": "STRING"},
+        "confidence": {"type": "STRING", "enum": ["high", "medium", "low"]},
+    },
+    "required": list(NEWS_AI_DECISION_SCHEMA["required"]),
+    "propertyOrdering": list(NEWS_AI_DECISION_SCHEMA["required"]),
+}
 
 
 @dataclass(frozen=True)
@@ -91,6 +108,23 @@ class ContextCollectionResult:
     trade_date: str
     snapshot_time: str
     providers: list[ContextProviderResult]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class NewsAiSmokeResult:
+    provider: str
+    model: str
+    status: str
+    should_use: bool
+    impact: str
+    relevance_score: int
+    connection_strength: str
+    confidence: str
+    reason: str
+    summary: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -212,6 +246,10 @@ class ArgusNewsTriggerService:
         self.naver_display = max(1, min(naver_display, 100))
         self.naver_page_limit = max(1, naver_page_limit)
         self.news_ai_provider = news_ai_provider.strip().lower()
+        if self.news_ai_provider in {"gemini", "google_gemini"} and news_ai_base_url == DEFAULT_NEWS_AI_BASE_URL:
+            news_ai_base_url = DEFAULT_GEMINI_NEWS_AI_BASE_URL
+        if self.news_ai_provider in {"gemini", "google_gemini"} and news_ai_chat_path == DEFAULT_NEWS_AI_CHAT_PATH:
+            news_ai_chat_path = DEFAULT_GEMINI_NEWS_AI_PATH
         self.news_ai_base_url = news_ai_base_url.rstrip("/")
         self.news_ai_chat_path = news_ai_chat_path
         self.news_ai_api_key = (news_ai_api_key or "").strip()
@@ -354,7 +392,7 @@ class ArgusNewsTriggerService:
                 provider="disabled",
             )
 
-        if self.news_ai_provider in {"openai", "openai_compatible"}:
+        if self.news_ai_provider in {"openai", "openai_compatible", "gemini", "google_gemini"}:
             try:
                 return _apply_news_ai_decision(
                     record=record,
@@ -380,7 +418,11 @@ class ArgusNewsTriggerService:
             raise ValueError("missing_news_ai_api_key")
         if not self.news_ai_model:
             raise ValueError("missing_news_ai_model")
+        if self.news_ai_provider in {"gemini", "google_gemini"}:
+            return self._request_gemini_news_ai_decision(record)
+        return self._request_openai_compatible_news_ai_decision(record)
 
+    def _request_openai_compatible_news_ai_decision(self, record: NewsTriggerRecord) -> dict[str, Any]:
         url = f"{self.news_ai_base_url}{self.news_ai_chat_path}"
         headers = {
             "Authorization": f"Bearer {self.news_ai_api_key}",
@@ -420,6 +462,50 @@ class ArgusNewsTriggerService:
                     ),
                 },
             ],
+        }
+        payload = self._post_json(url=url, headers=headers, payload=request_payload)
+        return _parse_news_ai_response(payload)
+
+    def _request_gemini_news_ai_decision(self, record: NewsTriggerRecord) -> dict[str, Any]:
+        path = self.news_ai_chat_path.format(model=self.news_ai_model)
+        url = f"{self.news_ai_base_url}{path}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.news_ai_api_key,
+        }
+        request_payload = {
+            "systemInstruction": {"parts": [{"text": NEWS_AI_SYSTEM_PROMPT}]},
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": json.dumps(
+                                {
+                                    "task": (
+                                        "Decide whether this item should affect today's Korean index/options market read. "
+                                        "Use source credibility, macro/index relevance, derivative relevance, and actual market linkage. "
+                                        "Ignore promotions, stock-picking content, entertainment, and weakly related items."
+                                    ),
+                                    "news": {
+                                        "title": record.title,
+                                        "summary": record.summary,
+                                        "source": record.source,
+                                        "source_url": record.source_url,
+                                        "published_at": record.published_at,
+                                    },
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    ],
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0,
+                "responseMimeType": "application/json",
+                "responseSchema": GEMINI_NEWS_AI_DECISION_SCHEMA,
+            },
         }
         payload = self._post_json(url=url, headers=headers, payload=request_payload)
         return _parse_news_ai_response(payload)
@@ -790,6 +876,63 @@ def run_context_collection(
     )
 
 
+def run_news_ai_smoke(
+    *,
+    settings: Settings,
+    title: str = "FOMC 금리 경계와 환율 상승",
+    summary: str = "미국 국채금리와 달러 강세가 위험자산에 부담입니다.",
+    source: str = "argus.smoke.news",
+    source_url: str = "https://example.test/news-ai-smoke",
+    http_client: httpx.Client | None = None,
+) -> NewsAiSmokeResult:
+    provider = settings.argus_news_ai_provider.strip().lower()
+    model = settings.argus_news_ai_model or settings.argus_gemini_model or settings.gemini_model or ""
+    api_key = settings.argus_news_ai_api_key or settings.argus_gemini_api_key or settings.gemini_api_key
+    service = ArgusNewsTriggerService(
+        provider="rss",
+        news_ai_provider=provider,
+        news_ai_base_url=settings.argus_news_ai_base_url,
+        news_ai_chat_path=settings.argus_news_ai_chat_path,
+        news_ai_api_key=api_key,
+        news_ai_model=model,
+        news_ai_timeout_seconds=settings.argus_news_ai_timeout_seconds,
+        http_client=http_client,
+    )
+    record = NewsTriggerRecord(
+        id="news-ai-smoke",
+        title=title,
+        summary=summary,
+        impact="neutral",
+        source=source,
+        published_at=utcnow_iso(),
+        connection_strength="unclear",
+        freshness="fresh",
+        source_url=source_url,
+        raw_payload={"provider": "news_ai_smoke"},
+    )
+    enriched = service._with_ai_enrichment(record)
+    raw_payload = enriched.raw_payload if isinstance(enriched.raw_payload, dict) else {}
+    ai_payload = raw_payload.get("_argus_ai") if isinstance(raw_payload.get("_argus_ai"), dict) else {}
+    reason = _as_text(ai_payload.get("reason")) or ""
+    failed = reason.startswith("news_ai_error:") or reason in {
+        "news_ai_disabled",
+        "missing_news_ai_api_key",
+        "missing_news_ai_model",
+    }
+    return NewsAiSmokeResult(
+        provider=provider or "disabled",
+        model=model,
+        status="failed" if failed else "success",
+        should_use=bool(ai_payload.get("should_use")),
+        impact=_valid_impact(_as_text(ai_payload.get("impact")) or "neutral"),
+        relevance_score=_bounded_int(ai_payload.get("relevance_score"), minimum=0, maximum=100),
+        connection_strength=_valid_connection_strength(_as_text(ai_payload.get("connection_strength")) or "unclear"),
+        confidence=_valid_confidence(_as_text(ai_payload.get("confidence")) or "low"),
+        reason=reason,
+        summary=_as_text(ai_payload.get("summary")) or enriched.summary,
+    )
+
+
 def _fetch_and_store_market_reaction(
     *,
     settings: Settings,
@@ -889,8 +1032,8 @@ def _fetch_and_store_news_triggers(
             news_ai_provider=settings.argus_news_ai_provider,
             news_ai_base_url=settings.argus_news_ai_base_url,
             news_ai_chat_path=settings.argus_news_ai_chat_path,
-            news_ai_api_key=settings.argus_news_ai_api_key,
-            news_ai_model=settings.argus_news_ai_model,
+            news_ai_api_key=settings.argus_news_ai_api_key or settings.argus_gemini_api_key or settings.gemini_api_key,
+            news_ai_model=settings.argus_news_ai_model or settings.argus_gemini_model or settings.gemini_model,
             news_ai_timeout_seconds=settings.argus_news_ai_timeout_seconds,
             dart_api_key=settings.argus_disclosure_dart_api_key,
             dart_base_url=settings.argus_disclosure_dart_base_url,
@@ -1214,6 +1357,16 @@ def _parse_news_ai_response(payload: Any) -> dict[str, Any]:
                 message = first_choice.get("message")
                 if isinstance(message, dict) and isinstance(message.get("content"), str):
                     content = message["content"]
+        candidates = payload.get("candidates")
+        if content is None and isinstance(candidates, list) and candidates:
+            first_candidate = candidates[0]
+            if isinstance(first_candidate, dict):
+                candidate_content = first_candidate.get("content")
+                if isinstance(candidate_content, dict):
+                    parts = candidate_content.get("parts")
+                    if isinstance(parts, list):
+                        text_parts = [part.get("text") for part in parts if isinstance(part, dict) and isinstance(part.get("text"), str)]
+                        content = "".join(text_parts) if text_parts else None
 
     if not content:
         raise ValueError("news_ai_content_missing")

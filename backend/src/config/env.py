@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     argus_news_ai_chat_path: str = "/v1/chat/completions"
     argus_news_ai_model: Optional[str] = None
     argus_news_ai_api_key: Optional[str] = None
+    argus_gemini_model: Optional[str] = None
+    argus_gemini_api_key: Optional[str] = None
+    gemini_model: Optional[str] = None
+    gemini_api_key: Optional[str] = None
     argus_news_ai_timeout_seconds: float = 20.0
     argus_macro_events_provider: str = "disabled"
     argus_macro_events_file_path: Optional[str] = None

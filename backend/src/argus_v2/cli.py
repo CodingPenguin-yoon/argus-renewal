@@ -6,7 +6,7 @@ from datetime import date
 from typing import Sequence
 
 from ..config.env import get_settings
-from .providers.context_inputs import run_context_collection
+from .providers.context_inputs import run_context_collection, run_news_ai_smoke
 from .providers.kis_live import run_kis_live_smoke
 
 
@@ -28,6 +28,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     context_parser.add_argument("--skip-news-triggers", action="store_true")
     context_parser.add_argument("--market-reaction-provider", help="Override ARGUS_MARKET_REACTION_PROVIDER.")
     context_parser.add_argument("--news-triggers-provider", help="Override ARGUS_NEWS_TRIGGERS_PROVIDER.")
+
+    news_ai_parser = subparsers.add_parser("smoke-news-ai", help="Run one AI news enrichment request without storing data.")
+    news_ai_parser.add_argument("--title", default="FOMC 금리 경계와 환율 상승")
+    news_ai_parser.add_argument("--summary", default="미국 국채금리와 달러 강세가 위험자산에 부담입니다.")
+    news_ai_parser.add_argument("--source", default="argus.smoke.news")
+    news_ai_parser.add_argument("--source-url", default="https://example.test/news-ai-smoke")
 
     args = parser.parse_args(argv)
     settings = get_settings()
@@ -56,6 +62,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
         return 1 if any(provider.status == "failed" for provider in result.providers) else 0
+
+    if args.command == "smoke-news-ai":
+        result = run_news_ai_smoke(
+            settings=settings,
+            title=args.title,
+            summary=args.summary,
+            source=args.source,
+            source_url=args.source_url,
+        )
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        return 1 if result.status == "failed" else 0
 
     return 1
 

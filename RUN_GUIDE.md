@@ -22,6 +22,16 @@ ENV
 
 KIS 실데이터 smoke를 하려면 `backend/.env`에 `KIS_APP_KEY`, `KIS_APP_SECRET`만 채웁니다. token 값은 직접 넣지 않습니다.
 
+뉴스 AI 판단을 Gemini로 돌리려면 `backend/.env`에 아래 값만 채웁니다.
+
+```bash
+ARGUS_NEWS_AI_PROVIDER=gemini
+ARGUS_GEMINI_MODEL=gemini-3-flash
+ARGUS_GEMINI_API_KEY=...
+```
+
+이미 `GEMINI_MODEL`, `GEMINI_API_KEY` 이름으로 저장돼 있어도 fallback으로 읽습니다.
+
 ## 3. 개발 서버
 
 ```bash
@@ -63,7 +73,14 @@ python3 -m src.argus_v2.cli collect-context --news-triggers-provider dart
 python3 -m src.argus_v2.cli collect-context --news-triggers-provider macro
 ```
 
-## 7. 검증
+## 7. 뉴스 AI Smoke
+
+```bash
+cd backend
+python3 -m src.argus_v2.cli smoke-news-ai
+```
+
+## 8. 검증
 
 ```bash
 pnpm --filter frontend lint
