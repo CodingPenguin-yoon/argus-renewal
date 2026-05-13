@@ -80,7 +80,25 @@ cd backend
 python3 -m src.argus_v2.cli smoke-news-ai
 ```
 
-## 8. 검증
+## 8. MVP 폐쇄 루프
+
+Gemini key가 들어간 상태에서 아래 순서로 확인합니다.
+
+```bash
+cd backend
+python3 -m src.argus_v2.cli smoke-news-ai
+python3 -m src.argus_v2.cli smoke-kis
+python3 -m src.argus_v2.cli collect-context --market-reaction-provider kis --news-triggers-provider rss
+```
+
+화면:
+
+```text
+http://localhost:3000/argus
+http://localhost:3000/argus/triggers
+```
+
+## 9. 검증
 
 ```bash
 pnpm --filter frontend lint

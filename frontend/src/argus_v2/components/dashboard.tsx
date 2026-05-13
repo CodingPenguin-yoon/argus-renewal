@@ -59,6 +59,13 @@ function confidenceLabel(value: MarketDashboard["judgement"]["confidence"]) {
   return "확신도 낮음";
 }
 
+function triggerConfidenceLabel(value: MarketDashboard["triggers"][number]["ai_confidence"]) {
+  if (value === "high") return "AI 확신 높음";
+  if (value === "medium") return "AI 확신 보통";
+  if (value === "low") return "AI 확신 낮음";
+  return "AI 확신 미수신";
+}
+
 function toneClass(value: Tone) {
   if (value === "positive") return "argus-red";
   if (value === "negative") return "argus-blue";
@@ -301,9 +308,12 @@ function MarketJudgementPanel({ data }: { data: MarketDashboard }) {
                   <span className={`text-xs font-black ${toneClass(leadingTrigger.impact)}`}>{leadingTrigger.impact}</span>
                 </div>
                 <p className="mt-2 text-sm font-bold leading-5 text-[#181816]/58">{leadingTrigger.summary}</p>
+                {leadingTrigger.ai_reason ? (
+                  <p className="mt-2 border-l-2 border-[#181816]/20 pl-3 text-xs font-bold leading-5 text-[#181816]/54">{leadingTrigger.ai_reason}</p>
+                ) : null}
               </article>
             ) : (
-              <EmptyNote title="대표 뉴스 없음" body="뉴스/매크로 trigger가 없으면 파생 데이터 중심으로 보수적으로 판단합니다." />
+              <EmptyNote title="대표 뉴스 없음" body="Gemini 판단이 꺼져 있거나 실패하면 실뉴스를 임의 분류하지 않고 파생 데이터 중심으로 보수적으로 판단합니다." />
             )}
             <div className="grid gap-2 sm:grid-cols-2">
               {leadingStrongSector ? (
@@ -439,15 +449,31 @@ function TriggersPanel({ data, detail = false }: { data: MarketDashboard; detail
             <article key={trigger.id} className="argus-tile px-4 py-3">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="font-black">{trigger.title}</h3>
-                <span className={`text-xs font-black ${toneClass(trigger.impact)}`}>{trigger.connection_strength}</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className={`text-xs font-black ${toneClass(trigger.impact)}`}>{trigger.impact}</span>
+                  <span className="text-xs font-black text-[#181816]/42">{trigger.connection_strength}</span>
+                </div>
               </div>
               <p className="mt-2 text-sm font-bold leading-6 text-[#181816]/58">{trigger.summary}</p>
-              <p className="mt-2 text-xs font-bold text-[#181816]/42">{trigger.source}</p>
+              {trigger.ai_reason ? (
+                <p className="mt-3 border-l-2 border-[#181816]/20 pl-3 text-sm font-bold leading-6 text-[#181816]/58">{trigger.ai_reason}</p>
+              ) : null}
+              {(trigger.affected_factors ?? []).length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-1">
+                  {(trigger.affected_factors ?? []).map((factor) => (
+                    <span key={factor} className="border border-[#181816]/14 bg-white px-2 py-1 text-[11px] font-black text-[#181816]/54">{factor}</span>
+                  ))}
+                </div>
+              ) : null}
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-bold text-[#181816]/42">
+                <span>{trigger.source}</span>
+                <span>{triggerConfidenceLabel(trigger.ai_confidence)}</span>
+              </div>
               {detail ? <p className="mt-1 text-xs font-bold text-[#181816]/42">{trigger.published_at ?? "published time missing"}</p> : null}
             </article>
           ))
         ) : (
-          <EmptyNote title="뉴스 트리거 미연결" body="뉴스/매크로 저장소가 연결되기 전까지는 파생/옵션 데이터만으로 보수적으로 판단합니다." />
+          <EmptyNote title="뉴스 트리거 없음" body="Gemini 판단이 꺼져 있거나 실패하면 실뉴스를 임의 분류하지 않습니다. provider 상태와 smoke-news-ai 결과를 확인하세요." />
         )}
       </div>
     </section>

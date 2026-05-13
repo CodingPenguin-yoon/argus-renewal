@@ -166,19 +166,25 @@ def _build_derivatives_pressure(
 
 
 def _build_triggers(rows: list[dict[str, Any]]) -> list[TriggerEvent]:
-    return [
-        TriggerEvent(
-            id=_as_text(row, "external_id") or str(row.get("id")),
-            title=_as_text(row, "title") or "제목 없음",
-            summary=_as_text(row, "summary") or "",
-            impact=_direction_tone(_as_text(row, "impact")),
-            source=_as_text(row, "source_name") or "argus_v2.news_triggers",
-            published_at=_as_text(row, "published_at"),
-            connection_strength=_connection_strength(_as_text(row, "connection_strength")),
-            freshness=_freshness(row),
+    triggers: list[TriggerEvent] = []
+    for row in rows:
+        ai_payload = _trigger_ai_payload(row)
+        triggers.append(
+            TriggerEvent(
+                id=_as_text(row, "external_id") or str(row.get("id")),
+                title=_as_text(row, "title") or "제목 없음",
+                summary=_as_text(row, "summary") or "",
+                impact=_direction_tone(_as_text(row, "impact")),
+                source=_as_text(row, "source_name") or "argus_v2.news_triggers",
+                published_at=_as_text(row, "published_at"),
+                connection_strength=_connection_strength(_as_text(row, "connection_strength")),
+                ai_reason=_payload_text(ai_payload.get("reason")) if ai_payload else None,
+                ai_confidence=_confidence_level(_payload_text(ai_payload.get("confidence")) if ai_payload else None),
+                affected_factors=_text_list(ai_payload.get("affected_factors")) if ai_payload else [],
+                freshness=_freshness(row),
+            )
         )
-        for row in rows
-    ]
+    return triggers
 
 
 def _build_market_reaction(
@@ -578,6 +584,43 @@ def _connection_strength(value: str | None) -> str:
     if value in {"strong", "medium", "weak", "unclear"}:
         return value
     return "unclear"
+
+
+def _confidence_level(value: str | None) -> str | None:
+    if value in {"high", "medium", "low"}:
+        return value
+    return None
+
+
+def _trigger_ai_payload(row: dict[str, Any]) -> dict[str, Any]:
+    raw_payload = _json_object(row.get("raw_payload_json"))
+    for key in ("_argus_ai", "ai_enrichment", "argus_ai_enrichment"):
+        ai_payload = raw_payload.get(key)
+        if isinstance(ai_payload, dict):
+            return ai_payload
+    return {}
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _text_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in (_payload_text(item) for item in value) if item][:6]
+
+
+def _payload_text(value: Any) -> str | None:
+    return str(value) if value not in {None, ""} else None
 
 
 def _max_level(levels: list[dict[str, Any]], field: str) -> dict[str, Any] | None:

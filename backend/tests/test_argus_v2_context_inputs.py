@@ -106,6 +106,8 @@ def test_context_collection_persists_mock_market_reaction_and_news(tmp_path):
     assert dashboard is not None
     assert dashboard.reaction.strong_sectors[0].name == "반도체"
     assert dashboard.triggers[0].title in {"미국 금리 상승 경계", "반도체 상대 강세"}
+    assert dashboard.triggers[0].ai_reason
+    assert dashboard.triggers[0].affected_factors is not None
     assert dashboard.provider_health[2].status == "fresh"
     assert dashboard.provider_health[3].status == "fresh"
 

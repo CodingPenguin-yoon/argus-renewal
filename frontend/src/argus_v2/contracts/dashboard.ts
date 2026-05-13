@@ -70,6 +70,9 @@ const triggerEventSchema = z.object({
   source: z.string(),
   published_at: z.string().nullable(),
   connection_strength: connectionStrengthSchema,
+  ai_reason: z.string().nullable().optional(),
+  ai_confidence: confidenceLevelSchema.nullable().optional(),
+  affected_factors: z.array(z.string()).optional(),
   freshness: freshnessStatusSchema,
 });
 

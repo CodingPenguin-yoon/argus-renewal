@@ -37,8 +37,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     settings = get_settings()
-    if args.db_path:
-        settings = settings.model_copy(update={"db_path": args.db_path})
+    db_path = getattr(args, "db_path", None)
+    if db_path:
+        settings = settings.model_copy(update={"db_path": db_path})
 
     if args.command == "smoke-kis":
         result = run_kis_live_smoke(

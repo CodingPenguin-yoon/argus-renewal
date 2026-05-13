@@ -17,6 +17,7 @@ Argus Renewal은 **Argus v2** 기준으로 재구성 중인 한국장 시장 상
 - [Argus v2 PRD](doc/prd/argus-v2-prd.md)
 - [Argus v2 Grill Me Decision Register](doc/prd/argus-v2-grill-me.md)
 - [Current Status](doc/plans/current-status.md)
+- [MVP Closeout](doc/plans/mvp-closeout.md)
 - [Argus v2 Roadmap](doc/plans/argus-v2-roadmap.md)
 
 ## Repository Structure

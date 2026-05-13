@@ -77,6 +77,9 @@ class TriggerEvent(BaseModel):
     source: str
     published_at: Optional[str]
     connection_strength: ConnectionStrength
+    ai_reason: Optional[str] = None
+    ai_confidence: Optional[ConfidenceLevel] = None
+    affected_factors: list[str] = Field(default_factory=list)
     freshness: FreshnessStatus
 
 

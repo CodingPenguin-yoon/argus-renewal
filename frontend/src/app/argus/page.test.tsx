@@ -68,6 +68,9 @@ function buildDashboardFixture(): MarketDashboard {
         source: "mock.news.macro",
         published_at: "2026-03-15T02:10:00Z",
         connection_strength: "medium",
+        ai_reason: "금리 상승은 국내 위험자산과 원화에 부담으로 연결됩니다.",
+        ai_confidence: "high",
+        affected_factors: ["금리", "환율", "위험자산"],
         freshness: "partial",
       },
     ],
@@ -135,6 +138,7 @@ describe("argus market judgement route", () => {
     expect(screen.getByRole("heading", { name: "시장 판단" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "핵심 수급" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "뉴스·현물 검증" })).toBeInTheDocument();
+    expect(screen.getByText("금리 상승은 국내 위험자산과 원화에 부담으로 연결됩니다.")).toBeInTheDocument();
     expect(screen.getByText("KIS 파생 실데이터")).toBeInTheDocument();
   });
 

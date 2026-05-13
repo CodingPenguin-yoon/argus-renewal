@@ -4,6 +4,7 @@
 
 - 레거시 전환 달성률: 완료 판정.
 - 제품 완성 달성률: 약 65%.
+- MVP 상태: 폐쇄 루프 구성 완료, live AI 검증은 Gemini 실키 입력 대기. 기준 문서는 `doc/plans/mvp-closeout.md`입니다.
 - 기준: 레거시 전환은 구 KRX runtime 제거, v2 runtime 대체, 레거시 파일 제거, 검증 통과를 기준으로 봅니다.
 - 주의: 뉴스 품질, 판단 가중치, 매크로 source, 장중 운영 관찰은 레거시 전환 잔여 작업이 아니라 제품 고도화 작업입니다.
 
@@ -29,6 +30,8 @@
 - AI가 꺼졌거나 실패한 상태에서는 실뉴스를 임의로 호재/악재 분류하지 않습니다. 로컬 UI는 `mock`, 수동 import는 명시적 `ai_enrichment` 계약으로 동작합니다.
 - Gemini provider를 추가했고 `ARGUS_NEWS_AI_PROVIDER=gemini`, `ARGUS_GEMINI_MODEL`, `ARGUS_GEMINI_API_KEY`로 실뉴스 AI 판단을 실행할 수 있습니다.
 - `smoke-news-ai` CLI로 DB 저장 없이 AI 뉴스 판단 JSON 응답을 검증할 수 있습니다.
+- `smoke-news-ai`는 Gemini 실키가 없을 때 `news_ai_disabled`로 실패 상태를 명확히 반환합니다.
+- 2026-05-13 기준 KIS `smoke-kis`와 `collect-context --market-reaction-provider kis`는 성공했고, RSS provider 실행도 성공했습니다. 다만 AI disabled 상태라 live 뉴스 trigger 저장은 0건입니다.
 - 매크로 이벤트는 `macro` provider를 통해 뉴스 트리거와 같은 계약으로 normalize할 수 있습니다.
 - 판단 엔진은 선물 변동률, basis, 선물 미결제약정 증감률, 옵션 압력, 현물 반응, 뉴스 트리거를 1차 점수화합니다.
 - 판단 엔진은 선물 수급이 비어 있을 때 외국인 현물 수급을 보조 신호로 쓰고, 선물/현물 외국인 수급이 충돌하면 반대 증거로 표시합니다.
@@ -40,15 +43,16 @@
 
 ## In Progress
 
-- 제품 고도화: KIS 현물 반응 운영 관찰, 판단 엔진 운영 가중치 보정, 매크로 실제 source 결정, Gemini 실키 기반 AI 뉴스 판단 smoke.
+- MVP closeout: Gemini 실키 입력 후 smoke 성공 확인, RSS live 뉴스 AI 판단 저장 확인, KIS 장중 반복 수집 관찰.
+- 제품 고도화: 판단 엔진 운영 가중치 보정, 매크로 실제 source 결정.
 - 보류: KIS 공식 `domestic_futureoption` 샘플에서는 시장 전체 외국인/기관/개인 KOSPI200 선물 수급 endpoint가 아직 확인되지 않았습니다. 계좌 기반 잔고/손익 API는 시장 수급으로 연결하지 않습니다.
 
 ## Next
 
-1. 제품 고도화 backlog를 별도 순서로 진행합니다.
-2. `ARGUS_GEMINI_API_KEY` 실키를 넣고 `smoke-news-ai` 및 RSS 수집으로 Gemini 실모델 smoke test를 수행합니다.
-3. KIS 현물 반응 운영 관찰: 장중 반복 수집 시 재시도 빈도, 섹터명 노이즈, 현물 수급 단위 배율을 보정합니다.
-4. 판단 엔진 가중치는 실제 장중 케이스 기준으로 추가 보정합니다.
+1. `ARGUS_GEMINI_API_KEY` 실키를 넣고 `smoke-news-ai`를 실행합니다.
+2. RSS 수집으로 뉴스 원문 -> Gemini 판단 -> DB 저장 -> `/argus/triggers` 표시를 확인합니다.
+3. KIS `smoke-kis`와 `collect-context --market-reaction-provider kis`를 장중 2회 이상 반복 실행해 freshness와 provider health를 확인합니다.
+4. MVP 확인 후 판단 엔진 가중치는 실제 장중 케이스 기준으로 추가 보정합니다.
 5. KOSPI200 시장 전체 선물 수급 endpoint는 공식 문서나 live smoke로 확인되기 전까지 보류합니다.
 
 ## Risks
