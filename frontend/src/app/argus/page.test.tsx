@@ -2,13 +2,20 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ArgusPage from "@/app/argus/page";
+import ArgusDerivativesPage from "@/app/argus/derivatives/page";
+import ArgusFuturesPage from "@/app/argus/derivatives/futures/page";
+import ArgusOptionLayerPage from "@/app/argus/derivatives/option-layer/page";
+import ArgusOptionQuotesPage from "@/app/argus/derivatives/option-quotes/page";
+import ArgusPositionsPage from "@/app/argus/derivatives/positions/page";
 import ArgusNewsFeedPage from "@/app/argus/triggers/news/page";
-import { getArgusV2Dashboard, getArgusV2NewsFeed } from "@/argus_v2/server/dashboard";
-import type { MarketDashboard, NewsFeedResponse } from "@/argus_v2/contracts/dashboard";
+import { getArgusV2Dashboard, getArgusV2Futures, getArgusV2NewsFeed, getArgusV2OptionQuotes } from "@/argus_v2/server/dashboard";
+import type { FuturesQuoteResponse, MarketDashboard, NewsFeedResponse, OptionQuotesResponse } from "@/argus_v2/contracts/dashboard";
 
 vi.mock("@/argus_v2/server/dashboard", () => ({
   getArgusV2Dashboard: vi.fn(),
+  getArgusV2Futures: vi.fn(),
   getArgusV2NewsFeed: vi.fn(),
+  getArgusV2OptionQuotes: vi.fn(),
 }));
 
 afterEach(() => {
@@ -155,6 +162,96 @@ function buildNewsFeedFixture(): NewsFeedResponse {
   };
 }
 
+function buildOptionQuotesFixture(): OptionQuotesResponse {
+  return {
+    as_of: "2026-03-15T02:10:00Z",
+    trade_date: "2026-03-15",
+    source: "mock.option_chain",
+    status: "fresh",
+    observed_count: 2,
+    underlying_code: "KOSPI200",
+    underlying_name: "KOSPI200",
+    underlying_price: 366.2,
+    expiry_date: "202603",
+    contract_month: "202603",
+    atm_strike: 365,
+    rows: [
+      {
+        strike_price: 365,
+        moneyness: "ATM",
+        call_last_price: 2.14,
+        call_change_rate: 0.35,
+        call_volume: 12048,
+        call_trading_value: 25_782_720,
+        call_open_interest: 9150,
+        call_open_interest_change: 320,
+        call_implied_volatility: 22.4,
+        put_last_price: 3.02,
+        put_change_rate: -0.18,
+        put_volume: 15420,
+        put_trading_value: 46_568_400,
+        put_open_interest: 12200,
+        put_open_interest_change: 410,
+        put_implied_volatility: 24.1,
+        total_open_interest: 21350,
+        net_call_put_oi: -3050,
+        call_put_oi_ratio: 0.75,
+        pressure_side: "PUT",
+      },
+      {
+        strike_price: 367.5,
+        moneyness: "UNKNOWN",
+        call_last_price: 1.45,
+        call_change_rate: 0.22,
+        call_volume: 8840,
+        call_trading_value: 12_818_000,
+        call_open_interest: 10100,
+        call_open_interest_change: 280,
+        call_implied_volatility: 21.7,
+        put_last_price: 4.1,
+        put_change_rate: -0.32,
+        put_volume: 7600,
+        put_trading_value: 31_160_000,
+        put_open_interest: 6800,
+        put_open_interest_change: -120,
+        put_implied_volatility: 25.8,
+        total_open_interest: 16900,
+        net_call_put_oi: 3300,
+        call_put_oi_ratio: 1.49,
+        pressure_side: "CALL",
+      },
+    ],
+  };
+}
+
+function buildFuturesFixture(): FuturesQuoteResponse {
+  return {
+    as_of: "2026-03-15T02:10:00Z",
+    trade_date: "2026-03-15",
+    source: "mock.kis.derivatives",
+    status: "fresh",
+    observed_count: 1,
+    session_type: "PRE_OPEN",
+    instrument_code: "A01606",
+    instrument_name: "F 202606",
+    price: 392.5,
+    price_change: -1.2,
+    change_rate: -0.31,
+    volume: 1500,
+    open_interest: 215000,
+    put_call_ratio: null,
+    implied_volatility: null,
+    bid: 392.45,
+    ask: 392.55,
+    basis: -0.4,
+    market_basis: -0.25,
+    theoretical_price: 392.8,
+    disparity_rate: -0.1,
+    open_interest_change: -500,
+    open_interest_change_rate: -0.23,
+  };
+}
+
 describe("argus market judgement route", () => {
   it("renders the Argus v2 PRD tab shell", async () => {
     vi.mocked(getArgusV2Dashboard).mockResolvedValue(buildDashboardFixture());
@@ -187,6 +284,79 @@ describe("argus market judgement route", () => {
     expect(screen.getByText("대표 뉴스 없음")).toBeInTheDocument();
     expect(screen.getByText("강한 섹터 없음")).toBeInTheDocument();
     expect(screen.getByText("약한 섹터 없음")).toBeInTheDocument();
+  });
+
+  it("renders the derivatives main subtab", async () => {
+    vi.mocked(getArgusV2Dashboard).mockResolvedValue(buildDashboardFixture());
+
+    render(await ArgusDerivativesPage());
+
+    expect(screen.getByRole("link", { name: /메인/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: /선물\s+KOSPI200 근월/ })).toHaveAttribute("href", "/argus/derivatives/futures");
+    expect(screen.getByRole("link", { name: /옵션 시세표/ })).toHaveAttribute("href", "/argus/derivatives/option-quotes");
+    expect(screen.getByRole("link", { name: /풋콜 레이어/ })).toHaveAttribute("href", "/argus/derivatives/option-layer");
+    expect(screen.getByRole("link", { name: /포지션/ })).toHaveAttribute("href", "/argus/derivatives/positions");
+    expect(screen.queryByRole("link", { name: /외인 위치/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "옵션·선물" })).toBeInTheDocument();
+  });
+
+  it("renders the futures subtab", async () => {
+    vi.mocked(getArgusV2Dashboard).mockResolvedValue(buildDashboardFixture());
+    vi.mocked(getArgusV2Futures).mockResolvedValue(buildFuturesFixture());
+
+    render(await ArgusFuturesPage());
+
+    expect(screen.getByRole("link", { name: /선물\s+KOSPI200 근월/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "선물" })).toBeInTheDocument();
+    expect(screen.getAllByText("F 202606").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("-0.31%").length).toBeGreaterThan(0);
+    expect(screen.getByText("215,000")).toBeInTheDocument();
+  });
+
+  it("renders the option quotes subtab", async () => {
+    vi.mocked(getArgusV2Dashboard).mockResolvedValue(buildDashboardFixture());
+    vi.mocked(getArgusV2OptionQuotes).mockResolvedValue(buildOptionQuotesFixture());
+
+    render(await ArgusOptionQuotesPage());
+
+    expect(screen.getByRole("link", { name: /옵션 시세표/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "옵션 시세표" })).toBeInTheDocument();
+    expect(screen.getByText("호가 컬럼 미제공")).toBeInTheDocument();
+    expect(screen.getByTestId("option-quotes-scroll-window")).toBeInTheDocument();
+    expect(screen.getByText(/초기 포커스 365 행사가 · 거래대금 7,235만/)).toBeInTheDocument();
+    expect(screen.getByText("12,200")).toBeInTheDocument();
+    expect(screen.getByText("-3,050")).toBeInTheDocument();
+  });
+
+  it("renders the option put-call layer subtab", async () => {
+    vi.mocked(getArgusV2Dashboard).mockResolvedValue(buildDashboardFixture());
+
+    render(await ArgusOptionLayerPage());
+
+    expect(screen.getByRole("link", { name: /풋콜 레이어/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "당일 옵션 풋콜 레이어" })).toBeInTheDocument();
+    expect(screen.getByText("CALL OI 변화")).toBeInTheDocument();
+    expect(screen.getByText("포지션 탭에서 통합 확인")).toBeInTheDocument();
+  });
+
+  it("renders the consolidated position subtab", async () => {
+    vi.mocked(getArgusV2Dashboard).mockResolvedValue(buildDashboardFixture());
+    vi.mocked(getArgusV2OptionQuotes).mockResolvedValue(buildOptionQuotesFixture());
+    vi.mocked(getArgusV2Futures).mockResolvedValue(buildFuturesFixture());
+
+    render(await ArgusPositionsPage());
+
+    expect(screen.getByRole("link", { name: /포지션/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "주체별 포지션" })).toBeInTheDocument();
+    expect(screen.getByText("외국인")).toBeInTheDocument();
+    expect(screen.getByText("기관")).toBeInTheDocument();
+    expect(screen.getByText("개인")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "옵션 거래대금 레이어" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "선물 시장 레이어" })).toBeInTheDocument();
+    expect(screen.getByText("선물 거래대금 추정")).toBeInTheDocument();
+    expect(screen.getAllByText("CALL 거래대금").length).toBeGreaterThan(0);
+    expect(screen.getByText("7,235만원")).toBeInTheDocument();
+    expect(screen.getByText("옵션 주체별 포지션 미수신")).toBeInTheDocument();
   });
 
   it("renders the news analysis feed subtab", async () => {

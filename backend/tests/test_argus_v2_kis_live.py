@@ -69,6 +69,7 @@ def test_run_kis_live_smoke_fetches_and_persists_kis_batches(tmp_path: Path) -> 
                             "acpr": "390.00",
                             "optn_prpr": "5.25",
                             "acml_vol": "1500",
+                            "acml_tr_pbmn": "7875",
                             "hts_otst_stpl_qty": "12200",
                             "hts_ints_vltl": "18.5",
                             "nmix_sdpr": "392.40",
@@ -79,11 +80,24 @@ def test_run_kis_live_smoke_fetches_and_persists_kis_batches(tmp_path: Path) -> 
                             "acpr": "390.00",
                             "optn_prpr": "2.10",
                             "acml_vol": "2000",
+                            "acml_tr_pbmn": "4200",
                             "hts_otst_stpl_qty": "19800",
                             "hts_ints_vltl": "20.1",
                             "nmix_sdpr": "392.40",
                         }
                     ],
+                },
+            )
+
+        if request.url.path.endswith("/inquire-investor-flow"):
+            return httpx.Response(
+                200,
+                json={
+                    "output": {
+                        "frgn_ntby_tr_pbmn": "-18000000",
+                        "orgn_ntby_tr_pbmn": "6200000",
+                        "prsn_ntby_tr_pbmn": "11800000",
+                    }
                 },
             )
 
@@ -97,6 +111,9 @@ def test_run_kis_live_smoke_fetches_and_persists_kis_batches(tmp_path: Path) -> 
         kis_domestic_derivatives_query_params_json=json.dumps(
             {"FID_INPUT_ISCD": AUTO_KIS_DOMESTIC_DERIVATIVES_INPUT_ISCD}
         ),
+        kis_futures_investor_flow_provider="api",
+        kis_futures_investor_flow_path="/uapi/domestic-futureoption/v1/quotations/inquire-investor-flow",
+        kis_futures_investor_flow_tr_id="FUTINV00000000",
         kis_option_chain_provider="api",
     )
 
@@ -111,10 +128,11 @@ def test_run_kis_live_smoke_fetches_and_persists_kis_batches(tmp_path: Path) -> 
 
     assert result.token_status == "ready"
     assert result.token_source == "issued"
-    assert [provider.status for provider in result.providers] == ["success", "success"]
+    assert [provider.status for provider in result.providers] == ["success", "success", "success"]
     assert result.providers[0].observed_count == 1
     assert result.providers[1].observed_count == 1
-    assert len(requests) == 5
+    assert result.providers[2].observed_count == 1
+    assert len(requests) == 6
 
     with get_connection(settings.db_path) as connection:
         run_count = connection.execute("SELECT COUNT(*) AS count FROM argus_v2_provider_runs").fetchone()["count"]
@@ -125,10 +143,13 @@ def test_run_kis_live_smoke_fetches_and_persists_kis_batches(tmp_path: Path) -> 
             "SELECT contract_month, observed_level_count FROM argus_v2_option_chain_snapshots"
         ).fetchone()
         option_level = connection.execute(
-            "SELECT call_open_interest, put_open_interest, pressure_side FROM argus_v2_option_chain_levels"
+            "SELECT call_trading_value, put_trading_value, call_open_interest, put_open_interest, pressure_side FROM argus_v2_option_chain_levels"
+        ).fetchone()
+        futures_flow = connection.execute(
+            "SELECT foreign_net_buy, institution_net_buy, individual_net_buy FROM argus_v2_futures_investor_flow_snapshots"
         ).fetchone()
 
-    assert run_count == 2
+    assert run_count == 3
     assert future["instrument_name"] == "F 202606"
     assert future["change_rate"] == -0.31
     additional_metrics = json.loads(future["additional_metrics_json"])
@@ -137,6 +158,11 @@ def test_run_kis_live_smoke_fetches_and_persists_kis_batches(tmp_path: Path) -> 
     assert round(additional_metrics["open_interest_change_rate"], 2) == -0.23
     assert option_snapshot["contract_month"] == "202605"
     assert option_snapshot["observed_level_count"] == 1
+    assert option_level["call_trading_value"] == 7_875_000
+    assert option_level["put_trading_value"] == 4_200_000
     assert option_level["call_open_interest"] == 12200
     assert option_level["put_open_interest"] == 19800
     assert option_level["pressure_side"] == "PUT"
+    assert futures_flow["foreign_net_buy"] == -180_000_000_000
+    assert futures_flow["institution_net_buy"] == 62_000_000_000
+    assert futures_flow["individual_net_buy"] == 118_000_000_000

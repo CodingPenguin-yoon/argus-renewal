@@ -75,6 +75,7 @@ class KisOptionChainService:
         expiry_list_tr_id: str | None = None,
         expected_level_count: int | None = None,
         stale_after_seconds: int = DEFAULT_STALE_AFTER_SECONDS,
+        trading_value_multiplier: float = 1000.0,
         http_client: httpx.Client | None = None,
     ) -> None:
         self.provider = provider.strip().lower()
@@ -97,6 +98,7 @@ class KisOptionChainService:
         self.expiry_list_tr_id = (expiry_list_tr_id or "").strip() or DEFAULT_KIS_OPTION_LIST_TR_ID
         self.expected_level_count = expected_level_count if expected_level_count and expected_level_count > 0 else None
         self.stale_after_seconds = stale_after_seconds
+        self.trading_value_multiplier = trading_value_multiplier
         self._http_client = http_client
 
     def is_enabled(self) -> tuple[bool, str | None]:
@@ -314,12 +316,14 @@ class KisOptionChainService:
                     call_last_price=as_float(bucket.get("call_last_price")),
                     call_change_rate=as_float(bucket.get("call_change_rate")),
                     call_volume=as_float(bucket.get("call_volume")),
+                    call_trading_value=as_float(bucket.get("call_trading_value")),
                     call_open_interest=call_oi,
                     call_open_interest_change=as_float(bucket.get("call_open_interest_change")),
                     call_implied_volatility=as_float(bucket.get("call_implied_volatility")),
                     put_last_price=as_float(bucket.get("put_last_price")),
                     put_change_rate=as_float(bucket.get("put_change_rate")),
                     put_volume=as_float(bucket.get("put_volume")),
+                    put_trading_value=as_float(bucket.get("put_trading_value")),
                     put_open_interest=put_oi,
                     put_open_interest_change=as_float(bucket.get("put_open_interest_change")),
                     put_implied_volatility=as_float(bucket.get("put_implied_volatility")),
@@ -336,6 +340,7 @@ class KisOptionChainService:
         bucket[f"{side}_last_price"] = bucket.get(f"{side}_last_price") or pick_float(row, ("last_price", "price", "current_price", "stck_prpr", "optn_prpr"))
         bucket[f"{side}_change_rate"] = bucket.get(f"{side}_change_rate") or pick_float(row, ("change_rate", "chg_rate", "prdy_ctrt", "optn_prdy_ctrt"))
         bucket[f"{side}_volume"] = bucket.get(f"{side}_volume") or pick_float(row, ("volume", "acml_vol", "cntg_vol", "trading_volume"))
+        bucket[f"{side}_trading_value"] = bucket.get(f"{side}_trading_value") or self._trading_value(row)
         bucket[f"{side}_open_interest"] = bucket.get(f"{side}_open_interest") or pick_float(row, ("open_interest", "oi", "hts_otst_stpl_qty", "openint"))
         bucket[f"{side}_open_interest_change"] = bucket.get(f"{side}_open_interest_change") or pick_float(row, ("open_interest_change", "oi_change", "otst_stpl_qty_icdc"))
         bucket[f"{side}_implied_volatility"] = bucket.get(f"{side}_implied_volatility") or pick_float(row, ("implied_volatility", "iv", "hts_ints_vltl"))
@@ -344,15 +349,25 @@ class KisOptionChainService:
         for field, aliases in {
             "call_last_price": ("call_last_price", "call_price", "call_prpr"),
             "call_volume": ("call_volume", "call_acml_vol"),
+            "call_trading_value": ("call_trading_value", "call_acml_tr_pbmn"),
             "call_open_interest": ("call_open_interest", "call_oi", "call_hts_otst_stpl_qty"),
             "put_last_price": ("put_last_price", "put_price", "put_prpr"),
             "put_volume": ("put_volume", "put_acml_vol"),
+            "put_trading_value": ("put_trading_value", "put_acml_tr_pbmn"),
             "put_open_interest": ("put_open_interest", "put_oi", "put_hts_otst_stpl_qty"),
             "total_open_interest": ("total_open_interest", "open_interest_total", "total_oi"),
             "net_call_put_oi": ("net_call_put_oi", "call_put_oi_diff", "net_oi"),
             "call_put_oi_ratio": ("call_put_oi_ratio", "call_put_ratio", "oi_ratio"),
         }.items():
             bucket[field] = bucket.get(field) or pick_float(row, aliases)
+        for field in ("call_trading_value", "put_trading_value"):
+            value = as_float(bucket.get(field))
+            if value is not None:
+                bucket[field] = value * self.trading_value_multiplier
+
+    def _trading_value(self, row: dict[str, Any]) -> float | None:
+        raw_value = pick_float(row, ("trading_value", "trade_amount", "acml_tr_pbmn"))
+        return raw_value * self.trading_value_multiplier if raw_value is not None else None
 
     def _build_snapshot_record(
         self,

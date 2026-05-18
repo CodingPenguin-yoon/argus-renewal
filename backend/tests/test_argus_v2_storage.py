@@ -44,6 +44,20 @@ class FakeDerivativesSnapshot:
 
 
 @dataclass(frozen=True)
+class FakeFuturesInvestorFlowSnapshot:
+    source_name: str = "KIS_FUTURES_INVESTOR_FLOW"
+    trade_date: str = "2026-05-12"
+    snapshot_time: str = "2026-05-12T00:10:30Z"
+    market_scope: str = "KOSPI200_FUTURES"
+    foreign_net_buy: float = -180_000_000_000
+    institution_net_buy: float = 62_000_000_000
+    individual_net_buy: float = 118_000_000_000
+    source_url: str = "https://example.test/futures-flow"
+    source_record_id: str = "futures-flow-1"
+    raw_payload: dict[str, Any] = field(default_factory=lambda: {"frgn_ntby_tr_pbmn": "-18000000"})
+
+
+@dataclass(frozen=True)
 class FakeOptionLevel:
     strike_price: float
     moneyness: str
@@ -204,6 +218,28 @@ def test_argus_v2_storage_persists_derivatives_snapshot_and_redacted_sample(tmp_
     assert payload["authorization"] == "[REDACTED]"
 
 
+def test_argus_v2_storage_persists_futures_investor_flow_snapshot(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "argus-v2.db")
+
+    with get_connection(db_path) as connection:
+        storage = ArgusV2Storage(connection)
+        result = storage.save_provider_batch(
+            provider_key="kis_futures_investor_flow",
+            provider_label="KIS 선물 투자자 수급",
+            endpoint="/uapi/domestic-futureoption/v1/quotations/inquire-investor-flow",
+            batch=FakeBatch(records=[FakeFuturesInvestorFlowSnapshot()]),
+        )
+        latest = storage.get_latest_futures_investor_flow_snapshot()
+
+    assert result.status == "success"
+    assert result.observed_count == 1
+    assert result.futures_investor_flow_snapshot_ids
+    assert latest is not None
+    assert latest["foreign_net_buy"] == -180_000_000_000
+    assert latest["institution_net_buy"] == 62_000_000_000
+    assert latest["individual_net_buy"] == 118_000_000_000
+
+
 def test_argus_v2_storage_persists_option_chain_snapshot_and_levels(tmp_path: Path) -> None:
     db_path = str(tmp_path / "argus-v2.db")
 
@@ -336,5 +372,53 @@ def test_argus_v2_storage_persists_news_triggers(tmp_path: Path) -> None:
     assert len(result.news_trigger_ids) == 2
     assert latest[0]["external_id"] == "chip"
     assert latest[1]["external_id"] == "rates"
+    payload = json.loads(sample["payload_json"])
+    assert payload["authorization"] == "[REDACTED]"
+
+
+def test_argus_v2_storage_persists_raw_news_feed_items(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "argus-v2.db")
+
+    with get_connection(db_path) as connection:
+        storage = ArgusV2Storage(connection)
+        result = storage.save_news_feed_batch(
+            provider_key="v2_news_feed",
+            provider_label="v2 원천 뉴스 피드",
+            endpoint="mock://news-feed",
+            batch=FakeBatch(
+                records=[
+                    FakeNewsTrigger(
+                        id="rates",
+                        title="미국 금리 상승",
+                        summary="밤사이 금리 상승은 위험자산에 부담입니다.",
+                        impact="neutral",
+                        source="mock.news.macro",
+                        published_at="2026-05-12T00:15:00Z",
+                        connection_strength="unclear",
+                    ),
+                    FakeNewsTrigger(
+                        id="rates",
+                        title="미국 금리 상승",
+                        summary="중복 feed item입니다.",
+                        impact="neutral",
+                        source="mock.news.macro",
+                        published_at="2026-05-12T00:15:00Z",
+                        connection_strength="unclear",
+                    ),
+                ]
+            ),
+        )
+
+        latest = storage.get_latest_news_feed_items(limit=10)
+        sample = connection.execute(
+            "SELECT payload_json FROM argus_v2_provider_samples WHERE id = ?",
+            (result.sample_ids[0],),
+        ).fetchone()
+
+    assert result.status == "success"
+    assert result.observed_count == 2
+    assert len(result.news_feed_item_ids) == 2
+    assert len(latest) == 1
+    assert latest[0]["external_id"] == "rates"
     payload = json.loads(sample["payload_json"])
     assert payload["authorization"] == "[REDACTED]"

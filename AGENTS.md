@@ -12,6 +12,9 @@
 
 ## Argus operating mode
 - The main Codex session is the coordinator.
+- Model preference: use GPT-5.5 with xhigh reasoning for the main session whenever the client/API configuration allows it.
+- Multi-agent preference: when the user explicitly authorizes subagents and the tool allows model override, spawn subagents with `model=gpt-5.5` and `reasoning_effort=xhigh`.
+- If a platform-provided subagent role has a tool-enforced fixed model that cannot be overridden, state that limitation before relying on that role; prefer a GPT-5.5 xhigh default subagent or keep the work local when that better matches the user's model policy.
 - For non-trivial tasks, delegate in order: explorer, reviewer, docs_researcher, then worker.
 - Only worker is allowed to edit code.
 - Do not start worker until explorer and reviewer have returned.

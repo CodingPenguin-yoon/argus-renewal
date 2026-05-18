@@ -108,8 +108,9 @@ def test_context_collection_persists_mock_market_reaction_and_news(tmp_path):
     assert dashboard.triggers[0].title in {"미국 금리 상승 경계", "반도체 상대 강세"}
     assert dashboard.triggers[0].ai_reason
     assert dashboard.triggers[0].affected_factors is not None
-    assert dashboard.provider_health[2].status == "fresh"
-    assert dashboard.provider_health[3].status == "fresh"
+    health_by_key = {item.key: item for item in dashboard.provider_health}
+    assert health_by_key["v2_market_reaction"].status == "fresh"
+    assert health_by_key["v2_news_triggers"].status == "fresh"
 
 
 def test_context_collection_reads_rss_news_triggers(tmp_path):

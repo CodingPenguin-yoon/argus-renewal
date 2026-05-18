@@ -32,12 +32,14 @@ class DerivativesOptionChainLevelRecord:
     call_last_price: float | None = None
     call_change_rate: float | None = None
     call_volume: float | None = None
+    call_trading_value: float | None = None
     call_open_interest: float | None = None
     call_open_interest_change: float | None = None
     call_implied_volatility: float | None = None
     put_last_price: float | None = None
     put_change_rate: float | None = None
     put_volume: float | None = None
+    put_trading_value: float | None = None
     put_open_interest: float | None = None
     put_open_interest_change: float | None = None
     put_implied_volatility: float | None = None
@@ -81,6 +83,20 @@ class DerivativesSourceStatusRecord:
     stale_after_seconds: int | None = None
     message: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FuturesInvestorFlowSnapshotRecord:
+    source_name: str
+    trade_date: str
+    snapshot_time: str
+    market_scope: str = "KOSPI200_FUTURES"
+    foreign_net_buy: float | None = None
+    institution_net_buy: float | None = None
+    individual_net_buy: float | None = None
+    source_url: str | None = None
+    source_record_id: str | None = None
+    raw_payload: Any = None
 
 
 @dataclass(frozen=True)

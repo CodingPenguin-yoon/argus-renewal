@@ -3,8 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "dev": "bash scripts/dev-runtime.sh",
     "dev:frontend": "pnpm --filter frontend dev",
     "dev:backend": "cd backend && python3 -m uvicorn src.main:app --reload --host 0.0.0.0 --port 4000",
+    "dev:collector:market": "cd backend && python3 -m src.argus_v2.cli collect-loop --market-only --interval-seconds 60",
+    "dev:collector:news": "cd backend && python3 -m src.argus_v2.cli collect-loop --news-only --interval-seconds 300 --news-triggers-provider hybrid",
     "check:boundaries": "bash scripts/check-market-boundaries.sh",
     "lint": "pnpm --filter frontend lint && cd backend && PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m compileall -q src && pnpm check:boundaries",
     "test": "pnpm --filter frontend test && cd backend && pytest -q",

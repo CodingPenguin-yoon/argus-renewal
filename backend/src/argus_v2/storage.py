@@ -3,8 +3,9 @@ from __future__ import annotations
 import dataclasses
 import json
 import sqlite3
+import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 
@@ -36,8 +37,27 @@ class PersistedProviderBatch:
     sample_ids: list[int]
     derivatives_snapshot_ids: list[int]
     option_chain_snapshot_ids: list[int]
+    futures_investor_flow_snapshot_ids: list[int]
     market_reaction_snapshot_ids: list[int]
     news_trigger_ids: list[int]
+
+
+@dataclass(frozen=True)
+class PersistedNewsFeedBatch:
+    run_id: int
+    provider_key: str
+    status: str
+    observed_count: int
+    sample_ids: list[int]
+    news_feed_item_ids: list[int]
+
+
+@dataclass(frozen=True)
+class CollectorLease:
+    collector_key: str
+    owner_id: str
+    acquired: bool
+    reason: str | None = None
 
 
 class ArgusV2Storage:
@@ -140,6 +160,100 @@ class ArgusV2Storage:
             ),
         )
         return int(cursor.lastrowid)
+
+    def acquire_collector_lease(
+        self,
+        *,
+        collector_key: str,
+        owner_id: str | None = None,
+        ttl_seconds: float = 180.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> CollectorLease:
+        resolved_owner_id = owner_id or str(uuid.uuid4())
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        now_iso = now.isoformat()
+        expires_at = (now + timedelta(seconds=max(1.0, ttl_seconds))).isoformat()
+        row = self.connection.execute(
+            """
+            SELECT owner_id, expires_at
+            FROM argus_v2_collector_leases
+            WHERE collector_key = ?
+            """,
+            (collector_key,),
+        ).fetchone()
+        if row is not None and str(row["owner_id"]) != resolved_owner_id and str(row["expires_at"]) > now_iso:
+            return CollectorLease(
+                collector_key=collector_key,
+                owner_id=resolved_owner_id,
+                acquired=False,
+                reason=f"lease_held_by:{row['owner_id']}",
+            )
+
+        self.connection.execute(
+            """
+            INSERT INTO argus_v2_collector_leases (
+                collector_key,
+                owner_id,
+                acquired_at,
+                heartbeat_at,
+                expires_at,
+                metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(collector_key) DO UPDATE SET
+                owner_id = excluded.owner_id,
+                heartbeat_at = excluded.heartbeat_at,
+                expires_at = excluded.expires_at,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                collector_key,
+                resolved_owner_id,
+                now_iso,
+                now_iso,
+                expires_at,
+                _json_dumps(metadata or {}),
+            ),
+        )
+        return CollectorLease(collector_key=collector_key, owner_id=resolved_owner_id, acquired=True)
+
+    def heartbeat_collector_lease(
+        self,
+        *,
+        collector_key: str,
+        owner_id: str,
+        ttl_seconds: float = 180.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        cursor = self.connection.execute(
+            """
+            UPDATE argus_v2_collector_leases
+            SET heartbeat_at = ?,
+                expires_at = ?,
+                metadata_json = ?
+            WHERE collector_key = ?
+              AND owner_id = ?
+            """,
+            (
+                now.isoformat(),
+                (now + timedelta(seconds=max(1.0, ttl_seconds))).isoformat(),
+                _json_dumps(metadata or {}),
+                collector_key,
+                owner_id,
+            ),
+        )
+        return cursor.rowcount == 1
+
+    def release_collector_lease(self, *, collector_key: str, owner_id: str) -> None:
+        self.connection.execute(
+            """
+            DELETE FROM argus_v2_collector_leases
+            WHERE collector_key = ?
+              AND owner_id = ?
+            """,
+            (collector_key, owner_id),
+        )
 
     def save_derivatives_snapshot(self, *, run_id: int, record: Any, raw_sample_id: int | None = None) -> int:
         cursor = self.connection.execute(
@@ -249,12 +363,14 @@ class ArgusV2Storage:
                     call_last_price,
                     call_change_rate,
                     call_volume,
+                    call_trading_value,
                     call_open_interest,
                     call_open_interest_change,
                     call_implied_volatility,
                     put_last_price,
                     put_change_rate,
                     put_volume,
+                    put_trading_value,
                     put_open_interest,
                     put_open_interest_change,
                     put_implied_volatility,
@@ -265,7 +381,7 @@ class ArgusV2Storage:
                     metadata_json,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     snapshot_id,
@@ -274,12 +390,14 @@ class ArgusV2Storage:
                     _attr(level, "call_last_price"),
                     _attr(level, "call_change_rate"),
                     _attr(level, "call_volume"),
+                    _attr(level, "call_trading_value"),
                     _attr(level, "call_open_interest"),
                     _attr(level, "call_open_interest_change"),
                     _attr(level, "call_implied_volatility"),
                     _attr(level, "put_last_price"),
                     _attr(level, "put_change_rate"),
                     _attr(level, "put_volume"),
+                    _attr(level, "put_trading_value"),
                     _attr(level, "put_open_interest"),
                     _attr(level, "put_open_interest_change"),
                     _attr(level, "put_implied_volatility"),
@@ -293,6 +411,42 @@ class ArgusV2Storage:
             )
 
         return snapshot_id
+
+    def save_futures_investor_flow_snapshot(self, *, run_id: int, record: Any, raw_sample_id: int | None = None) -> int:
+        cursor = self.connection.execute(
+            """
+            INSERT INTO argus_v2_futures_investor_flow_snapshots (
+                run_id,
+                raw_sample_id,
+                trade_date,
+                snapshot_time,
+                source_name,
+                market_scope,
+                foreign_net_buy,
+                institution_net_buy,
+                individual_net_buy,
+                source_url,
+                source_record_id,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                raw_sample_id,
+                _attr(record, "trade_date"),
+                _attr(record, "snapshot_time"),
+                _attr(record, "source_name"),
+                _attr(record, "market_scope") or "KOSPI200_FUTURES",
+                _attr(record, "foreign_net_buy"),
+                _attr(record, "institution_net_buy"),
+                _attr(record, "individual_net_buy"),
+                _attr(record, "source_url"),
+                _attr(record, "source_record_id"),
+                utcnow_iso(),
+            ),
+        )
+        return int(cursor.lastrowid)
 
     def save_market_reaction_snapshot(self, *, run_id: int, record: Any, raw_sample_id: int | None = None) -> int:
         kospi_point = _attr(record, "kospi_change_rate")
@@ -441,6 +595,103 @@ class ArgusV2Storage:
         )
         return int(cursor.lastrowid)
 
+    def save_news_feed_item(self, *, run_id: int, record: Any, raw_sample_id: int | None = None) -> int:
+        cursor = self.connection.execute(
+            """
+            INSERT INTO argus_v2_news_feed_items (
+                run_id,
+                raw_sample_id,
+                external_id,
+                title,
+                summary,
+                source_name,
+                published_at,
+                freshness_state,
+                source_url,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                raw_sample_id,
+                _attr(record, "id") or _attr(record, "external_id") or _attr(record, "source_record_id") or "",
+                _attr(record, "title"),
+                _attr(record, "summary") or "",
+                _attr(record, "source") or _attr(record, "source_name") or "argus_v2.news_feed",
+                _attr(record, "published_at") or _attr(record, "observed_at"),
+                _attr(record, "freshness") or _attr(record, "freshness_state") or "partial",
+                _attr(record, "source_url"),
+                utcnow_iso(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def save_news_feed_batch(
+        self,
+        *,
+        provider_key: str,
+        batch: Any,
+        provider_label: str | None = None,
+        endpoint: str | None = None,
+        started_at: str | None = None,
+    ) -> PersistedNewsFeedBatch:
+        records = list(_attr(batch, "records") or [])
+        metadata = dict(_attr(batch, "metadata") or {})
+        disabled_reason = _attr(batch, "disabled_reason")
+        expected_count = _pick_expected_count(records=records, metadata=metadata)
+        run_id = self.start_provider_run(
+            provider_key=provider_key,
+            provider_label=provider_label,
+            endpoint=endpoint,
+            started_at=started_at,
+            metadata=metadata,
+        )
+
+        sample_ids: list[int] = []
+        news_feed_item_ids: list[int] = []
+        for record in records:
+            raw_payload = _attr(record, "raw_payload")
+            raw_sample_id: int | None = None
+            if raw_payload is not None:
+                raw_sample_id = self.save_provider_sample(
+                    run_id=run_id,
+                    sample_kind="news_feed_item",
+                    payload=raw_payload,
+                    source_url=_attr(record, "source_url"),
+                )
+                sample_ids.append(raw_sample_id)
+            news_feed_item_ids.append(
+                self.save_news_feed_item(
+                    run_id=run_id,
+                    record=record,
+                    raw_sample_id=raw_sample_id,
+                )
+            )
+
+        observed_count = len(records)
+        status = _batch_status(
+            disabled_reason=disabled_reason,
+            observed_count=observed_count,
+            expected_count=expected_count,
+        )
+        self.finish_provider_run(
+            run_id=run_id,
+            status=status,
+            observed_count=observed_count,
+            expected_count=expected_count,
+            missing_fields=[str(disabled_reason)] if disabled_reason else [],
+            metadata=metadata,
+        )
+        return PersistedNewsFeedBatch(
+            run_id=run_id,
+            provider_key=provider_key,
+            status=status,
+            observed_count=observed_count,
+            sample_ids=sample_ids,
+            news_feed_item_ids=news_feed_item_ids,
+        )
+
     def save_provider_batch(
         self,
         *,
@@ -466,6 +717,7 @@ class ArgusV2Storage:
         sample_ids: list[int] = []
         derivatives_snapshot_ids: list[int] = []
         option_chain_snapshot_ids: list[int] = []
+        futures_investor_flow_snapshot_ids: list[int] = []
         market_reaction_snapshot_ids: list[int] = []
         news_trigger_ids: list[int] = []
 
@@ -484,6 +736,14 @@ class ArgusV2Storage:
             if _is_option_chain_snapshot(record):
                 option_chain_snapshot_ids.append(
                     self.save_option_chain_snapshot(
+                        run_id=run_id,
+                        record=record,
+                        raw_sample_id=raw_sample_id,
+                    )
+                )
+            elif _is_futures_investor_flow_snapshot(record):
+                futures_investor_flow_snapshot_ids.append(
+                    self.save_futures_investor_flow_snapshot(
                         run_id=run_id,
                         record=record,
                         raw_sample_id=raw_sample_id,
@@ -537,6 +797,7 @@ class ArgusV2Storage:
             sample_ids=sample_ids,
             derivatives_snapshot_ids=derivatives_snapshot_ids,
             option_chain_snapshot_ids=option_chain_snapshot_ids,
+            futures_investor_flow_snapshot_ids=futures_investor_flow_snapshot_ids,
             market_reaction_snapshot_ids=market_reaction_snapshot_ids,
             news_trigger_ids=news_trigger_ids,
         )
@@ -546,6 +807,17 @@ class ArgusV2Storage:
             """
             SELECT *
             FROM argus_v2_derivatives_snapshots
+            ORDER BY snapshot_time DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return _row_to_dict(row)
+
+    def get_latest_futures_investor_flow_snapshot(self) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            """
+            SELECT *
+            FROM argus_v2_futures_investor_flow_snapshots
             ORDER BY snapshot_time DESC, id DESC
             LIMIT 1
             """
@@ -628,6 +900,19 @@ class ArgusV2Storage:
         ).fetchall()
         return [_row_to_dict(row) or {} for row in rows]
 
+    def get_latest_provider_run(self, provider_key: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            """
+            SELECT *
+            FROM argus_v2_provider_runs
+            WHERE provider_key = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (provider_key,),
+        ).fetchone()
+        return _row_to_dict(row)
+
     def get_latest_market_reaction_snapshot(self) -> dict[str, Any] | None:
         row = self.connection.execute(
             """
@@ -684,6 +969,33 @@ class ArgusV2Storage:
         )
         return items[:limit]
 
+    def get_latest_news_feed_items(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        window_limit = max(limit * 5, limit)
+        rows = self.connection.execute(
+            """
+            SELECT feed.*, samples.payload_json AS raw_payload_json
+            FROM argus_v2_news_feed_items AS feed
+            LEFT JOIN argus_v2_provider_samples AS samples
+                ON samples.id = feed.raw_sample_id
+            ORDER BY COALESCE(feed.published_at, feed.created_at) DESC, feed.id DESC
+            LIMIT ?
+            """,
+            (window_limit,),
+        ).fetchall()
+
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            item = _row_to_dict(row) or {}
+            key = _news_feed_dedupe_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(item)
+            if len(items) >= limit:
+                break
+        return items
+
 
 def _batch_status(*, disabled_reason: str | None, observed_count: int, expected_count: int | None) -> str:
     if disabled_reason:
@@ -721,6 +1033,10 @@ def _observed_count(records: list[Any]) -> int:
     if derivatives_count:
         return derivatives_count
 
+    futures_flow_count = sum(1 for record in records if _is_futures_investor_flow_snapshot(record))
+    if futures_flow_count:
+        return futures_flow_count
+
     reaction_count = sum(1 for record in records if _is_market_reaction_snapshot(record))
     if reaction_count:
         return reaction_count
@@ -739,6 +1055,18 @@ def _observed_count(records: list[Any]) -> int:
 
 def _is_derivatives_snapshot(record: Any) -> bool:
     return bool(_attr(record, "instrument_code") and _attr(record, "snapshot_time"))
+
+
+def _is_futures_investor_flow_snapshot(record: Any) -> bool:
+    return bool(
+        _attr(record, "market_scope")
+        and _attr(record, "snapshot_time")
+        and (
+            _attr(record, "foreign_net_buy") is not None
+            or _attr(record, "institution_net_buy") is not None
+            or _attr(record, "individual_net_buy") is not None
+        )
+    )
 
 
 def _is_option_chain_snapshot(record: Any) -> bool:
@@ -764,6 +1092,8 @@ def _is_news_trigger(record: Any) -> bool:
 def _sample_kind(record: Any) -> str:
     if _is_option_chain_snapshot(record):
         return "option_chain_snapshot"
+    if _is_futures_investor_flow_snapshot(record):
+        return "futures_investor_flow_snapshot"
     if _is_derivatives_snapshot(record):
         return "derivatives_snapshot"
     if _is_market_reaction_snapshot(record):
@@ -840,3 +1170,11 @@ def _news_relevance_from_sample(payload_json: Any) -> int:
         return 0
     value = payload.get("_argus_ai_relevance_score")
     return int(value) if isinstance(value, int) else 0
+
+
+def _news_feed_dedupe_key(item: dict[str, Any]) -> str:
+    for key in ("external_id", "source_url"):
+        value = item.get(key)
+        if value:
+            return str(value)
+    return f"{item.get('source_name') or ''}:{item.get('title') or ''}:{item.get('published_at') or ''}"

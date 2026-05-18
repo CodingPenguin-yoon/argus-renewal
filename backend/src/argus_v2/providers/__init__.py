@@ -7,6 +7,7 @@ from .context_inputs import (
 )
 from .kis_auth import KisAccessToken, KisAuthClient, KisAuthError
 from .kis_derivatives import AUTO_KIS_DOMESTIC_DERIVATIVES_INPUT_ISCD, KisDomesticDerivativesService
+from .kis_futures_flow import KisFuturesInvestorFlowService
 from .kis_live import KisLiveProviderResult, KisLiveSmokeResult, run_kis_live_smoke
 from .kis_market_reaction import KisMarketReactionService
 from .kis_option_chain import KisOptionChainService
@@ -22,6 +23,7 @@ __all__ = [
     "KisAuthClient",
     "KisAuthError",
     "KisDomesticDerivativesService",
+    "KisFuturesInvestorFlowService",
     "KisLiveProviderResult",
     "KisLiveSmokeResult",
     "KisMarketReactionService",

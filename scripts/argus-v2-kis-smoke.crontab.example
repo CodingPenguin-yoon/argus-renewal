@@ -1,8 +1,10 @@
 # Example: refresh KIS derivatives and option-chain snapshots during Korean market hours.
 # Adjust paths before installing with crontab.
 
-*/5 9-15 * * 1-5 cd /Users/yoon/03_projects/05_economy_project/argus_renewal/backend && \
-  /usr/bin/env bash -lc 'set -a; [ -f .env ] && source .env; set +a; python3 -m src.argus_v2.cli smoke-kis >> data/argus-v2-kis-smoke.log 2>&1'
+# Market data is session-aware. Outside the configured KRX regular window this returns a skipped market result.
+*/3 8-15 * * 1-5 cd /Users/yoon/03_projects/05_economy_project/argus_renewal/backend && \
+  /usr/bin/env bash -lc 'set -a; [ -f .env ] && source .env; set +a; python3 -m src.argus_v2.cli collect-once --market-only >> data/argus-v2-market-collector.log 2>&1'
 
-*/5 9-15 * * 1-5 cd /Users/yoon/03_projects/05_economy_project/argus_renewal/backend && \
-  /usr/bin/env bash -lc 'set -a; [ -f .env ] && source .env; set +a; python3 -m src.argus_v2.cli collect-context --market-reaction-provider kis --news-triggers-provider hybrid >> data/argus-v2-context.log 2>&1'
+# News can run on holidays and outside market hours.
+*/10 * * * * cd /Users/yoon/03_projects/05_economy_project/argus_renewal/backend && \
+  /usr/bin/env bash -lc 'set -a; [ -f .env ] && source .env; set +a; python3 -m src.argus_v2.cli collect-once --news-only --news-triggers-provider hybrid >> data/argus-v2-news-collector.log 2>&1'

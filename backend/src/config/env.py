@@ -18,6 +18,17 @@ class Settings(BaseSettings):
     market_briefing_max_retries: int = 3
     market_briefing_backoff_seconds: float = 1.0
 
+    argus_market_holidays: str = ""
+    argus_collector_regular_market_enabled: bool = True
+    argus_collector_night_market_enabled: bool = False
+    argus_collector_news_enabled: bool = True
+    argus_collector_regular_start: str = "08:40"
+    argus_collector_regular_end: str = "15:50"
+    argus_collector_night_start: str = "17:50"
+    argus_collector_night_end: str = "06:05"
+    argus_collector_loop_interval_seconds: float = 60.0
+    argus_collector_lease_ttl_seconds: float = 180.0
+
     kis_domestic_derivatives_provider: str = "disabled"
     kis_domestic_derivatives_file_path: Optional[str] = None
     kis_domestic_derivatives_path: str = "/uapi/domestic-futureoption/v1/quotations/inquire-price"
@@ -25,6 +36,13 @@ class Settings(BaseSettings):
     kis_domestic_derivatives_query_params_json: Optional[str] = None
     kis_domestic_derivatives_field_alias_map_json: Optional[str] = None
     kis_domestic_derivatives_tr_id: Optional[str] = None
+    kis_futures_investor_flow_provider: str = "disabled"
+    kis_futures_investor_flow_file_path: Optional[str] = None
+    kis_futures_investor_flow_path: str = ""
+    kis_futures_investor_flow_response_paths: str = "output,output1,output2,data.output,data.output1,data.output2,items,rows,data.items,data.rows,data"
+    kis_futures_investor_flow_query_params_json: Optional[str] = None
+    kis_futures_investor_flow_tr_id: Optional[str] = None
+    kis_futures_investor_flow_amount_multiplier: float = 10000.0
 
     kis_option_chain_provider: str = "disabled"
     kis_option_chain_file_path: Optional[str] = None
@@ -34,6 +52,7 @@ class Settings(BaseSettings):
     kis_option_chain_field_alias_map_json: Optional[str] = None
     kis_option_chain_tr_id: Optional[str] = "FHPIF05030100"
     kis_option_chain_expiry_month: Optional[str] = None
+    kis_option_chain_trading_value_multiplier: float = 1000.0
     kis_option_list_path: str = "/uapi/domestic-futureoption/v1/quotations/display-board-option-list"
     kis_option_list_response_paths: str = "output,data.items,data.rows,data"
     kis_option_list_query_params_json: Optional[str] = None

@@ -12,6 +12,7 @@ Argus v2는 레거시 KRX 중심 프로젝트를 제거하고, `파생/옵션 + 
 -> SQLite 저장
 -> dashboard API 조회
 -> frontend 표시 계약
+```
 
 원천 뉴스 피드는 별도 API와 화면으로 분리했습니다.
 
@@ -19,7 +20,6 @@ Argus v2는 레거시 KRX 중심 프로젝트를 제거하고, `파생/옵션 + 
 RSS/Naver/DART/hybrid 원천 뉴스
 -> /api/argus/v2/news-feed
 -> /argus/triggers/news
-```
 ```
 
 남은 일은 “기능이 존재하는가”가 아니라 “장중에 반복해서 믿고 볼 수 있는가”를 검증하고 보정하는 단계입니다.

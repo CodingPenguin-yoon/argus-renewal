@@ -14,6 +14,18 @@
 - `plans/mvp-closeout.md`
 - `plans/argus-v2-roadmap.md`
 
+## Architecture
+
+- `architecture/README.md`
+- `architecture/01-system-overview.md`
+- `architecture/02-backend-api-contracts.md`
+- `architecture/03-storage-data-model.md`
+- `architecture/04-provider-ingestion.md`
+- `architecture/05-judgement-engine.md`
+- `architecture/06-frontend-architecture.md`
+- `architecture/07-news-analysis-architecture.md`
+- `architecture/08-operations-validation.md`
+
 ## Study
 
 - `study/README.md`

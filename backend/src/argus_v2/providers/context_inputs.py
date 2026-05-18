@@ -983,6 +983,43 @@ def run_news_ai_smoke(
     )
 
 
+def build_news_feed_service(
+    *,
+    settings: Settings,
+    provider_override: str | None = None,
+    http_client: httpx.Client | None = None,
+) -> ArgusNewsTriggerService:
+    provider = (provider_override or settings.argus_news_feed_provider or settings.argus_news_triggers_provider).strip().lower()
+    return ArgusNewsTriggerService(
+        provider=provider,
+        file_path=settings.argus_news_triggers_file_path,
+        rss_urls=settings.argus_news_feed_rss_urls or settings.argus_news_triggers_rss_urls,
+        query=settings.argus_news_feed_query or settings.argus_news_triggers_query,
+        limit=settings.argus_news_feed_limit,
+        lookback_hours=settings.argus_news_feed_lookback_hours,
+        naver_client_id=settings.argus_news_naver_client_id,
+        naver_client_secret=settings.argus_news_naver_client_secret,
+        naver_base_url=settings.argus_news_naver_base_url,
+        naver_search_path=settings.argus_news_naver_search_path,
+        naver_display=settings.argus_news_naver_display,
+        naver_page_limit=settings.argus_news_naver_page_limit,
+        news_ai_provider="disabled",
+        dart_api_key=settings.argus_disclosure_dart_api_key,
+        dart_base_url=settings.argus_disclosure_dart_base_url,
+        dart_list_path=settings.argus_disclosure_dart_list_path,
+        dart_corp_cls=settings.argus_disclosure_dart_corp_cls,
+        dart_pblntf_ty=settings.argus_disclosure_dart_pblntf_ty,
+        dart_lookback_days=settings.argus_disclosure_dart_lookback_days,
+        dart_page_count=settings.argus_disclosure_dart_page_count,
+        macro_events_provider=settings.argus_macro_events_provider,
+        macro_events_file_path=settings.argus_macro_events_file_path,
+        timeout_seconds=settings.market_briefing_timeout_seconds,
+        max_retries=settings.market_briefing_max_retries,
+        backoff_seconds=settings.market_briefing_backoff_seconds,
+        http_client=http_client,
+    )
+
+
 def _fetch_and_store_market_reaction(
     *,
     settings: Settings,

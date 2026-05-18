@@ -38,11 +38,16 @@ ARGUS_NEWS_AI_TIMEOUT_SECONDS=8
 
 ```bash
 source .venv/bin/activate
-pnpm dev:backend
+pnpm dev
 ```
 
+`pnpm dev`는 backend API, frontend, market collector, news collector를 함께 실행합니다. 개별 실행이 필요하면 아래 명령을 각각 사용합니다.
+
 ```bash
+pnpm dev:backend
 pnpm dev:frontend
+pnpm dev:collector:market
+pnpm dev:collector:news
 ```
 
 - backend: `http://localhost:4000`
@@ -52,10 +57,14 @@ pnpm dev:frontend
 
 - 시장 판단: `http://localhost:3000/argus`
 - 옵션·선물: `http://localhost:3000/argus/derivatives`
+- 옵션 시세표: `http://localhost:3000/argus/derivatives/option-quotes`
+- 당일 옵션 풋콜 레이어: `http://localhost:3000/argus/derivatives/option-layer`
+- 주체별 포지션: `http://localhost:3000/argus/derivatives/positions`
 - 현물 반응: `http://localhost:3000/argus/reaction`
 - 뉴스 분석 메인: `http://localhost:3000/argus/triggers`
 - 실시간 뉴스: `http://localhost:3000/argus/triggers/news`
 - API: `http://localhost:4000/api/argus/v2/dashboard`
+- 옵션 시세표 API: `http://localhost:4000/api/argus/v2/option-quotes`
 - 뉴스 피드 API: `http://localhost:4000/api/argus/v2/news-feed`
 
 ## 5. KIS Smoke
@@ -76,6 +85,19 @@ python3 -m src.argus_v2.cli collect-context --news-triggers-provider naver
 python3 -m src.argus_v2.cli collect-context --news-triggers-provider dart
 python3 -m src.argus_v2.cli collect-context --news-triggers-provider macro
 ```
+
+세션-aware 1회 수집:
+
+```bash
+python3 -m src.argus_v2.cli collect-once
+python3 -m src.argus_v2.cli collect-once --market-only
+python3 -m src.argus_v2.cli collect-once --news-only
+python3 -m src.argus_v2.cli collect-loop --interval-seconds 60
+```
+
+`collect-once`는 정규장 market 수집과 24시간 뉴스 수집을 분리합니다. 야간 파생은 `ARGUS_COLLECTOR_NIGHT_MARKET_ENABLED=true`일 때만 market 세션으로 취급합니다.
+
+배포에서는 backend API와 collector를 별도 프로세스로 띄웁니다. Docker Compose/systemd 예시는 `doc/operations/deployment-collectors.md`에 있습니다.
 
 ## 7. 뉴스 AI Smoke
 

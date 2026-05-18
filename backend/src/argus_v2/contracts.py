@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 FreshnessStatus = Literal["fresh", "partial", "stale", "missing"]
 DirectionTone = Literal["positive", "neutral", "negative"]
 OptionPressureSide = Literal["CALL", "PUT", "NEUTRAL", "UNKNOWN"]
+OptionQuotePressureSide = Literal["CALL", "PUT", "BALANCED", "UNKNOWN"]
 ConnectionStrength = Literal["strong", "medium", "weak", "unclear"]
 MarketJudgementLabel = Literal["강한 상방", "상방 우위", "중립", "하방 우위", "강한 하방"]
 ConfidenceLevel = Literal["low", "medium", "high"]
@@ -26,7 +27,9 @@ class ProviderHealth(BaseModel):
     key: str
     label: str
     status: FreshnessStatus
+    state: Optional[str] = None
     last_success_at: Optional[str] = None
+    next_scheduled_run: Optional[str] = None
     observed_count: int = 0
     missing_fields: list[str] = Field(default_factory=list)
     error: Optional[str] = None
@@ -52,6 +55,70 @@ class OptionOpenInterestChange(BaseModel):
     dominant_side: OptionPressureSide = "UNKNOWN"
     source: str = "argus_v2.option_chain_comparison"
     observed_at: Optional[str] = None
+
+
+class OptionQuoteRow(BaseModel):
+    strike_price: float
+    moneyness: str = "UNKNOWN"
+    call_last_price: Optional[float] = None
+    call_change_rate: Optional[float] = None
+    call_volume: Optional[float] = None
+    call_trading_value: Optional[float] = None
+    call_open_interest: Optional[float] = None
+    call_open_interest_change: Optional[float] = None
+    call_implied_volatility: Optional[float] = None
+    put_last_price: Optional[float] = None
+    put_change_rate: Optional[float] = None
+    put_volume: Optional[float] = None
+    put_trading_value: Optional[float] = None
+    put_open_interest: Optional[float] = None
+    put_open_interest_change: Optional[float] = None
+    put_implied_volatility: Optional[float] = None
+    total_open_interest: Optional[float] = None
+    net_call_put_oi: Optional[float] = None
+    call_put_oi_ratio: Optional[float] = None
+    pressure_side: OptionQuotePressureSide = "UNKNOWN"
+
+
+class OptionQuotesResponse(BaseModel):
+    as_of: Optional[str]
+    trade_date: Optional[str]
+    source: str
+    status: FreshnessStatus
+    observed_count: int
+    underlying_code: Optional[str] = None
+    underlying_name: Optional[str] = None
+    underlying_price: Optional[float] = None
+    expiry_date: Optional[str] = None
+    contract_month: Optional[str] = None
+    atm_strike: Optional[float] = None
+    rows: list[OptionQuoteRow] = Field(default_factory=list)
+
+
+class FuturesQuoteResponse(BaseModel):
+    as_of: Optional[str]
+    trade_date: Optional[str]
+    source: str
+    status: FreshnessStatus
+    observed_count: int
+    session_type: Optional[str] = None
+    instrument_code: Optional[str] = None
+    instrument_name: Optional[str] = None
+    price: Optional[float] = None
+    price_change: Optional[float] = None
+    change_rate: Optional[float] = None
+    volume: Optional[float] = None
+    open_interest: Optional[float] = None
+    put_call_ratio: Optional[float] = None
+    implied_volatility: Optional[float] = None
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+    basis: Optional[float] = None
+    market_basis: Optional[float] = None
+    theoretical_price: Optional[float] = None
+    disparity_rate: Optional[float] = None
+    open_interest_change: Optional[float] = None
+    open_interest_change_rate: Optional[float] = None
 
 
 class DerivativesPressure(BaseModel):

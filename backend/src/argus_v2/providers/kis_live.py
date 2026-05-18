@@ -10,6 +10,7 @@ from ...config.env import Settings
 from ..db import get_connection, resolve_db_path, utcnow_iso
 from ..storage import ArgusV2Storage
 from .kis_derivatives import KisDomesticDerivativesService
+from .kis_futures_flow import KisFuturesInvestorFlowService
 from .kis_auth import KisAuthClient, KisAuthError
 from .kis_option_chain import KisOptionChainService
 
@@ -27,6 +28,7 @@ class KisLiveProviderResult:
     sample_count: int
     derivatives_snapshot_count: int
     option_chain_snapshot_count: int
+    futures_investor_flow_snapshot_count: int
     error: str | None = None
 
 
@@ -50,6 +52,7 @@ def run_kis_live_smoke(
     snapshot_time: datetime | None = None,
     include_derivatives: bool = True,
     include_option_chain: bool = True,
+    include_futures_investor_flow: bool = True,
     token_cache_path: str | None = None,
     http_client: httpx.Client | None = None,
 ) -> KisLiveSmokeResult:
@@ -57,7 +60,12 @@ def run_kis_live_smoke(
     resolved_snapshot_time = (snapshot_time or datetime.now(timezone.utc)).astimezone(timezone.utc)
     providers: list[KisLiveProviderResult] = []
 
-    needs_token = _provider_needs_token(settings, include_derivatives=include_derivatives, include_option_chain=include_option_chain)
+    needs_token = _provider_needs_token(
+        settings,
+        include_derivatives=include_derivatives,
+        include_option_chain=include_option_chain,
+        include_futures_investor_flow=include_futures_investor_flow,
+    )
     token = None
     token_status = "not_required"
     token_source = None
@@ -99,6 +107,16 @@ def run_kis_live_smoke(
                             error=error,
                         )
                     )
+                if include_futures_investor_flow and settings.kis_futures_investor_flow_provider.strip().lower() == "api":
+                    providers.append(
+                        _persist_failed_run(
+                            storage=storage,
+                            provider_key="kis_futures_investor_flow",
+                            provider_label="KIS 선물 투자자 수급",
+                            endpoint=settings.kis_futures_investor_flow_path,
+                            error=error,
+                        )
+                    )
             return KisLiveSmokeResult(
                 db_path=str(resolve_db_path(settings.db_path)),
                 trade_date=resolved_trade_date.isoformat(),
@@ -137,6 +155,18 @@ def run_kis_live_smoke(
                 )
             )
 
+        if include_futures_investor_flow:
+            providers.append(
+                _fetch_and_store_futures_investor_flow(
+                    settings=settings,
+                    storage=storage,
+                    access_token=access_token,
+                    trade_date=resolved_trade_date,
+                    snapshot_time=resolved_snapshot_time,
+                    http_client=http_client,
+                )
+            )
+
     return KisLiveSmokeResult(
         db_path=str(resolve_db_path(settings.db_path)),
         trade_date=resolved_trade_date.isoformat(),
@@ -152,12 +182,15 @@ def _provider_needs_token(
     *,
     include_derivatives: bool,
     include_option_chain: bool,
+    include_futures_investor_flow: bool,
 ) -> bool:
     providers = []
     if include_derivatives:
         providers.append(settings.kis_domestic_derivatives_provider)
     if include_option_chain:
         providers.append(settings.kis_option_chain_provider)
+    if include_futures_investor_flow:
+        providers.append(settings.kis_futures_investor_flow_provider)
     return any((provider or "").strip().lower() == "api" for provider in providers)
 
 
@@ -204,6 +237,7 @@ def _fetch_and_store_derivatives(
             sample_count=len(persisted.sample_ids),
             derivatives_snapshot_count=len(persisted.derivatives_snapshot_ids),
             option_chain_snapshot_count=len(persisted.option_chain_snapshot_ids),
+            futures_investor_flow_snapshot_count=len(persisted.futures_investor_flow_snapshot_ids),
         )
     except Exception as error:
         return _persist_failed_run(
@@ -249,6 +283,7 @@ def _fetch_and_store_option_chain(
             expiry_list_tr_id=settings.kis_option_list_tr_id,
             expected_level_count=settings.kis_option_chain_expected_level_count,
             stale_after_seconds=settings.kis_option_chain_stale_after_seconds,
+            trading_value_multiplier=settings.kis_option_chain_trading_value_multiplier,
             http_client=http_client,
         ).fetch_option_chain_snapshot(trade_date=trade_date, snapshot_time=snapshot_time)
         persisted = storage.save_provider_batch(
@@ -265,12 +300,68 @@ def _fetch_and_store_option_chain(
             sample_count=len(persisted.sample_ids),
             derivatives_snapshot_count=len(persisted.derivatives_snapshot_ids),
             option_chain_snapshot_count=len(persisted.option_chain_snapshot_ids),
+            futures_investor_flow_snapshot_count=len(persisted.futures_investor_flow_snapshot_ids),
         )
     except Exception as error:
         return _persist_failed_run(
             storage=storage,
             provider_key=provider_key,
             provider_label="KIS 옵션체인",
+            endpoint=endpoint,
+            error=error,
+        )
+
+
+def _fetch_and_store_futures_investor_flow(
+    *,
+    settings: Settings,
+    storage: ArgusV2Storage,
+    access_token: str,
+    trade_date: date,
+    snapshot_time: datetime,
+    http_client: httpx.Client | None,
+) -> KisLiveProviderResult:
+    provider_key = "kis_futures_investor_flow"
+    endpoint = settings.kis_futures_investor_flow_path
+    try:
+        batch = KisFuturesInvestorFlowService(
+            provider=settings.kis_futures_investor_flow_provider,
+            file_path=settings.kis_futures_investor_flow_file_path,
+            base_url=settings.kis_base_url,
+            endpoint_path=endpoint,
+            app_key=settings.kis_app_key,
+            app_secret=settings.kis_app_secret,
+            access_token=access_token,
+            timeout_seconds=settings.market_briefing_timeout_seconds,
+            max_retries=settings.market_briefing_max_retries,
+            backoff_seconds=settings.market_briefing_backoff_seconds,
+            response_paths=settings.kis_futures_investor_flow_response_paths,
+            query_params_json=settings.kis_futures_investor_flow_query_params_json,
+            tr_id=settings.kis_futures_investor_flow_tr_id,
+            amount_multiplier=settings.kis_futures_investor_flow_amount_multiplier,
+            http_client=http_client,
+        ).fetch_snapshot(trade_date=trade_date, snapshot_time=snapshot_time)
+        persisted = storage.save_provider_batch(
+            provider_key=provider_key,
+            provider_label="KIS 선물 투자자 수급",
+            endpoint=endpoint,
+            batch=batch,
+        )
+        return KisLiveProviderResult(
+            provider_key=provider_key,
+            status=persisted.status,
+            run_id=persisted.run_id,
+            observed_count=persisted.observed_count,
+            sample_count=len(persisted.sample_ids),
+            derivatives_snapshot_count=len(persisted.derivatives_snapshot_ids),
+            option_chain_snapshot_count=len(persisted.option_chain_snapshot_ids),
+            futures_investor_flow_snapshot_count=len(persisted.futures_investor_flow_snapshot_ids),
+        )
+    except Exception as error:
+        return _persist_failed_run(
+            storage=storage,
+            provider_key=provider_key,
+            provider_label="KIS 선물 투자자 수급",
             endpoint=endpoint,
             error=error,
         )
@@ -304,6 +395,7 @@ def _persist_failed_run(
         sample_count=0,
         derivatives_snapshot_count=0,
         option_chain_snapshot_count=0,
+        futures_investor_flow_snapshot_count=0,
         error=_safe_error_message(error),
     )
 

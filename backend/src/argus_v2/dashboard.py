@@ -7,8 +7,11 @@ from typing import Any
 from .contracts import (
     DataPoint,
     DerivativesPressure,
+    FuturesQuoteResponse,
     MarketDashboard,
     MarketReaction,
+    OptionQuoteRow,
+    OptionQuotesResponse,
     OptionOpenInterestChange,
     OptionKeyLevel,
     OptionPressureSide,
@@ -17,6 +20,7 @@ from .contracts import (
     TriggerEvent,
 )
 from .judgement import build_market_judgement
+from .market_calendar import next_regular_session_start, resolve_market_session
 from .storage import ArgusV2Storage
 
 
@@ -27,8 +31,9 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def build_dashboard_from_storage(storage: ArgusV2Storage) -> MarketDashboard | None:
+def build_dashboard_from_storage(storage: ArgusV2Storage, *, settings: Any | None = None) -> MarketDashboard | None:
     latest_derivatives = storage.get_latest_derivatives_snapshot()
+    latest_futures_flow = storage.get_latest_futures_investor_flow_snapshot()
     latest_option_chain = storage.get_latest_option_chain_snapshot()
     previous_option_chain = (
         storage.get_previous_option_chain_snapshot(latest_snapshot=latest_option_chain)
@@ -37,11 +42,12 @@ def build_dashboard_from_storage(storage: ArgusV2Storage) -> MarketDashboard | N
     )
     latest_reaction = storage.get_latest_market_reaction_snapshot()
     latest_triggers = storage.get_latest_news_triggers()
-    if latest_derivatives is None and latest_option_chain is None and latest_reaction is None and not latest_triggers:
+    if latest_derivatives is None and latest_futures_flow is None and latest_option_chain is None and latest_reaction is None and not latest_triggers:
         return None
 
     derivatives = _build_derivatives_pressure(
         latest_derivatives=latest_derivatives,
+        latest_futures_flow=latest_futures_flow,
         latest_option_chain=latest_option_chain,
         previous_option_chain=previous_option_chain,
     )
@@ -50,7 +56,7 @@ def build_dashboard_from_storage(storage: ArgusV2Storage) -> MarketDashboard | N
         latest_derivatives=latest_derivatives,
         latest_reaction=latest_reaction,
     )
-    provider_health = _build_provider_health(storage)
+    provider_health = _build_provider_health(storage, settings=settings)
     live_provider_missing = any(item.status in {"missing", "stale"} for item in provider_health)
     judgement = build_market_judgement(
         derivatives,
@@ -76,13 +82,108 @@ def build_dashboard_from_storage(storage: ArgusV2Storage) -> MarketDashboard | N
     )
 
 
+def build_option_quotes_from_storage(storage: ArgusV2Storage) -> OptionQuotesResponse:
+    latest_option_chain = storage.get_latest_option_chain_snapshot()
+    if latest_option_chain is None:
+        return OptionQuotesResponse(
+            as_of=None,
+            trade_date=None,
+            source="argus_v2.option_chain",
+            status="missing",
+            observed_count=0,
+            rows=[],
+        )
+
+    rows = [
+        OptionQuoteRow(
+            strike_price=_as_number(level, "strike_price") or 0.0,
+            moneyness=_as_text(level, "moneyness") or "UNKNOWN",
+            call_last_price=_as_number(level, "call_last_price"),
+            call_change_rate=_as_number(level, "call_change_rate"),
+            call_volume=_as_number(level, "call_volume"),
+            call_trading_value=_as_number(level, "call_trading_value"),
+            call_open_interest=_as_number(level, "call_open_interest"),
+            call_open_interest_change=_as_number(level, "call_open_interest_change"),
+            call_implied_volatility=_as_number(level, "call_implied_volatility"),
+            put_last_price=_as_number(level, "put_last_price"),
+            put_change_rate=_as_number(level, "put_change_rate"),
+            put_volume=_as_number(level, "put_volume"),
+            put_trading_value=_as_number(level, "put_trading_value"),
+            put_open_interest=_as_number(level, "put_open_interest"),
+            put_open_interest_change=_as_number(level, "put_open_interest_change"),
+            put_implied_volatility=_as_number(level, "put_implied_volatility"),
+            total_open_interest=_as_number(level, "total_open_interest"),
+            net_call_put_oi=_as_number(level, "net_call_put_oi"),
+            call_put_oi_ratio=_as_number(level, "call_put_oi_ratio"),
+            pressure_side=_quote_pressure_side(_as_text(level, "pressure_side")),
+        )
+        for level in latest_option_chain.get("levels") or []
+        if _as_number(level, "strike_price") is not None
+    ]
+    return OptionQuotesResponse(
+        as_of=_as_text(latest_option_chain, "snapshot_time"),
+        trade_date=_as_text(latest_option_chain, "trade_date"),
+        source=_as_text(latest_option_chain, "source_name") or KIS_SOURCE,
+        status=_freshness(latest_option_chain),
+        observed_count=len(rows),
+        underlying_code=_as_text(latest_option_chain, "underlying_code"),
+        underlying_name=_as_text(latest_option_chain, "underlying_name"),
+        underlying_price=_as_number(latest_option_chain, "underlying_price"),
+        expiry_date=_as_text(latest_option_chain, "expiry_date"),
+        contract_month=_as_text(latest_option_chain, "contract_month"),
+        atm_strike=_as_number(latest_option_chain, "atm_strike"),
+        rows=rows,
+    )
+
+
+def build_futures_quote_from_storage(storage: ArgusV2Storage) -> FuturesQuoteResponse:
+    latest_derivatives = storage.get_latest_derivatives_snapshot()
+    if latest_derivatives is None:
+        return FuturesQuoteResponse(
+            as_of=None,
+            trade_date=None,
+            source="argus_v2.futures",
+            status="missing",
+            observed_count=0,
+        )
+
+    metrics = _additional_metrics(latest_derivatives)
+    return FuturesQuoteResponse(
+        as_of=_as_text(latest_derivatives, "snapshot_time"),
+        trade_date=_as_text(latest_derivatives, "trade_date"),
+        source=_as_text(latest_derivatives, "source_name") or KIS_SOURCE,
+        status=_freshness(latest_derivatives),
+        observed_count=1,
+        session_type=_as_text(latest_derivatives, "session_type"),
+        instrument_code=_as_text(latest_derivatives, "instrument_code"),
+        instrument_name=_as_text(latest_derivatives, "instrument_name"),
+        price=_as_number(latest_derivatives, "price"),
+        price_change=_as_number(latest_derivatives, "price_change"),
+        change_rate=_as_number(latest_derivatives, "change_rate"),
+        volume=_as_number(latest_derivatives, "volume"),
+        open_interest=_as_number(latest_derivatives, "open_interest"),
+        put_call_ratio=_as_number(latest_derivatives, "put_call_ratio"),
+        implied_volatility=_as_number(latest_derivatives, "implied_volatility"),
+        bid=_metric_number(metrics, "bid"),
+        ask=_metric_number(metrics, "ask"),
+        basis=_metric_number(metrics, "basis"),
+        market_basis=_metric_number(metrics, "market_basis"),
+        theoretical_price=_metric_number(metrics, "theoretical_price"),
+        disparity_rate=_metric_number(metrics, "disparity_rate"),
+        open_interest_change=_metric_number(metrics, "open_interest_change"),
+        open_interest_change_rate=_metric_number(metrics, "open_interest_change_rate"),
+    )
+
+
 def _build_derivatives_pressure(
     *,
     latest_derivatives: dict[str, Any] | None,
+    latest_futures_flow: dict[str, Any] | None,
     latest_option_chain: dict[str, Any] | None,
     previous_option_chain: dict[str, Any] | None,
 ) -> DerivativesPressure:
     futures_observed_at = _as_text(latest_derivatives, "snapshot_time")
+    futures_flow_observed_at = _as_text(latest_futures_flow, "snapshot_time")
     option_observed_at = _as_text(latest_option_chain, "snapshot_time")
     option_stats = _option_stats(latest_option_chain)
     previous_option_stats = _option_stats(previous_option_chain)
@@ -114,9 +215,27 @@ def _build_derivatives_pressure(
         summary_parts.append("KIS 파생 데이터가 아직 dashboard 판단에 충분하지 않습니다.")
 
     return DerivativesPressure(
-        foreign_futures_net_buy=_missing_point("KRW", "KIS 수급 endpoint 미연결"),
-        institution_futures_net_buy=_missing_point("KRW", "KIS 수급 endpoint 미연결"),
-        individual_futures_net_buy=_missing_point("KRW", "KIS 수급 endpoint 미연결"),
+        foreign_futures_net_buy=_point(
+            _as_number(latest_futures_flow, "foreign_net_buy"),
+            "KRW",
+            _as_text(latest_futures_flow, "source_name") or "KIS 선물 수급 endpoint 미연결",
+            futures_flow_observed_at,
+            _freshness(latest_futures_flow) if _as_number(latest_futures_flow, "foreign_net_buy") is not None else "missing",
+        ),
+        institution_futures_net_buy=_point(
+            _as_number(latest_futures_flow, "institution_net_buy"),
+            "KRW",
+            _as_text(latest_futures_flow, "source_name") or "KIS 선물 수급 endpoint 미연결",
+            futures_flow_observed_at,
+            _freshness(latest_futures_flow) if _as_number(latest_futures_flow, "institution_net_buy") is not None else "missing",
+        ),
+        individual_futures_net_buy=_point(
+            _as_number(latest_futures_flow, "individual_net_buy"),
+            "KRW",
+            _as_text(latest_futures_flow, "source_name") or "KIS 선물 수급 endpoint 미연결",
+            futures_flow_observed_at,
+            _freshness(latest_futures_flow) if _as_number(latest_futures_flow, "individual_net_buy") is not None else "missing",
+        ),
         basis=_point(
             basis,
             "pt",
@@ -263,13 +382,18 @@ def _build_market_reaction(
     )
 
 
-def _build_provider_health(storage: ArgusV2Storage) -> list[ProviderHealth]:
+def _build_provider_health(storage: ArgusV2Storage, *, settings: Any | None = None) -> list[ProviderHealth]:
     rows = {row["provider_key"]: row for row in storage.get_latest_provider_runs()}
     health = [
         _provider_health_from_run(
             key="kis_derivatives",
             label="KIS 국내파생",
             row=rows.get("kis_derivatives"),
+        ),
+        _provider_health_from_run(
+            key="kis_futures_investor_flow",
+            label="KIS 선물 투자자 수급",
+            row=rows.get("kis_futures_investor_flow"),
         ),
         _provider_health_from_run(
             key="kis_option_chain",
@@ -286,7 +410,14 @@ def _build_provider_health(storage: ArgusV2Storage) -> list[ProviderHealth]:
             label="v2 뉴스 트리거",
             row=rows.get("v2_news_triggers"),
         ),
+        _provider_health_from_run(
+            key="v2_news_feed",
+            label="v2 원천 뉴스 피드",
+            row=rows.get("v2_news_feed"),
+        ),
     ]
+    if settings is not None:
+        health.append(_collector_session_health(settings=settings))
     return health
 
 
@@ -306,10 +437,41 @@ def _provider_health_from_run(*, key: str, label: str, row: dict[str, Any] | Non
         key=key,
         label=label,
         status=status,
+        state=str(row.get("status") or "") or None,
         last_success_at=str(row["finished_at"]) if row.get("finished_at") else None,
         observed_count=int(row.get("observed_count") or 0),
         missing_fields=_json_list(row.get("missing_fields_json")),
         error=str(row["error"]) if row.get("error") else None,
+    )
+
+
+def _collector_session_health(*, settings: Any) -> ProviderHealth:
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    session = resolve_market_session(
+        now=now,
+        holiday_dates=settings.argus_market_holidays,
+        regular_start=settings.argus_collector_regular_start,
+        regular_end=settings.argus_collector_regular_end,
+        night_start=settings.argus_collector_night_start,
+        night_end=settings.argus_collector_night_end,
+        night_enabled=settings.argus_collector_night_market_enabled,
+    )
+    next_run = None
+    if not session.is_market_open:
+        next_run = next_regular_session_start(
+            now=now,
+            holiday_dates=settings.argus_market_holidays,
+            regular_start=settings.argus_collector_regular_start,
+        ).isoformat()
+    return ProviderHealth(
+        key="market_session",
+        label="KRX 수집 세션",
+        status="fresh" if session.is_market_open else "missing",
+        state=session.session_type if session.is_market_open else session.reason,
+        next_scheduled_run=next_run,
+        observed_count=1 if session.is_market_open else 0,
+        missing_fields=[] if session.is_market_open else [session.reason],
+        error=None,
     )
 
 
@@ -571,6 +733,14 @@ def _pressure_side(value: str | None) -> OptionPressureSide:
         return value
     if value == "BALANCED":
         return "NEUTRAL"
+    return "UNKNOWN"
+
+
+def _quote_pressure_side(value: str | None) -> str:
+    if value in {"CALL", "PUT", "BALANCED", "UNKNOWN"}:
+        return value
+    if value == "NEUTRAL":
+        return "BALANCED"
     return "UNKNOWN"
 
 
