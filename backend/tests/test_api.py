@@ -22,6 +22,17 @@ def test_argus_v2_dashboard_endpoint():
     assert data["derivatives"]["option_pressure"] in {"CALL", "PUT", "NEUTRAL", "UNKNOWN"}
 
 
+def test_market_flow_endpoint_is_mounted():
+    response = client.get("/api/market-data/v1/dashboard/market-flow")
+    data = response.json()
+
+    assert response.status_code == 200
+    assert data["data_mode"] == "mock"
+    assert data["is_live"] is False
+    assert data["market_scope"] == "KRX"
+    assert len(data["rows"]) == 4
+
+
 def test_legacy_krx_api_is_not_mounted():
     response = client.get("/api/krx/derivatives/summary")
 

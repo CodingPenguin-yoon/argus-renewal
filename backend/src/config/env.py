@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -7,6 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     frontend_origin: str = "http://localhost:3000"
     db_path: str = "data/argus.db"
+    market_data_mode: Literal["mock", "live"] = "mock"
+    market_flow_estimate_stale_after_seconds: int = 300
+    market_flow_confirmed_stale_after_seconds: int = 604800
 
     kis_base_url: str = "https://openapi.koreainvestment.com:9443"
     kis_token_path: str = "/oauth2/tokenP"

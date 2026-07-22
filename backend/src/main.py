@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 
 from .argus_v2.api import create_argus_v2_router
 from .config.env import get_settings
+from .market_data.market_flow.api import create_market_flow_router
 
 settings = get_settings()
 
@@ -28,3 +29,4 @@ async def health() -> dict[str, str]:
 
 
 app.include_router(create_argus_v2_router())
+app.include_router(create_market_flow_router())

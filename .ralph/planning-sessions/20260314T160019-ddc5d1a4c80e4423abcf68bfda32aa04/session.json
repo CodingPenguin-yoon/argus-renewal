@@ -1,8 +1,0 @@
-{
-  "id": "20260314T160019-ddc5d1a4c80e4423abcf68bfda32aa04",
-  "prompt": "Argus KRX 뉴스 백엔드 LLM 호출 구조를 원래 설계 방향으로 되돌리기 위한 구현 설계안을 만든다. 핵심은 현재 문서별 event LLM 호출과 카드별 editorial AI 호출 fan-out을 줄이고, 1차 AI는 1분 뉴스 배치 triage 1회, 2차 AI는 현재 표면 vs top 후보 비교 1회 수준으로 제한하는 것이다. 현재 코드 경로와 문서를 기준으로 단계별 전환 설계, 호출 예산, fallback, 테스트 범위, 문서 업데이트 범위를 포함한 설계 artifact를 작성하라.",
-  "status": "active",
-  "createdAt": "2026-03-14T16:00:19Z",
-  "updatedAt": "2026-03-14T16:04:51Z",
-  "iterations": 0
-}

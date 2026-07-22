@@ -6,8 +6,8 @@ import { Geist } from "next/font/google";
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  title: "Argus v2 Cockpit",
-  description: "파생/옵션, 뉴스 분석, 시장 반응을 함께 읽는 한국장 상황판",
+  title: "Argus Renewal",
+  description: "한국 시장 수급, KOSPI200 종목과 파생 상태를 확인하는 시장 데이터 터미널",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

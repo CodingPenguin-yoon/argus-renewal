@@ -1,0 +1,291 @@
+.hero {
+  display: flex;
+  gap: 24px;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 26px;
+}
+
+.eyebrow {
+  margin-bottom: 9px;
+  color: #60a5fa;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+}
+
+.hero h1 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: clamp(1.75rem, 4vw, 3.1rem);
+  letter-spacing: -0.045em;
+}
+
+.hero p {
+  margin: 12px 0 0;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.heroMeta {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding-bottom: 5px;
+}
+
+.demoBadge,
+.status_fresh,
+.status_partial,
+.status_stale,
+.status_missing {
+  display: inline-flex;
+  align-items: center;
+  min-height: 27px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 0.63rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.demoBadge {
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+  background: rgba(146, 64, 14, 0.18);
+}
+
+.status_fresh {
+  color: #6ee7b7;
+  background: rgba(6, 95, 70, 0.22);
+}
+
+.status_partial,
+.status_stale {
+  color: #fcd34d;
+  background: rgba(146, 64, 14, 0.22);
+}
+
+.status_missing {
+  color: #cbd5e1;
+  background: rgba(71, 85, 105, 0.28);
+}
+
+.seedNotice {
+  margin-bottom: 18px;
+  padding: 13px 16px;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 11px;
+  color: #fcd34d;
+  background: rgba(120, 53, 15, 0.14);
+  font-size: 0.82rem;
+}
+
+.seedNotice code {
+  margin: 0 4px;
+  color: #fff7d6;
+  font-weight: 800;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.card {
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.62);
+  box-shadow: 0 24px 60px -44px rgba(59, 130, 246, 0.55);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.cardHeader > div > span {
+  color: #64748b;
+  font-size: 0.58rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.cardHeader h2 {
+  margin: 4px 0 0;
+  color: #f1f5f9;
+  font-size: 1rem;
+}
+
+.fact,
+.factEmpty {
+  padding: 16px 20px;
+}
+
+.fact + .fact,
+.factEmpty + .fact,
+.fact + .factEmpty,
+.factEmpty + .factEmpty {
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.factEmpty {
+  min-height: 128px;
+  color: #64748b;
+}
+
+.factEmpty p {
+  margin: 20px 0 0;
+  font-size: 0.78rem;
+}
+
+.factHeader,
+.factHeader > div {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.factHeader {
+  justify-content: space-between;
+  color: #64748b;
+  font-size: 0.64rem;
+}
+
+.factTitle {
+  color: #cbd5e1;
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.fresh,
+.stale {
+  font-size: 0.55rem;
+  font-weight: 900;
+}
+
+.fresh {
+  color: #34d399;
+}
+
+.stale {
+  color: #fbbf24;
+}
+
+.investorGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.investorGrid > div {
+  padding: 11px;
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.45);
+}
+
+.investorGrid span,
+.investorGrid strong {
+  display: block;
+}
+
+.investorGrid span {
+  margin-bottom: 6px;
+  color: #64748b;
+  font-size: 0.6rem;
+  font-weight: 800;
+}
+
+.investorGrid strong {
+  font-size: 0.9rem;
+  letter-spacing: -0.03em;
+}
+
+.positive {
+  color: #f87171;
+}
+
+.negative {
+  color: #60a5fa;
+}
+
+.neutral {
+  color: #cbd5e1;
+}
+
+.provenance {
+  display: flex;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.provenance span {
+  padding: 3px 6px;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 5px;
+  color: #64748b;
+  font-size: 0.53rem;
+  font-weight: 800;
+}
+
+.emptyState {
+  padding: 48px;
+  border: 1px solid rgba(248, 113, 113, 0.2);
+  border-radius: 16px;
+  background: rgba(127, 29, 29, 0.12);
+}
+
+.emptyState span {
+  color: #f87171;
+  font-size: 0.65rem;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+}
+
+.emptyState h1 {
+  margin: 12px 0 8px;
+  font-size: 1.45rem;
+}
+
+.emptyState p {
+  margin: 0;
+  color: #94a3b8;
+}
+
+@media (max-width: 920px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .hero {
+    display: block;
+  }
+
+  .heroMeta {
+    margin-top: 18px;
+  }
+
+  .investorGrid {
+    gap: 5px;
+  }
+
+  .investorGrid > div {
+    padding: 9px;
+  }
+
+  .investorGrid strong {
+    font-size: 0.8rem;
+  }
+}
+

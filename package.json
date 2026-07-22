@@ -6,6 +6,7 @@
     "dev": "bash scripts/dev-runtime.sh",
     "dev:frontend": "pnpm --filter frontend dev",
     "dev:backend": "cd backend && python3 -m uvicorn src.main:app --reload --host 0.0.0.0 --port 4000",
+    "seed:market-flow": "cd backend && python3 -m src.market_data.cli seed-market-flow-fixture",
     "dev:collector:market": "cd backend && python3 -m src.argus_v2.cli collect-loop --market-only --interval-seconds 60",
     "dev:collector:news": "cd backend && python3 -m src.argus_v2.cli collect-loop --news-only --interval-seconds 300 --news-triggers-provider hybrid",
     "check:boundaries": "bash scripts/check-market-boundaries.sh",
